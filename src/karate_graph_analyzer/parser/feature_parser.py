@@ -2,13 +2,14 @@
 Feature file parser implementation.
 
 Parses Karate feature files into structured AST representation.
+Uses Strategy Pattern for dependency extraction via pluggable extractors.
 """
 
 import logging
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from karate_graph_analyzer.models import (
     Dependency,
@@ -23,6 +24,9 @@ from karate_graph_analyzer.models import (
     Step,
 )
 
+if TYPE_CHECKING:
+    from karate_graph_analyzer.interfaces import IDependencyExtractor
+
 # Set up logger for unresolved references
 logger = logging.getLogger(__name__)
 
@@ -30,20 +34,42 @@ logger = logging.getLogger(__name__)
 class FeatureFileParser:
     """Parses Karate feature files into structured AST."""
 
-    def __init__(self, config: ParserConfig = ParserConfig()) -> None:
-        """Initialize parser with configuration for syntax variations.
+    def __init__(
+        self,
+        config: ParserConfig = ParserConfig(),
+        extractors: Optional[List["IDependencyExtractor"]] = None,
+    ) -> None:
+        """Initialize parser with configuration and optional extractors.
 
         Args:
             config: Parser configuration for handling syntax variations
+            extractors: Optional list of dependency extractors (Strategy Pattern).
+                        If None, default extractors are created.
         """
         self.config = config
+
+        # Strategy Pattern: pluggable dependency extractors
+        if extractors is not None:
+            self._extractors = extractors
+        else:
+            # Lazy import to avoid circular dependencies
+            from karate_graph_analyzer.parser.extractors import (
+                CallReadExtractor,
+                ApiExtractor,
+                DatabaseExtractor,
+            )
+            self._extractors = [
+                CallReadExtractor(config),
+                ApiExtractor(config),
+                DatabaseExtractor(config),
+            ]
         
         # Compile regex patterns for performance
-        self._feature_pattern = re.compile(r"^\s*Feature:\s*(.+)$", re.IGNORECASE)
-        self._background_pattern = re.compile(r"^\s*Background:\s*$", re.IGNORECASE)
-        self._scenario_pattern = re.compile(r"^\s*Scenario:\s*(.+)$", re.IGNORECASE)
+        self._feature_pattern = re.compile(r"^\s*Feature\s*:\s*(.*)$", re.IGNORECASE)
+        self._background_pattern = re.compile(r"^\s*Background\s*:?\s*$", re.IGNORECASE)  # Make colon optional
+        self._scenario_pattern = re.compile(r"^\s*Scenario\s*:\s*(.*)$", re.IGNORECASE)
         self._scenario_outline_pattern = re.compile(
-            r"^\s*Scenario Outline:\s*(.+)$", re.IGNORECASE
+            r"^\s*Scenario Outline\s*:\s*(.*)$", re.IGNORECASE
         )
         self._examples_pattern = re.compile(r"^\s*Examples:\s*$", re.IGNORECASE)
         self._step_pattern = re.compile(
@@ -862,10 +888,22 @@ class FeatureFileParser:
         """Classify a call read() dependency as workflow or page object."""
         path_lower = path.lower()
         
+        # Check if path matches locator directories
+        locator_dirs = getattr(self.config, "locator_directories", ["locators", "resources/locators"])
+        for loc_dir in locator_dirs:
+            if loc_dir.lower() in path_lower:
+                return DependencyType.LOCATOR
+
         # Check if path matches page object directories
         for page_dir in self.config.page_object_directories:
             if page_dir.lower() in path_lower:
                 return DependencyType.PAGE
+                
+        # Check if path matches common API definition directories
+        common_dirs = getattr(self.config, "common_directories", ["common", "services"])
+        for common_dir in common_dirs:
+            if common_dir.lower() in path_lower:
+                return DependencyType.COMMON
         
         # Default to workflow
         return DependencyType.WORKFLOW
@@ -952,19 +990,33 @@ class FeatureFileParser:
         """Extract HTTP method from scenario steps.
         
         Looks for 'When method get/post/put/delete/patch' pattern.
+        Also detects dynamic methods like 'method __arg.method'.
         
         Args:
             steps: List of scenario steps
         
         Returns:
-            HTTP method in uppercase (GET, POST, PUT, DELETE, PATCH) or None
+            HTTP method in uppercase (GET, POST, PUT, DELETE, PATCH, DYNAMIC) or None
         """
+        # Pattern for static methods: method GET/POST/etc
         method_pattern = re.compile(r"\bmethod\s+(get|post|put|delete|patch)\b", re.IGNORECASE)
         
+        # Pattern for dynamic methods: method __arg.xxx or method variable
+        dynamic_pattern = re.compile(r"\bmethod\s+(__arg\.\w+|\w+(?!\s*\())", re.IGNORECASE)
+        
         for step in steps:
+            # Try static method first
             match = method_pattern.search(step.text)
             if match:
                 return match.group(1).upper()
+            
+            # Try dynamic method
+            match = dynamic_pattern.search(step.text)
+            if match:
+                # Check if it's a dynamic reference (starts with __arg or is a variable)
+                method_value = match.group(1)
+                if method_value.startswith('__arg') or not method_value.upper() in ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']:
+                    return "DYNAMIC"
         
         return None
     

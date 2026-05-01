@@ -2,6 +2,7 @@
 Project registry implementation.
 
 Manages registration and persistence of Karate projects.
+Implements IProjectRepository (Repository Pattern) for storage abstraction.
 """
 
 import glob
@@ -11,11 +12,19 @@ import tempfile
 from dataclasses import asdict
 from typing import List, Optional
 
+from karate_graph_analyzer.interfaces import IProjectRepository
 from karate_graph_analyzer.models import ParserConfig, Project
 
 
-class ProjectRegistry:
-    """Storage mechanism for managing multiple Karate projects."""
+class ProjectRegistry(IProjectRepository):
+    """JSON-file backed project repository.
+
+    Implements IProjectRepository for managing multiple Karate projects
+    using a local JSON file as persistent storage.
+
+    Can be replaced with SQLite, Neo4j, or other storage backends
+    by implementing IProjectRepository interface.
+    """
 
     def __init__(self, storage_path: str = ".karate_projects.json") -> None:
         """Initialize project registry.
@@ -203,3 +212,29 @@ class ProjectRegistry:
 
         # Remove duplicates and return
         return list(set(feature_files))
+
+    def list_all(self) -> List[Project]:
+        """List all registered projects (IProjectRepository interface).
+
+        Returns:
+            List of all projects
+        """
+        return self.list_projects()
+
+    def remove(self, project_name: str) -> None:
+        """Remove a project from the registry (IProjectRepository interface).
+
+        Args:
+            project_name: Name of the project to remove
+
+        Raises:
+            KeyError: If project does not exist
+        """
+        if project_name not in self.projects:
+            raise KeyError(f"Project '{project_name}' not found")
+        del self.projects[project_name]
+        self.save()
+
+
+# Backward-compatible alias
+JsonProjectRepository = ProjectRegistry

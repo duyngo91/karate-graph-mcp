@@ -2,9 +2,10 @@
 Graph builder implementation.
 
 Constructs dependency graphs from parsed feature files.
+Supports Dependency Injection for parser (testability).
 """
 
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import networkx as nx
 
@@ -22,15 +23,26 @@ from karate_graph_analyzer.models import (
 
 if TYPE_CHECKING:
     from karate_graph_analyzer.cache.cache_manager import CacheManager
+    from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
 
 
 class GraphBuilder:
-    """Constructs dependency graph from parsed feature files."""
+    """Constructs dependency graph from parsed feature files.
 
-    def __init__(self) -> None:
-        """Initialize graph builder with empty graph."""
+    Supports Dependency Injection for the parser to enable
+    testing with mock parsers and custom parsing strategies.
+    """
+
+    def __init__(self, parser: Optional["FeatureFileParser"] = None) -> None:
+        """Initialize graph builder with empty graph.
+
+        Args:
+            parser: Optional parser instance (DI). If None, a default
+                    FeatureFileParser is created when needed.
+        """
         self.graph: nx.DiGraph = nx.DiGraph()
         self._node_counter: Dict[str, int] = {}  # Track node IDs by type
+        self._injected_parser = parser  # DI: injectable parser
 
     def _generate_node_id(self, node_type: NodeType) -> str:
         """Generate unique node ID for a given node type.
@@ -51,7 +63,6 @@ class GraphBuilder:
             NodeType.PAGE: "page",
             NodeType.ACTION: "act",
             NodeType.DATABASE: "db",
-            NodeType.FEATURE_GROUP: "fg",
         }
         prefix = prefix_map.get(node_type, "node")
         
@@ -243,6 +254,35 @@ class GraphBuilder:
         }
         
         self.graph.add_node(node_id, **node_data)
+        self.graph.add_node(node_id, **node_data)
+        return node_id
+    
+    def add_locator_node(self, locator_path: str, metadata: NodeMetadata) -> str:
+        """Add locator object node to graph.
+
+        Args:
+            locator_path: Locator file path
+            metadata: Node metadata
+
+        Returns:
+            Node ID of the created node
+        """
+        node_id = self._generate_node_id(NodeType.LOCATOR)
+        
+        node_data = {
+            "id": node_id,
+            "type": NodeType.LOCATOR,
+            "name": locator_path,
+            "metadata": {
+                "file_path": metadata.file_path,
+                "line_number": metadata.line_number,
+                "jira_tags": metadata.jira_tags,
+                "project_name": metadata.project_name,
+                "additional_data": metadata.additional_data,
+            },
+        }
+        
+        self.graph.add_node(node_id, **node_data)
         return node_id
     
     def add_scenario_node(self, scenario_tag: str, workflow_path: str, metadata: NodeMetadata) -> str:
@@ -319,47 +359,116 @@ class GraphBuilder:
         self.graph.add_node(node_id, **node_data)
         return node_id
 
-    def add_feature_group_node(self, feature_name: str, metadata: NodeMetadata) -> str:
-        """Add feature group node to graph.
+
+
+    def _classify_scenario_by_path(
+        self, file_path: str, config: "ParserConfig" = None
+    ) -> NodeType:
+        """Classify a scenario's node type based on its file path.
+
+        Karate project convention:
+        - `*/features/*` → TEST_CASE (actual test scenarios)
+        - `*/common/*`, `*/services/*`, `*/workflows/*` → WORKFLOW (reusable functions)
+        - `*/pages/*`, `*/webPages/*` → PAGE (page objects)
+        - `*/db/*` → DATABASE
+        - Everything else → TEST_CASE (default)
 
         Args:
-            feature_name: Feature group name (e.g., "Authentication", "Order Management")
-            metadata: Node metadata
+            file_path: Path to the feature file
+            config: Optional ParserConfig with custom directory patterns
 
         Returns:
-            Node ID of the created node
+            NodeType for the scenario
         """
-        node_id = self._generate_node_id(NodeType.FEATURE_GROUP)
-        
-        node_data = {
-            "id": node_id,
-            "type": NodeType.FEATURE_GROUP,
-            "name": feature_name,
-            "metadata": {
-                "file_path": metadata.file_path,
-                "line_number": metadata.line_number,
-                "jira_tags": metadata.jira_tags,
-                "project_name": metadata.project_name,
-                "additional_data": metadata.additional_data,
-            },
-        }
-        
-        self.graph.add_node(node_id, **node_data)
-        return node_id
+        normalized = file_path.replace('\\', '/').lower()
+
+        # Check for page object directories
+        page_dirs = ['pages', 'webpages']
+        if config and config.page_object_directories:
+            page_dirs = [d.lower() for d in config.page_object_directories]
+        for d in page_dirs:
+            if f'/{d}/' in normalized:
+                return NodeType.PAGE
+
+        # Check for workflow directories
+        workflow_dirs = ['workflows', 'workflow']
+        if config and config.workflow_directories:
+            workflow_dirs = [d.lower() for d in config.workflow_directories]
+        for d in workflow_dirs:
+            if f'/{d}/' in normalized:
+                return NodeType.WORKFLOW
+                
+        # Check for common/API directories
+        common_dirs = ['common', 'services']
+        if config and hasattr(config, 'common_directories'):
+            common_dirs = [d.lower() for d in config.common_directories]
+        for d in common_dirs:
+            if f'/{d}/' in normalized:
+                return NodeType.COMMON
+
+        # Check for database directories
+        if '/db/' in normalized or '/database/' in normalized:
+            return NodeType.DATABASE
+
+        # Default: TEST_CASE (files in features/ or any other location)
+        return NodeType.TEST_CASE
+
+    def _build_scenario_display_name(self, scenario: Scenario, node_type: NodeType) -> str:
+        """Build display name for a scenario based on its node type.
+
+        For TEST_CASE: uses Jira tag + name (e.g., '@JiraId-1 - Test send payment success')
+        For WORKFLOW: uses @tag as name (e.g., '@AddPayment')
+        For PAGE: uses @tag as name (e.g., '@login')
+
+        Args:
+            scenario: Scenario to build name for
+            node_type: Classified node type
+
+        Returns:
+            Display name string
+        """
+        if node_type == NodeType.TEST_CASE:
+            # Test case: use Jira tag + scenario name
+            if scenario.jira_tags:
+                return f"{scenario.jira_tags[0]} - {scenario.name}"
+            return scenario.name
+        else:
+            # Workflow/Page: use first @tag as display name
+            if scenario.tags:
+                return scenario.tags[0]  # e.g., '@AddPayment'
+            return scenario.name or f"Unnamed at line {scenario.line_number}"
     
     def _detect_feature_from_path(self, file_path: str) -> str:
         """Detect feature name from file path.
+        
+        Excludes pages, services, and common directories from feature grouping.
         
         Args:
             file_path: Path to feature file
         
         Returns:
-            Feature name (e.g., "Authentication", "Order Management")
+            Feature name (e.g., "Authentication", "Order Management") or None if should be excluded
         """
         import os
         
         # Normalize path separators
         normalized_path = file_path.replace('\\', '/').lower()
+        
+        # EXCLUDE paths that should NOT have feature groups
+        # These already have their own node types (PAGE, WORKFLOW, etc.)
+        exclude_patterns = [
+            '/pages/',      # Page objects
+            '/page/',
+            '/services/',   # Workflow services
+            '/service/',
+            '/common/',     # Common utilities
+            '/workflows/',  # Workflows
+            '/workflow/',
+        ]
+        
+        for pattern in exclude_patterns:
+            if pattern in normalized_path:
+                return None  # Don't create feature group for these
         
         # Feature detection rules based on directory names
         feature_map = {
@@ -472,20 +581,19 @@ class GraphBuilder:
         from pathlib import Path
         
         from karate_graph_analyzer.models import ParseError
-        from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
-        
+
         logger = logging.getLogger(__name__)
-        
-        # Initialize parser with project configuration
-        parser = FeatureFileParser(config=project.parser_config)
+
+        # Use injected parser or create default
+        if self._injected_parser is not None:
+            parser = self._injected_parser
+        else:
+            from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
+            parser = FeatureFileParser(config=project.parser_config)
         
         # Track dependency nodes to avoid duplicates
         # Key: (node_type, name) -> node_id
         dependency_node_map: Dict[tuple, str] = {}
-        
-        # Track feature group nodes to avoid duplicates
-        # Key: feature_name -> node_id
-        feature_group_map: Dict[str, str] = {}
         
         # Find all feature files using project patterns
         feature_files = []
@@ -501,16 +609,68 @@ class GraphBuilder:
         
         logger.info(f"Found {len(feature_files)} feature files in project '{project.name}'")
         
-        # Parse each feature file and build graph
+        # Pass 1: Parse all files, cache ASTs, and collect API dependencies from COMMON scenarios
+        file_asts = []
+        # Key: (normalized_path, tag) -> List[Dependency]
+        common_api_deps_map: Dict[tuple, List] = {}
+        
         for file_path in feature_files:
             try:
                 # Parse the feature file
                 ast = parser.parse_file(file_path)
+                file_asts.append(ast)
                 
+                # Normalize file path for lookup
+                norm_path = os.path.normpath(file_path).replace("\\", "/")
+                
+                for scenario in ast.scenarios:
+                    scenario_node_type = self._classify_scenario_by_path(
+                        scenario.file_path, project.parser_config
+                    )
+                    
+                    if scenario_node_type == NodeType.COMMON:
+                        # Extract API dependencies
+                        dependencies = parser.extract_dependencies_with_background(
+                            scenario, ast.background_steps, validate_paths=False
+                        )
+                        api_deps = [d for d in dependencies if d.type == DependencyType.API]
+                        
+                        # Inject file_path into API dependencies
+                        for d in api_deps:
+                            if "file_path" not in d.parameters:
+                                d.parameters["file_path"] = scenario.file_path
+                                
+                        # Store by tag if available
+                        for tag in scenario.tags:
+                            common_api_deps_map[(norm_path, tag)] = api_deps
+                            logger.info(f"DEBUG: Stored API deps for {(norm_path, tag)}: {len(api_deps)}")
+                        # Also store a default mapping without tag (if called without tag)
+                        if not scenario.tags:
+                            common_api_deps_map[(norm_path, "")] = api_deps
+                            logger.info(f"DEBUG: Stored default API deps for {(norm_path, '')}: {len(api_deps)}")
+            except ParseError as e:
+                logger.error(f"Parse error in {file_path}: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error parsing {file_path}: {e}", exc_info=True)
+
+        # Pass 2: Build nodes and edges
+        for ast in file_asts:
+            try:
                 # Process each scenario in the feature file
                 for scenario in ast.scenarios:
-                    # Create test case node
-                    test_case_metadata = NodeMetadata(
+                    # === CLASSIFY scenario type based on file path ===
+                    scenario_node_type = self._classify_scenario_by_path(
+                        scenario.file_path, project.parser_config
+                    )
+                    
+                    if scenario_node_type == NodeType.COMMON:
+                        continue  # Skip creating nodes for COMMON scenarios
+                    
+                    # Build display name based on node type
+                    display_name = self._build_scenario_display_name(scenario, scenario_node_type)
+
+                    # Create scenario metadata
+                    scenario_metadata = NodeMetadata(
                         file_path=scenario.file_path,
                         line_number=scenario.line_number,
                         jira_tags=scenario.jira_tags,
@@ -520,8 +680,58 @@ class GraphBuilder:
                             "tags": scenario.tags,
                         },
                     )
-                    
-                    test_case_id = self.add_test_case(scenario, test_case_metadata)
+
+                    # Extract Karate relative path for mapping (e.g. web/pages/LoginPage.feature)
+                    rel_path = scenario.file_path.replace("\\", "/")
+                    if "src/test/java/" in rel_path:
+                        rel_path = rel_path.split("src/test/java/")[-1]
+                    # Also try without features/ if present
+                    if "features/" in rel_path:
+                        rel_path = rel_path.split("features/")[-1]
+
+                    # Create node with correct type
+                    if scenario_node_type == NodeType.TEST_CASE:
+                        node_id = self.add_test_case(scenario, scenario_metadata)
+                    elif scenario_node_type == NodeType.WORKFLOW:
+                        # Use workflow node for reusable service scenarios
+                        node_id = self._generate_node_id(NodeType.WORKFLOW)
+                        node_data = {
+                            "id": node_id,
+                            "type": NodeType.WORKFLOW,
+                            "name": display_name,
+                            "metadata": {
+                                "file_path": scenario_metadata.file_path,
+                                "line_number": scenario_metadata.line_number,
+                                "jira_tags": scenario_metadata.jira_tags,
+                                "project_name": scenario_metadata.project_name,
+                                "additional_data": scenario_metadata.additional_data,
+                            },
+                        }
+                        self.graph.add_node(node_id, **node_data)
+                    elif scenario_node_type == NodeType.PAGE:
+                        # CREATE FILE NODE (Purple Triangle)
+                        file_key = (NodeType.PAGE, rel_path)
+                        if file_key in dependency_node_map:
+                            file_node_id = dependency_node_map[file_key]
+                        else:
+                            file_node_id = self.add_page_node(rel_path, scenario_metadata)
+                            dependency_node_map[file_key] = file_node_id
+                            
+                        # CREATE ACTION NODE (Pink Diamond)
+                        action_tag = display_name
+                        action_key = (NodeType.ACTION, f"{rel_path}#{action_tag}")
+                        if action_key in dependency_node_map:
+                            node_id = dependency_node_map[action_key]
+                        else:
+                            node_id = self.add_action_node(action_tag, rel_path, scenario_metadata)
+                            dependency_node_map[action_key] = node_id
+                            
+                        # LINK FILE -> ACTION
+                        if not self.graph.has_edge(file_node_id, node_id):
+                            self.add_dependency(file_node_id, node_id, DependencyType.PAGE)
+                    else:
+                        # Fallback to test case
+                        node_id = self.add_test_case(scenario, scenario_metadata)
                     
                     # Extract dependencies from scenario
                     dependencies = parser.extract_dependencies_with_background(
@@ -532,35 +742,43 @@ class GraphBuilder:
                     
                     # Process each dependency
                     for dep in dependencies:
+                        if dep.type == DependencyType.COMMON:
+                            tag = dep.parameters.get("scenario_tag", "")
+                            if tag and not tag.startswith("@"):
+                                tag = "@" + tag
+                                
+                            # Find API dependencies using endswith
+                            api_deps = None
+                            # Normalize dep target to avoid slash issues
+                            target_norm = dep.target.replace("\\", "/")
+                            
+                            for map_path, map_tag in common_api_deps_map.keys():
+                                if map_path.endswith(target_norm) and map_tag == tag:
+                                    api_deps = common_api_deps_map.get((map_path, map_tag))
+                                    break
+                                    
+                            if api_deps is None and tag:
+                                # Fallback to default if specific tag not found
+                                for map_path, map_tag in common_api_deps_map.keys():
+                                    if map_path.endswith(target_norm) and map_tag == "":
+                                        api_deps = common_api_deps_map.get((map_path, map_tag))
+                                        break
+                                
+                            if api_deps:
+                                for api_dep in api_deps:
+                                    dep_node_id = self._get_or_create_dependency_node(
+                                        api_dep, project.name, dependency_node_map
+                                    )
+                                    self.add_dependency(dep_node_id, node_id, api_dep.type)
+                            continue
+
                         # Create dependency node (or reuse existing)
                         dep_node_id = self._get_or_create_dependency_node(
                             dep, project.name, dependency_node_map
                         )
                         
-                        # REVERSED: Create edge from dependency to test case
-                        # This makes dependencies (API/Page/DB) point to test cases
-                        self.add_dependency(dep_node_id, test_case_id, dep.type)
-                    
-                    # Detect feature from file path
-                    feature_name = self._detect_feature_from_path(scenario.file_path)
-                    
-                    # Get or create feature group node
-                    if feature_name not in feature_group_map:
-                        feature_metadata = NodeMetadata(
-                            file_path=None,
-                            line_number=None,
-                            jira_tags=[],
-                            project_name=project.name,
-                            additional_data={"feature_category": feature_name},
-                        )
-                        feature_group_id = self.add_feature_group_node(feature_name, feature_metadata)
-                        feature_group_map[feature_name] = feature_group_id
-                    else:
-                        feature_group_id = feature_group_map[feature_name]
-                    
-                    # REVERSED: Create edge from feature group to test case
-                    # This makes feature groups point to test cases (feature groups contain test cases)
-                    self.add_dependency(feature_group_id, test_case_id, DependencyType.WORKFLOW)
+                        # REVERSED: Create edge from dependency to scenario node
+                        self.add_dependency(dep_node_id, node_id, dep.type)
             
             except ParseError as e:
                 # Log parsing error but continue with other files (graceful degradation)
@@ -739,15 +957,25 @@ class GraphBuilder:
             if node_key in node_map:
                 current_node_id = node_map[node_key]
             else:
+                # Determine display name:
+                # - First segment (i=0): show full base_url if available, otherwise segment
+                # - Other segments: show just the segment
+                if i == 0 and base_url:
+                    # First level - use full base URL as display name
+                    display_name = base_url
+                else:
+                    # Other levels - use segment name
+                    display_name = segment
+                
                 # Create new API_GROUP node
                 group_metadata = NodeMetadata(
                     file_path=None,
                     line_number=None,
                     jira_tags=[],
                     project_name=metadata.project_name,
-                    additional_data={"level": i, "segment": segment},
+                    additional_data={"level": i, "segment": segment, "base_url": base_url if i == 0 else None},
                 )
-                current_node_id = self.add_api_group_node(segment, group_metadata)
+                current_node_id = self.add_api_group_node(display_name, group_metadata)
                 node_map[node_key] = current_node_id
             
             # Connect to parent if exists
@@ -767,7 +995,7 @@ class GraphBuilder:
         else:
             # Update metadata with full info
             leaf_metadata = NodeMetadata(
-                file_path=None,
+                file_path=metadata.file_path,
                 line_number=metadata.line_number,
                 jira_tags=[],
                 project_name=metadata.project_name,
@@ -839,13 +1067,21 @@ class GraphBuilder:
             DependencyType.API: NodeType.API,
             DependencyType.PAGE: NodeType.PAGE,
             DependencyType.DATABASE: NodeType.DATABASE,
+            DependencyType.LOCATOR: NodeType.LOCATOR,
         }
         
         node_type = node_type_map[dep.type]
         
         # Create metadata
+        if dep.type in [DependencyType.WORKFLOW, DependencyType.PAGE, DependencyType.LOCATOR]:
+            file_path = dep.target
+        elif dep.type == DependencyType.API:
+            file_path = dep.parameters.get("file_path")
+        else:
+            file_path = None
+            
         metadata = NodeMetadata(
-            file_path=dep.target if dep.type in [DependencyType.WORKFLOW, DependencyType.PAGE] else None,
+            file_path=file_path,
             line_number=dep.line_number,
             jira_tags=[],
             project_name=project_name,
@@ -927,6 +1163,16 @@ class GraphBuilder:
                 # No action tag, return page node (legacy behavior)
                 return page_node_id
             
+        elif dep.type == DependencyType.LOCATOR:
+            # Check if node already exists
+            node_key = (node_type, dep.target)
+            if node_key in node_map:
+                locator_node_id = node_map[node_key]
+            else:
+                locator_node_id = self.add_locator_node(dep.target, metadata)
+                node_map[node_key] = locator_node_id
+            return locator_node_id
+            
         elif dep.type == DependencyType.DATABASE:
             # Check if node already exists
             node_key = (node_type, dep.target)
@@ -965,12 +1211,15 @@ class GraphBuilder:
         import os
         
         from karate_graph_analyzer.models import ParseError
-        from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
-        
+
         logger = logging.getLogger(__name__)
-        
-        # Initialize parser with project configuration
-        parser = FeatureFileParser(config=project.parser_config)
+
+        # Use injected parser or create default
+        if self._injected_parser is not None:
+            parser = self._injected_parser
+        else:
+            from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
+            parser = FeatureFileParser(config=project.parser_config)
         
         # Find all feature files using project patterns
         feature_files = []
@@ -1040,14 +1289,9 @@ class GraphBuilder:
         # Track dependency nodes to avoid duplicates
         dependency_node_map: Dict[tuple, str] = {}
         
-        # Track feature group nodes to avoid duplicates
-        feature_group_map: Dict[str, str] = {}
-        
-        # Build map of existing dependency nodes and feature groups
+        # Build map of existing dependency nodes
         for node_id, node in existing_graph.nodes.items():
-            if node.type == NodeType.FEATURE_GROUP:
-                feature_group_map[node.name] = node_id
-            elif node.type != NodeType.TEST_CASE:
+            if node.type != NodeType.TEST_CASE:
                 node_key = (node.type, node.name)
                 dependency_node_map[node_key] = node_id
         
@@ -1145,23 +1389,26 @@ class GraphBuilder:
                     # Detect feature from file path
                     feature_name = self._detect_feature_from_path(scenario.file_path)
                     
-                    # Get or create feature group node
-                    if feature_name not in feature_group_map:
-                        feature_metadata = NodeMetadata(
-                            file_path=None,
-                            line_number=None,
-                            jira_tags=[],
-                            project_name=project.name,
-                            additional_data={"feature_category": feature_name},
-                        )
-                        feature_group_id = self.add_feature_group_node(feature_name, feature_metadata)
-                        feature_group_map[feature_name] = feature_group_id
-                    else:
-                        feature_group_id = feature_group_map[feature_name]
-                    
-                    # REVERSED: Create edge from feature group to test case
-                    # This makes feature groups point to test cases (feature groups contain test cases)
-                    self.add_dependency(feature_group_id, test_case_id, DependencyType.WORKFLOW)
+                    # Only create feature group if feature_name is not None
+                    # (excludes pages, services, common directories)
+                    if feature_name is not None:
+                        # Get or create feature group node
+                        if feature_name not in feature_group_map:
+                            feature_metadata = NodeMetadata(
+                                file_path=None,
+                                line_number=None,
+                                jira_tags=[],
+                                project_name=project.name,
+                                additional_data={"feature_category": feature_name},
+                            )
+                            feature_group_id = self.add_feature_group_node(feature_name, feature_metadata)
+                            feature_group_map[feature_name] = feature_group_id
+                        else:
+                            feature_group_id = feature_group_map[feature_name]
+                        
+                        # REVERSED: Create edge from feature group to test case
+                        # This makes feature groups point to test cases (feature groups contain test cases)
+                        self.add_dependency(feature_group_id, test_case_id, DependencyType.WORKFLOW)
             
             except ParseError as e:
                 logger.error(f"Failed to parse {file_path}: {e}")

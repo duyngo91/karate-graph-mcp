@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from karate_graph_analyzer.analyzer.dependency_analyzer import DependencyAnalyzer
 from karate_graph_analyzer.cache.cache_manager import CacheManager
+from karate_graph_analyzer.exporters import ExporterFactory
 from karate_graph_analyzer.graph.graph_builder import GraphBuilder
 from karate_graph_analyzer.mcp_interface.search_tools import SearchTools
 from karate_graph_analyzer.models import (
@@ -542,14 +543,13 @@ class KarateGraphAnalyzerTool:
 
             graph = self.graphs[request.project_name]
 
-            # Export based on format
-            if request.format == "json":
-                export_data = self._export_to_json(graph)
-            elif request.format == "graphml":
-                export_data = self._export_to_graphml(graph)
-            else:
+            # Use ExporterFactory (Strategy + Factory Pattern)
+            try:
+                exporter = ExporterFactory.create(request.format)
+                export_data = exporter.export(graph)
+            except ValueError as e:
                 return self._error_response(
-                    "5001", "EXPORT_ERROR", f"Unsupported format: {format}"
+                    "5001", "EXPORT_ERROR", str(e)
                 )
 
             logger.info(f"Exported graph for project '{project_name}' to {format}")
@@ -580,14 +580,18 @@ class KarateGraphAnalyzerTool:
             # Validate input
             request = ImportGraphRequest(data=data, format=format, project_name=project_name)
 
-            # Import based on format
-            if request.format == "json":
-                graph = self._import_from_json(request.data, request.project_name)
-            elif request.format == "graphml":
-                graph = self._import_from_graphml(request.data, request.project_name)
-            else:
+            # Use ExporterFactory (Strategy + Factory Pattern)
+            try:
+                exporter = ExporterFactory.create(request.format)
+                graph = exporter.import_graph(request.data, request.project_name)
+            except json.JSONDecodeError as e:
+                # json.JSONDecodeError is a subclass of ValueError — catch first
                 return self._error_response(
-                    "5002", "IMPORT_ERROR", f"Unsupported format: {format}"
+                    "5001", "IMPORT_ERROR", f"Invalid JSON: {e}"
+                )
+            except ValueError as e:
+                return self._error_response(
+                    "5002", "IMPORT_ERROR", str(e)
                 )
 
             # Store graph and create analyzer
@@ -631,222 +635,27 @@ class KarateGraphAnalyzerTool:
                 return self.analyzers.get(project_name)
         return None
 
+    # Legacy export/import methods — delegate to ExporterFactory for backward compatibility
+
     def _export_to_json(self, graph: DependencyGraph) -> str:
-        """Export graph to JSON format.
-
-        Args:
-            graph: Dependency graph to export
-
-        Returns:
-            JSON string representation
-        """
-        # Convert graph to dictionary
-        nodes_list = []
-        for node in graph.nodes.values():
-            nodes_list.append(
-                {
-                    "id": node.id,
-                    "type": node.type.value,
-                    "name": node.name,
-                    "metadata": {
-                        "file_path": node.metadata.file_path,
-                        "line_number": node.metadata.line_number,
-                        "jira_tags": node.metadata.jira_tags,
-                        "project_name": node.metadata.project_name,
-                        "additional_data": node.metadata.additional_data,
-                    },
-                }
-            )
-
-        edges_list = []
-        for edge in graph.edges.values():
-            edges_list.append(
-                {
-                    "id": edge.id,
-                    "from_node": edge.from_node,
-                    "to_node": edge.to_node,
-                    "type": edge.type.value,
-                }
-            )
-
-        export_data = {
-            "project_name": graph.project_name,
-            "timestamp": datetime.now().isoformat(),
-            "nodes": nodes_list,
-            "edges": edges_list,
-            "cycles": graph.cycles,
-        }
-
-        return json.dumps(export_data, indent=2)
+        """Export graph to JSON format (delegates to JsonExporter)."""
+        from karate_graph_analyzer.exporters.json_exporter import JsonExporter
+        return JsonExporter().export(graph)
 
     def _export_to_graphml(self, graph: DependencyGraph) -> str:
-        """Export graph to GraphML format.
-
-        Args:
-            graph: Dependency graph to export
-
-        Returns:
-            GraphML string representation
-        """
-        import networkx as nx
-
-        # Create NetworkX graph
-        nx_graph = nx.DiGraph()
-
-        # Add nodes with attributes
-        for node in graph.nodes.values():
-            nx_graph.add_node(
-                node.id,
-                type=node.type.value,
-                name=node.name,
-                file_path=node.metadata.file_path or "",
-                line_number=str(node.metadata.line_number or 0),
-                jira_tags=",".join(node.metadata.jira_tags),
-                project_name=node.metadata.project_name,
-            )
-
-        # Add edges with attributes
-        for edge in graph.edges.values():
-            nx_graph.add_edge(edge.from_node, edge.to_node, type=edge.type.value)
-
-        # Convert to GraphML using BytesIO and decode to string
-        from io import BytesIO
-
-        output = BytesIO()
-        nx.write_graphml(nx_graph, output)
-        return output.getvalue().decode("utf-8")
+        """Export graph to GraphML format (delegates to GraphMLExporter)."""
+        from karate_graph_analyzer.exporters.graphml_exporter import GraphMLExporter
+        return GraphMLExporter().export(graph)
 
     def _import_from_json(self, data: str, project_name: str) -> DependencyGraph:
-        """Import graph from JSON format.
-
-        Args:
-            data: JSON string
-            project_name: Project name for imported graph
-
-        Returns:
-            Reconstructed dependency graph
-        """
-        from karate_graph_analyzer.models import Edge, Node, NodeMetadata, NodeType, DependencyType
-
-        # Parse JSON
-        graph_data = json.loads(data)
-
-        # Validate structure
-        if "nodes" not in graph_data or "edges" not in graph_data:
-            raise ValueError("Invalid graph data: missing 'nodes' or 'edges'")
-
-        # Reconstruct nodes
-        nodes = {}
-        for node_data in graph_data["nodes"]:
-            metadata = NodeMetadata(
-                file_path=node_data["metadata"].get("file_path"),
-                line_number=node_data["metadata"].get("line_number"),
-                jira_tags=node_data["metadata"].get("jira_tags", []),
-                project_name=node_data["metadata"].get("project_name", project_name),
-                additional_data=node_data["metadata"].get("additional_data", {}),
-            )
-
-            node = Node(
-                id=node_data["id"],
-                type=NodeType(node_data["type"]),
-                name=node_data["name"],
-                metadata=metadata,
-            )
-            nodes[node.id] = node
-
-        # Reconstruct edges
-        edges = {}
-        for edge_data in graph_data["edges"]:
-            # Validate edge references existing nodes
-            if edge_data["from_node"] not in nodes:
-                raise ValueError(f"Edge references non-existent node: {edge_data['from_node']}")
-            if edge_data["to_node"] not in nodes:
-                raise ValueError(f"Edge references non-existent node: {edge_data['to_node']}")
-
-            edge = Edge(
-                id=edge_data["id"],
-                from_node=edge_data["from_node"],
-                to_node=edge_data["to_node"],
-                type=DependencyType(edge_data["type"]),
-            )
-            edges[edge.id] = edge
-
-        # Reconstruct cycles
-        cycles = graph_data.get("cycles", [])
-
-        return DependencyGraph(
-            project_name=project_name, nodes=nodes, edges=edges, cycles=cycles
-        )
+        """Import graph from JSON format (delegates to JsonExporter)."""
+        from karate_graph_analyzer.exporters.json_exporter import JsonExporter
+        return JsonExporter().import_graph(data, project_name)
 
     def _import_from_graphml(self, data: str, project_name: str) -> DependencyGraph:
-        """Import graph from GraphML format.
-
-        Args:
-            data: GraphML string
-            project_name: Project name for imported graph
-
-        Returns:
-            Reconstructed dependency graph
-        """
-        import networkx as nx
-        from io import StringIO
-
-        from karate_graph_analyzer.models import Edge, Node, NodeMetadata, NodeType, DependencyType
-
-        # Parse GraphML
-        input_stream = StringIO(data)
-        nx_graph = nx.read_graphml(input_stream)
-
-        # Reconstruct nodes
-        nodes = {}
-        for node_id in nx_graph.nodes():
-            node_data = nx_graph.nodes[node_id]
-
-            # Parse jira_tags from comma-separated string
-            jira_tags_str = node_data.get("jira_tags", "")
-            jira_tags = [tag.strip() for tag in jira_tags_str.split(",") if tag.strip()]
-
-            metadata = NodeMetadata(
-                file_path=node_data.get("file_path") or None,
-                line_number=int(node_data.get("line_number", 0)) or None,
-                jira_tags=jira_tags,
-                project_name=node_data.get("project_name", project_name),
-                additional_data={},
-            )
-
-            node = Node(
-                id=node_id,
-                type=NodeType(node_data.get("type", "TEST_CASE")),
-                name=node_data.get("name", node_id),
-                metadata=metadata,
-            )
-            nodes[node.id] = node
-
-        # Reconstruct edges
-        edges = {}
-        for from_node, to_node in nx_graph.edges():
-            edge_data = nx_graph.edges[from_node, to_node]
-            edge_id = f"edge_{from_node}_{to_node}"
-
-            edge = Edge(
-                id=edge_id,
-                from_node=from_node,
-                to_node=to_node,
-                type=DependencyType(edge_data.get("type", "WORKFLOW")),
-            )
-            edges[edge.id] = edge
-
-        # Detect cycles (GraphML doesn't store cycles)
-        import networkx as nx
-
-        try:
-            cycles = list(nx.simple_cycles(nx_graph))
-        except Exception:
-            cycles = []
-
-        return DependencyGraph(
-            project_name=project_name, nodes=nodes, edges=edges, cycles=cycles
-        )
+        """Import graph from GraphML format (delegates to GraphMLExporter)."""
+        from karate_graph_analyzer.exporters.graphml_exporter import GraphMLExporter
+        return GraphMLExporter().import_graph(data, project_name)
     
     # ========== Search and Query Methods ==========
     

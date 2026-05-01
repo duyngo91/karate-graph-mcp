@@ -21,9 +21,11 @@ class DependencyType(str, Enum):
     """Type of dependency relationship."""
 
     WORKFLOW = "WORKFLOW"
+    COMMON = "COMMON"
     API = "API"
     PAGE = "PAGE"
     DATABASE = "DATABASE"
+    LOCATOR = "LOCATOR"
 
 
 class NodeType(str, Enum):
@@ -31,13 +33,14 @@ class NodeType(str, Enum):
 
     TEST_CASE = "TEST_CASE"
     WORKFLOW = "WORKFLOW"
+    COMMON = "COMMON"  # Common API definition
     SCENARIO = "SCENARIO"  # Workflow scenario (@AddPayment, @GetPayment)
     API = "API"
     API_GROUP = "API_GROUP"  # Hierarchical API grouping (domain, path segments)
     PAGE = "PAGE"
     ACTION = "ACTION"  # Page action (@login, @navigate)
     DATABASE = "DATABASE"
-    FEATURE_GROUP = "FEATURE_GROUP"  # Feature grouping (Authentication, Orders, etc.)
+    LOCATOR = "LOCATOR"
 
 
 @dataclass
@@ -176,8 +179,10 @@ class ParserConfig:
             r"@[A-Za-z]+_\d+",   # @Proj_123 (mixed case with underscore)
         ]
     )
-    workflow_directories: List[str] = field(default_factory=lambda: ["workflows", "common"])
+    workflow_directories: List[str] = field(default_factory=lambda: ["workflow", "workflows"])
+    common_directories: List[str] = field(default_factory=lambda: ["common", "services"])
     page_object_directories: List[str] = field(default_factory=lambda: ["pages", "webPages"])
+    locator_directories: List[str] = field(default_factory=lambda: ["locators", "resources/locators"])
     variable_patterns: Dict[str, str] = field(default_factory=dict)
     api_extraction_rules: List[str] = field(
         default_factory=lambda: [

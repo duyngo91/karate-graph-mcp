@@ -24,9 +24,9 @@ class GraphVisualizer:
         NodeType.API_GROUP: "#FFB74D",      # Light Orange (for API hierarchy)
         NodeType.PAGE: "#9C27B0",           # Purple
         NodeType.DATABASE: "#F44336",       # Red
-        NodeType.FEATURE_GROUP: "#00BCD4",  # Cyan (for feature grouping)
         NodeType.SCENARIO: "#9C27B0",       # Purple (same as workflow family)
         NodeType.ACTION: "#E91E63",         # Pink (page action family)
+        NodeType.LOCATOR: "#607D8B",        # Blue Grey
     }
 
     # Shape scheme for different node types
@@ -37,9 +37,9 @@ class GraphVisualizer:
         NodeType.API_GROUP: "dot",          # Circle for API groups
         NodeType.PAGE: "triangle",
         NodeType.DATABASE: "database",
-        NodeType.FEATURE_GROUP: "star",     # Star for feature groups
         NodeType.SCENARIO: "diamond",       # Diamond for scenarios
         NodeType.ACTION: "diamond",         # Diamond for actions
+        NodeType.LOCATOR: "hexagon",        # Hexagon for locators
     }
 
     def __init__(self, graph: DependencyGraph):
@@ -238,335 +238,10 @@ class GraphVisualizer:
         with open(output_file, 'r', encoding='utf-8') as f:
             html_content = f.read()
         
-        # Add physics toggle button and controls
-        controls_html = """
-        <div id="controls" style="
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: white;
-            border: 2px solid #333;
-            border-radius: 8px;
-            padding: 15px;
-            font-family: Arial, sans-serif;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            z-index: 1000;
-        ">
-            <h3 style="margin: 0 0 10px 0; font-size: 16px; border-bottom: 2px solid #333; padding-bottom: 5px;">
-                🎮 Controls
-            </h3>
-            <button id="togglePhysics" onclick="togglePhysics()" style="
-                width: 100%;
-                padding: 8px;
-                margin-bottom: 8px;
-                background: #4CAF50;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 14px;
-            ">
-                🔴 Disable Physics
-            </button>
-            <button id="resetLayout" onclick="resetLayout()" style="
-                width: 100%;
-                padding: 8px;
-                margin-bottom: 8px;
-                background: #2196F3;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 14px;
-            ">
-                🔄 Reset Layout
-            </button>
-            <button id="fitView" onclick="fitView()" style="
-                width: 100%;
-                padding: 8px;
-                margin-bottom: 8px;
-                background: #FF9800;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 14px;
-            ">
-                🔍 Fit to View
-            </button>
-            <button id="clearFocus" onclick="clearFocus()" style="
-                width: 100%;
-                padding: 8px;
-                background: #9C27B0;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 14px;
-            ">
-                🔓 Clear Focus
-            </button>
-            <div style="margin-top: 10px; font-size: 12px; color: #666;">
-                <strong>Status:</strong> <span id="physicsStatus">Physics ON</span><br>
-                <strong>Focus:</strong> <span id="focusStatus">None</span>
-            </div>
-        </div>
-        
-        <script type="text/javascript">
-            var physicsEnabled = true;
-            var focusedNode = null;
-            var originalNodeOptions = {};
-            var originalEdgeOptions = {};
-            
-            // Store original options for all nodes and edges
-            network.on('stabilizationIterationsDone', function() {
-                var nodes = network.body.data.nodes;
-                var edges = network.body.data.edges;
-                
-                nodes.forEach(function(node) {
-                    originalNodeOptions[node.id] = {
-                        opacity: node.opacity || 1,
-                        color: node.color,
-                        hidden: node.hidden || false
-                    };
-                });
-                
-                edges.forEach(function(edge) {
-                    originalEdgeOptions[edge.id] = {
-                        opacity: edge.opacity || 1,
-                        color: edge.color,
-                        hidden: edge.hidden || false
-                    };
-                });
-            });
-            
-            // Handle node click for focus mode
-            network.on('click', function(params) {
-                if (params.nodes.length > 0) {
-                    var nodeId = params.nodes[0];
-                    focusOnNode(nodeId);
-                } else {
-                    // Clicked on empty space - clear focus
-                    clearFocus();
-                }
-            });
-            
-            function focusOnNode(nodeId) {
-                focusedNode = nodeId;
-                
-                // Get all child nodes recursively (BFS following only outgoing edges)
-                var visited = new Set([nodeId]);
-                var queue = [nodeId];
-                var connectedEdges = new Set();
-                
-                // Get all edges from the network
-                var allEdges = network.body.data.edges.get();
-                
-                while (queue.length > 0) {
-                    var currentNode = queue.shift();
-                    
-                    // Find only outgoing edges (edges where from === currentNode)
-                    var outgoingEdges = allEdges.filter(function(edge) {
-                        return edge.from === currentNode;
-                    });
-                    
-                    // Process outgoing edges
-                    outgoingEdges.forEach(function(edge) {
-                        connectedEdges.add(edge.id);
-                        
-                        // Add child node (to node) if not visited
-                        var childNode = edge.to;
-                        if (!visited.has(childNode)) {
-                            visited.add(childNode);
-                            queue.push(childNode);
-                        }
-                    });
-                }
-                
-                // Create set of visible nodes (focused node + all descendants)
-                var visibleNodes = visited;
-                
-                // Update all nodes
-                var nodes = network.body.data.nodes;
-                var nodesToUpdate = [];
-                
-                nodes.forEach(function(node) {
-                    if (visibleNodes.has(node.id)) {
-                        // Keep visible - highlight
-                        nodesToUpdate.push({
-                            id: node.id,
-                            opacity: 1,
-                            hidden: false,
-                            borderWidth: node.id === nodeId ? 5 : 2,
-                            borderWidthSelected: node.id === nodeId ? 7 : 3
-                        });
-                    } else {
-                        // Fade out
-                        nodesToUpdate.push({
-                            id: node.id,
-                            opacity: 0.1,
-                            hidden: false
-                        });
-                    }
-                });
-                
-                network.body.data.nodes.update(nodesToUpdate);
-                
-                // Update all edges
-                var edges = network.body.data.edges;
-                var edgesToUpdate = [];
-                
-                edges.forEach(function(edge) {
-                    if (connectedEdges.has(edge.id)) {
-                        // Keep visible
-                        edgesToUpdate.push({
-                            id: edge.id,
-                            opacity: 1,
-                            hidden: false,
-                            width: 2
-                        });
-                    } else {
-                        // Fade out
-                        edgesToUpdate.push({
-                            id: edge.id,
-                            opacity: 0.05,
-                            hidden: false
-                        });
-                    }
-                });
-                
-                network.body.data.edges.update(edgesToUpdate);
-                
-                // Update focus status
-                var focusedNodeData = network.body.data.nodes.get(nodeId);
-                var connectedCount = visibleNodes.size - 1; // Exclude the focused node itself
-                document.getElementById('focusStatus').innerHTML = focusedNodeData.label + ' (' + connectedCount + ' connected)';
-                document.getElementById('focusStatus').style.color = '#FF5722';
-                document.getElementById('focusStatus').style.fontWeight = 'bold';
-                
-                // Fit view to focused subgraph
-                network.fit({
-                    nodes: Array.from(visibleNodes),
-                    animation: {
-                        duration: 1000,
-                        easingFunction: 'easeInOutQuad'
-                    }
-                });
-            }
-            
-            function clearFocus() {
-                focusedNode = null;
-                
-                // Restore all nodes
-                var nodes = network.body.data.nodes;
-                var nodesToUpdate = [];
-                
-                nodes.forEach(function(node) {
-                    nodesToUpdate.push({
-                        id: node.id,
-                        opacity: 1,
-                        hidden: false,
-                        borderWidth: 1,
-                        borderWidthSelected: 2
-                    });
-                });
-                
-                network.body.data.nodes.update(nodesToUpdate);
-                
-                // Restore all edges
-                var edges = network.body.data.edges;
-                var edgesToUpdate = [];
-                
-                edges.forEach(function(edge) {
-                    edgesToUpdate.push({
-                        id: edge.id,
-                        opacity: 1,
-                        hidden: false,
-                        width: 1
-                    });
-                });
-                
-                network.body.data.edges.update(edgesToUpdate);
-                
-                // Update focus status
-                document.getElementById('focusStatus').innerHTML = 'None';
-                document.getElementById('focusStatus').style.color = '#666';
-                document.getElementById('focusStatus').style.fontWeight = 'normal';
-                
-                // Fit view to all nodes
-                network.fit({
-                    animation: {
-                        duration: 1000,
-                        easingFunction: 'easeInOutQuad'
-                    }
-                });
-            }
-            
-            function togglePhysics() {
-                physicsEnabled = !physicsEnabled;
-                network.setOptions({
-                    physics: {
-                        enabled: physicsEnabled
-                    }
-                });
-                
-                var btn = document.getElementById('togglePhysics');
-                var status = document.getElementById('physicsStatus');
-                
-                if (physicsEnabled) {
-                    btn.innerHTML = '🔴 Disable Physics';
-                    btn.style.background = '#4CAF50';
-                    status.innerHTML = 'Physics ON';
-                    status.style.color = '#4CAF50';
-                } else {
-                    btn.innerHTML = '🟢 Enable Physics';
-                    btn.style.background = '#F44336';
-                    status.innerHTML = 'Physics OFF';
-                    status.style.color = '#F44336';
-                }
-            }
-            
-            function resetLayout() {
-                // Clear focus first
-                clearFocus();
-                
-                // Re-enable physics temporarily to reset layout
-                var wasEnabled = physicsEnabled;
-                if (!physicsEnabled) {
-                    network.setOptions({ physics: { enabled: true } });
-                }
-                
-                // Stabilize the network
-                network.stabilize();
-                
-                // Restore previous physics state after stabilization
-                setTimeout(function() {
-                    if (!wasEnabled) {
-                        network.setOptions({ physics: { enabled: false } });
-                    }
-                }, 2000);
-            }
-            
-            function fitView() {
-                network.fit({
-                    animation: {
-                        duration: 1000,
-                        easingFunction: 'easeInOutQuad'
-                    }
-                });
-            }
-            
-            // Auto-disable physics after initial stabilization
-            network.once('stabilizationIterationsDone', function() {
-                console.log('Initial stabilization complete');
-            });
-        </script>
-        """
-        
-        # Insert controls and legend before closing body tag
-        legend_html = controls_html
+        # Insert legend before closing body tag
+        legend_html = ""
         if hasattr(net, 'legend_html'):
-            legend_html += net.legend_html
+            legend_html = net.legend_html
         
         html_content = html_content.replace('</body>', f'{legend_html}</body>')
         
@@ -645,8 +320,7 @@ class GraphVisualizer:
                 <strong>💡 Cách sử dụng:</strong><br>
                 🖱️ <strong>Click vào node</strong> để focus (chỉ hiện các cấp con)<br>
                 🖱️ <strong>Click vào vùng trống</strong> để clear focus<br>
-                🔓 <strong>Clear Focus button</strong> để reset view<br>
-                🔍 Hover để xem chi tiết<br>
+                 Hover để xem chi tiết<br>
                 📜 Scroll để zoom in/out<br>
                 🌳 Hierarchy: Domain → Path → Method → Test Case → Feature
             </div>
