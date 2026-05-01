@@ -8,6 +8,7 @@ as specified in the design document.
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
+import re
 
 
 class ScenarioType(str, Enum):
@@ -130,15 +131,52 @@ class DependencyGraph:
         """Merge another graph into this one."""
         if new_project_name:
             self.project_name = new_project_name
-            
-        self.nodes.update(other.nodes)
-        self.edges.update(other.edges)
+
+        node_id_map: Dict[str, str] = {}
+        namespace = re.sub(r"[^A-Za-z0-9_]+", "_", other.project_name).strip("_") or "project"
+
+        for node_id, node in other.nodes.items():
+            target_id = node_id
+            existing = self.nodes.get(target_id)
+            if existing and not self._same_node_identity(existing, node):
+                target_id = f"{namespace}_{node_id}"
+                node = Node(
+                    id=target_id,
+                    type=node.type,
+                    name=node.name,
+                    metadata=node.metadata,
+                )
+            node_id_map[node_id] = target_id
+            self.nodes[target_id] = node
+
+        for edge_id, edge in other.edges.items():
+            from_node = node_id_map.get(edge.from_node, edge.from_node)
+            to_node = node_id_map.get(edge.to_node, edge.to_node)
+            target_edge_id = f"edge_{from_node}_{to_node}_{edge.type.value}_{edge.line_number or 0}"
+            if target_edge_id in self.edges:
+                continue
+            self.edges[target_edge_id] = Edge(
+                id=target_edge_id,
+                from_node=from_node,
+                to_node=to_node,
+                type=edge.type,
+                line_number=edge.line_number,
+            )
         
         for cycle in other.cycles:
             if cycle not in self.cycles:
                 self.cycles.append(cycle)
                 
         return self
+
+    def _same_node_identity(self, left: "Node", right: "Node") -> bool:
+        return (
+            left.type == right.type
+            and left.name == right.name
+            and left.metadata.project_name == right.metadata.project_name
+            and left.metadata.file_path == right.metadata.file_path
+            and left.metadata.line_number == right.metadata.line_number
+        )
 
 
 @dataclass
@@ -379,8 +417,12 @@ class InvertedIndices:
             
             # Index by node type
             if node.type == NodeType.API:
-                # API nodes: index by endpoint (node name)
+                # API nodes: index by endpoint identifiers, not just display name.
                 self.add_api_endpoint(node.name, node_id)
+                for key in ("full_url", "path", "path_template"):
+                    endpoint = node.metadata.additional_data.get(key)
+                    if endpoint:
+                        self.add_api_endpoint(endpoint, node_id)
                 
                 # Index by domain
                 domain = node.metadata.additional_data.get('domain')

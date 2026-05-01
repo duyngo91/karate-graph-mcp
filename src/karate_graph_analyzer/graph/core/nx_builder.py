@@ -8,6 +8,7 @@ adding nodes, edges, and generating unique IDs.
 from typing import Dict, List, Optional
 import networkx as nx
 import logging
+import hashlib
 
 from karate_graph_analyzer.models import (
     DependencyType,
@@ -79,14 +80,35 @@ class NetworkXBuilder:
         
         return f"{prefix}_{self._node_counter[prefix]:04d}"
 
+    def _generate_stable_node_id(self, node_type: NodeType, identity: str) -> str:
+        """Generate a deterministic ID while preserving human-friendly prefixes."""
+        prefix_map = {
+            NodeType.TEST_CASE: "tc",
+            NodeType.WORKFLOW: "wf",
+            NodeType.SCENARIO: "scn",
+            NodeType.API: "api",
+            NodeType.API_GROUP: "apig",
+            NodeType.PAGE: "page",
+            NodeType.ACTION: "act",
+            NodeType.DATABASE: "db",
+            NodeType.LOCATOR: "loc",
+        }
+        prefix = prefix_map.get(node_type, "node")
+        digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
+        return f"{prefix}_{digest}"
+
     def add_test_case(self, scenario: Scenario, metadata: NodeMetadata) -> str:
         """Add test case node to graph."""
-        node_id = self._generate_node_id(NodeType.TEST_CASE)
+        identity = "|".join([
+            metadata.project_name,
+            NodeType.TEST_CASE.value,
+            metadata.file_path or "",
+            str(metadata.line_number or ""),
+            scenario.name,
+        ])
+        node_id = self._generate_stable_node_id(NodeType.TEST_CASE, identity)
         
         display_name = scenario.name
-        if scenario.jira_tags:
-            jira_tag = scenario.jira_tags[0]
-            display_name = f"{jira_tag} - {scenario.name}"
         
         node_data = {
             "id": node_id,
@@ -109,7 +131,8 @@ class NetworkXBuilder:
 
     def add_workflow_node(self, name: str, metadata: NodeMetadata) -> str:
         """Add workflow node to graph."""
-        node_id = self._generate_node_id(NodeType.WORKFLOW)
+        identity = "|".join([metadata.project_name, NodeType.WORKFLOW.value, name])
+        node_id = self._generate_stable_node_id(NodeType.WORKFLOW, identity)
         node_data = {
             "id": node_id,
             "type": NodeType.WORKFLOW,
@@ -127,7 +150,15 @@ class NetworkXBuilder:
 
     def add_api_node(self, endpoint: str, metadata: NodeMetadata) -> str:
         """Add API call node to graph."""
-        node_id = self._generate_node_id(NodeType.API)
+        identity = "|".join([
+            metadata.project_name,
+            NodeType.API.value,
+            str(endpoint or ""),
+            str(metadata.additional_data.get("full_url", "")),
+            str(metadata.additional_data.get("http_method", "")),
+            str(metadata.additional_data.get("path_template", "")),
+        ])
+        node_id = self._generate_stable_node_id(NodeType.API, identity)
         node_data = {
             "id": node_id,
             "type": NodeType.API,
@@ -145,7 +176,8 @@ class NetworkXBuilder:
     
     def add_api_group_node(self, group_name: str, metadata: NodeMetadata) -> str:
         """Add API group node to graph."""
-        node_id = self._generate_node_id(NodeType.API_GROUP)
+        identity = "|".join([metadata.project_name, NodeType.API_GROUP.value, group_name, str(metadata.additional_data.get("level", ""))])
+        node_id = self._generate_stable_node_id(NodeType.API_GROUP, identity)
         node_data = {
             "id": node_id,
             "type": NodeType.API_GROUP,
@@ -163,7 +195,8 @@ class NetworkXBuilder:
 
     def add_page_node(self, page_path: str, metadata: NodeMetadata) -> str:
         """Add page object node to graph."""
-        node_id = self._generate_node_id(NodeType.PAGE)
+        identity = "|".join([metadata.project_name, NodeType.PAGE.value, page_path])
+        node_id = self._generate_stable_node_id(NodeType.PAGE, identity)
         node_data = {
             "id": node_id,
             "type": NodeType.PAGE,
@@ -181,7 +214,8 @@ class NetworkXBuilder:
 
     def add_database_node(self, operation: str, metadata: NodeMetadata) -> str:
         """Add database operation node to graph."""
-        node_id = self._generate_node_id(NodeType.DATABASE)
+        identity = "|".join([metadata.project_name, NodeType.DATABASE.value, operation])
+        node_id = self._generate_stable_node_id(NodeType.DATABASE, identity)
         node_data = {
             "id": node_id,
             "type": NodeType.DATABASE,
@@ -199,7 +233,8 @@ class NetworkXBuilder:
     
     def add_locator_node(self, locator_path: str, metadata: NodeMetadata) -> str:
         """Add locator object node to graph."""
-        node_id = self._generate_node_id(NodeType.LOCATOR)
+        identity = "|".join([metadata.project_name, NodeType.LOCATOR.value, locator_path])
+        node_id = self._generate_stable_node_id(NodeType.LOCATOR, identity)
         node_data = {
             "id": node_id,
             "type": NodeType.LOCATOR,
@@ -217,9 +252,10 @@ class NetworkXBuilder:
     
     def add_scenario_node(self, scenario_tag: str, workflow_path: str, metadata: NodeMetadata) -> str:
         """Add scenario node to graph."""
-        node_id = self._generate_node_id(NodeType.SCENARIO)
         if not scenario_tag.startswith('@'):
             scenario_tag = f'@{scenario_tag}'
+        identity = "|".join([metadata.project_name, NodeType.SCENARIO.value, workflow_path, scenario_tag])
+        node_id = self._generate_stable_node_id(NodeType.SCENARIO, identity)
         
         node_data = {
             "id": node_id,
@@ -242,9 +278,10 @@ class NetworkXBuilder:
     
     def add_action_node(self, action_tag: str, page_path: str, metadata: NodeMetadata) -> str:
         """Add action node to graph."""
-        node_id = self._generate_node_id(NodeType.ACTION)
         if not action_tag.startswith('@'):
             action_tag = f'@{action_tag}'
+        identity = "|".join([metadata.project_name, NodeType.ACTION.value, page_path, action_tag])
+        node_id = self._generate_stable_node_id(NodeType.ACTION, identity)
         
         node_data = {
             "id": node_id,
@@ -267,7 +304,7 @@ class NetworkXBuilder:
 
     def add_dependency(self, from_node: str, to_node: str, dep_type: DependencyType, line_number: Optional[int] = None) -> str:
         """Add directed edge representing dependency."""
-        edge_id = f"edge_{from_node}_{to_node}_{dep_type.value}"
+        edge_id = f"edge_{from_node}_{to_node}_{dep_type.value}_{line_number or 0}"
         edge_data = {
             "id": edge_id,
             "from_node": from_node,

@@ -9,6 +9,7 @@ Refactored using Facade, Builder and Strategy patterns.
 import logging
 import os
 import glob
+import networkx as nx
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from karate_graph_analyzer.models import (
@@ -117,6 +118,8 @@ class GraphBuilder:
 
     def build_from_project(self, project: Project) -> DependencyGraph:
         """Build complete graph for a project using 2-pass strategy."""
+        self.nx_builder.graph = nx.DiGraph()
+        self.nx_builder._node_counter = {}
         parser = self._injected_parser or self._create_default_parser(project)
         
         feature_files = self._get_feature_files(project)
@@ -130,6 +133,32 @@ class GraphBuilder:
         dependency_node_map: Dict[Tuple, str] = {}
         self._build_nodes_and_edges(file_asts, parser, project, common_api_deps_map, dependency_node_map)
 
+        return self._create_final_graph(project.name)
+
+    def build_from_asts(self, project: Project, file_asts: List) -> DependencyGraph:
+        """Build a graph from pre-parsed ASTs using the same 2-pass strategy."""
+        self.nx_builder.graph = nx.DiGraph()
+        self.nx_builder._node_counter = {}
+        parser = self._injected_parser or self._create_default_parser(project)
+
+        common_api_deps_map: Dict[Tuple[str, str], List] = {}
+        for ast in file_asts:
+            norm_path = os.path.normpath(ast.file_path).replace("\\", "/")
+            for scenario in ast.scenarios:
+                if self.path_classifier.classify_scenario_by_path(
+                    scenario.file_path, project.parser_config
+                ) == NodeType.COMMON:
+                    deps = parser.extract_dependencies_with_background(scenario, ast.background_steps)
+                    api_deps = [d for d in deps if d.type == DependencyType.API]
+                    for dep in api_deps:
+                        dep.parameters["file_path"] = scenario.file_path
+
+                    keys = [(norm_path, tag) for tag in scenario.tags] or [(norm_path, "")]
+                    for key in keys:
+                        common_api_deps_map[key] = api_deps
+
+        dependency_node_map: Dict[Tuple, str] = {}
+        self._build_nodes_and_edges(file_asts, parser, project, common_api_deps_map, dependency_node_map)
         return self._create_final_graph(project.name)
 
     def _create_default_parser(self, project: Project):
@@ -230,6 +259,9 @@ class GraphBuilder:
                 
                 target_norm = dep.target.replace("\\", "/")
                 api_deps = next((common_map[k] for k in common_map if k[0].endswith(target_norm) and k[1] == tag), None)
+
+                common_dep_id = self.dependency_linker.get_or_create_dependency_node(dep, project.name, node_map)
+                self.nx_builder.add_dependency(node_id, common_dep_id, dep.type, line_number=dep.line_number)
                 
                 if api_deps:
                     for api_dep in api_deps:

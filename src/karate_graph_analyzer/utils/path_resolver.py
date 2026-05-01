@@ -3,6 +3,7 @@ Path resolution utility for Karate Graph Analyzer.
 """
 
 import os
+import re
 from karate_graph_analyzer.models import PathContext
 
 
@@ -14,6 +15,10 @@ class PathResolver:
         """Resolve path using context and variable patterns."""
         if not path:
             return path
+
+        match = re.search(r"read\s*\(\s*['\"]([^'\"]+)['\"]", path, re.IGNORECASE | re.DOTALL)
+        if match:
+            path = match.group(1)
 
         # Resolve variable expressions
         for var_name, var_value in context.parser_config.variable_patterns.items():

@@ -92,8 +92,19 @@ class SearchTools:
             
             # Search by path pattern
             elif path:
-                nodes = query_api.find_nodes_by_name_pattern(path, node_type=None)
-                api_nodes = [n for n in nodes if n.type.value == "API"]
+                api_nodes = []
+                for node in query_api.graph.nodes.values():
+                    if node.type.value != "API":
+                        continue
+                    data = node.metadata.additional_data
+                    candidates = [
+                        node.name,
+                        data.get("full_url", ""),
+                        data.get("path", ""),
+                        data.get("path_template", ""),
+                    ]
+                    if any(path.lower() in candidate.lower() for candidate in candidates):
+                        api_nodes.append(node)
                 results = [self._node_to_dict(n, query_api) for n in api_nodes]
             
             return {
@@ -293,9 +304,17 @@ class SearchTools:
             # Search by API usage
             elif uses_api:
                 # Find API node first
-                api_nodes = query_api.find_nodes_by_name_pattern(uses_api, None)
-                for api_node in api_nodes:
-                    if api_node.type.value == "API":
+                for api_node in query_api.graph.nodes.values():
+                    if api_node.type.value != "API":
+                        continue
+                    data = api_node.metadata.additional_data
+                    candidates = [
+                        api_node.name,
+                        data.get("full_url", ""),
+                        data.get("path", ""),
+                        data.get("path_template", ""),
+                    ]
+                    if any(uses_api.lower() in candidate.lower() for candidate in candidates):
                         test_cases = query_api.find_test_cases_using_api(api_node)
                         results.extend([self._node_to_dict(tc, query_api) for tc in test_cases])
             
@@ -498,7 +517,7 @@ class SearchTools:
         Returns:
             Dictionary representation of node
         """
-        usage_count = len(query_api.outgoing.get(node.id, []))
+        usage_count = query_api.get_usage_stats(node)["usage_count"]
         
         return {
             "id": node.id,

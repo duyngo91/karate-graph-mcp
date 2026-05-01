@@ -4,7 +4,7 @@ Dependency analyzer implementation.
 Analyzes dependency graphs for impact and reusability.
 """
 
-from typing import List
+from typing import Dict, List
 
 from karate_graph_analyzer.models import (
     AffectedTestCase,
@@ -75,6 +75,9 @@ class DependencyAnalyzer:
                 affected_test_cases=[],
                 total_count=0,
             )
+
+        if self.graph.nodes[component_id].type == NodeType.API_GROUP:
+            return self._impact_analysis_api_group(component_id)
         
         # Perform reverse graph traversal to find all nodes that can reach the component
         # ancestors() returns all nodes that have a path TO the given node
@@ -132,6 +135,48 @@ class DependencyAnalyzer:
             affected_test_cases.append(affected_test_case)
         
         # Return ImpactResult
+        return ImpactResult(
+            changed_component=component_id,
+            affected_test_cases=affected_test_cases,
+            total_count=len(affected_test_cases),
+        )
+
+    def _impact_analysis_api_group(self, component_id: str) -> ImpactResult:
+        """Aggregate impact for all API leaves below an API_GROUP node."""
+        import networkx as nx
+
+        try:
+            descendant_ids = nx.descendants(self._nx_graph, component_id)
+        except nx.NetworkXError:
+            descendant_ids = set()
+
+        affected_by_test: Dict[str, AffectedTestCase] = {}
+        for descendant_id in descendant_ids:
+            node = self.graph.nodes.get(descendant_id)
+            if not node or node.type != NodeType.API:
+                continue
+
+            leaf_result = self.impact_analysis(descendant_id)
+            for affected in leaf_result.affected_test_cases:
+                path = list(affected.dependency_path)
+                if component_id not in path:
+                    path.append(component_id)
+                candidate = AffectedTestCase(
+                    node_id=affected.node_id,
+                    name=affected.name,
+                    jira_tags=affected.jira_tags,
+                    dependency_path=path,
+                    depth=affected.depth,
+                    line_number=affected.line_number,
+                )
+                existing = affected_by_test.get(candidate.node_id)
+                if existing is None or candidate.depth < existing.depth:
+                    affected_by_test[candidate.node_id] = candidate
+
+        affected_test_cases = sorted(
+            affected_by_test.values(),
+            key=lambda t: (t.depth, t.name, t.node_id),
+        )
         return ImpactResult(
             changed_component=component_id,
             affected_test_cases=affected_test_cases,

@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 
 from karate_graph_analyzer.models import (
     Dependency,
@@ -60,34 +60,56 @@ class FeatureFileParser:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
+        except UnicodeDecodeError as e:
+            raise ParseError(file_path, None, f"Invalid file encoding: {str(e)}", "1004")
         except Exception as e:
             raise ParseError(file_path, None, f"Unable to read file: {str(e)}", "1003")
 
         tokens = list(self.lexer.tokenize(lines))
         
-        feature_name = "Unnamed Feature"
+        feature_name = None
         background_steps = []
         scenarios = []
         
         current_tags = []
         current_scenario = None
+        current_examples = None
+        last_step = None
         state = "INIT" # INIT, BACKGROUND, SCENARIO
 
         for token in tokens:
+            if (
+                token.type not in [GherkinTokenType.STEP, GherkinTokenType.TABLE_ROW]
+                and last_step is not None
+                and self._has_unclosed_parentheses(last_step.text)
+            ):
+                last_step.text = f"{last_step.text}\n{token.text}"
+                if not self._has_unclosed_parentheses(last_step.text):
+                    last_step = None
+                continue
+
             if token.type == GherkinTokenType.TAG:
                 # Extract tags from the @line
                 tags = re.findall(r"@[\w\-_]+", token.text)
                 current_tags.extend(tags)
+                current_examples = None
+                last_step = None
             
             elif token.type == GherkinTokenType.FEATURE:
                 feature_name = token.text
                 current_tags = [] # Reset tags after feature header
+                current_examples = None
+                last_step = None
             
             elif token.type == GherkinTokenType.BACKGROUND:
                 state = "BACKGROUND"
+                current_examples = None
+                last_step = None
             
             elif token.type in [GherkinTokenType.SCENARIO, GherkinTokenType.SCENARIO_OUTLINE]:
                 state = "SCENARIO"
+                current_examples = None
+                last_step = None
                 jira_tags = self._filter_jira_tags(current_tags)
                 current_scenario = Scenario(
                     name=token.text or f"Unnamed Scenario at {token.line_number}",
@@ -106,14 +128,69 @@ class FeatureFileParser:
                 step = Step(keyword=token.keyword, text=token.text, line_number=token.line_number)
                 if state == "BACKGROUND":
                     background_steps.append(step)
+                    last_step = step
                 elif state == "SCENARIO" and current_scenario:
                     current_scenario.steps.append(step)
+                    last_step = step
+                current_examples = None
             
             elif token.type == GherkinTokenType.EXAMPLES and current_scenario:
-                # Simple placeholder for examples block
-                current_scenario.examples = Examples(headers=[], rows=[], line_number=token.line_number)
+                current_examples = Examples(headers=[], rows=[], line_number=token.line_number)
+                current_scenario.examples = current_examples
+                last_step = None
 
+            elif token.type == GherkinTokenType.TABLE_ROW and current_examples:
+                cells = self._parse_table_row(token.text)
+                if not current_examples.headers:
+                    current_examples.headers = cells
+                else:
+                    current_examples.rows.append(cells)
+
+        self._log_parse_warnings(scenarios)
         return FeatureAST(file_path, feature_name, scenarios, background_steps)
+
+    def extract_scenarios(self, ast: FeatureAST) -> List[Scenario]:
+        """Return scenarios from a parsed AST for backward compatibility."""
+        return ast.scenarios
+
+    def extract_dependencies(self, scenario: Scenario, validate_paths: bool = False) -> List[Dependency]:
+        """Extract dependencies without background context for legacy callers."""
+        return self.extract_dependencies_with_background(scenario, [], validate_paths=validate_paths)
+
+    def _parse_table_row(self, row: str) -> List[str]:
+        """Parse a Gherkin table row while preserving empty cells."""
+        stripped = row.strip()
+        if stripped.startswith("|"):
+            stripped = stripped[1:]
+        if stripped.endswith("|"):
+            stripped = stripped[:-1]
+        return [cell.strip() for cell in stripped.split("|")]
+
+    def _has_unclosed_parentheses(self, text: str) -> bool:
+        """Detect simple multi-line Karate calls such as call read(...)."""
+        return text.count("(") > text.count(")")
+
+    def _log_parse_warnings(self, scenarios: List[Scenario]) -> None:
+        """Log non-fatal structure issues while preserving partial parse results."""
+        for scenario in scenarios:
+            if scenario.type == ScenarioType.SCENARIO_OUTLINE and scenario.examples is None:
+                logger.warning(
+                    "Scenario Outline '%s' has no Examples block", scenario.name
+                )
+            if scenario.examples is not None and not scenario.examples.headers:
+                logger.warning(
+                    "Examples block for scenario '%s' has no table data", scenario.name
+                )
+            if scenario.examples is not None and scenario.examples.headers:
+                expected_cols = len(scenario.examples.headers)
+                for row in scenario.examples.rows:
+                    if len(row) != expected_cols:
+                        logger.warning(
+                            "Examples row in scenario '%s' has %d columns, expected %d",
+                            scenario.name,
+                            len(row),
+                            expected_cols,
+                        )
 
     def extract_dependencies_with_background(
         self, scenario: Scenario, background_steps: List[Step], validate_paths: bool = False
@@ -127,6 +204,7 @@ class FeatureFileParser:
         from karate_graph_analyzer.parser.extractors.api_extractor import ApiExtractor
         api_extractor = self.orchestrator.get_extractor_by_type(ApiExtractor)
         http_method = api_extractor.extract_http_method(scenario.steps) if api_extractor else "GET"
+        http_method = http_method or "GET"
 
         # 1. Process Background steps (context setting)
         for step in background_steps:
@@ -197,6 +275,15 @@ class FeatureFileParser:
             # Key: type + target + line_number (as requested by user)
             key = (d.type, d.target, d.line_number)
             if key not in seen:
+                if validate_paths and d.type in {
+                    DependencyType.WORKFLOW,
+                    DependencyType.COMMON,
+                    DependencyType.PAGE,
+                    DependencyType.LOCATOR,
+                } and not d.target.strip():
+                    logger.warning(
+                        "Dependency target at line %s is empty or whitespace", d.line_number
+                    )
                 unique_deps.append(d)
                 seen.add(key)
         

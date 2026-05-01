@@ -88,7 +88,7 @@ class DependencyLinker:
         # Create node based on type
         norm_target = self.normalize_path(dep.target)
         
-        if dep.type == DependencyType.WORKFLOW:
+        if dep.type in [DependencyType.WORKFLOW, DependencyType.COMMON]:
             node_key = (node_type, norm_target)
             if node_key in node_map:
                 workflow_node_id = node_map[node_key]
@@ -246,14 +246,13 @@ class DependencyLinker:
         elif tag_str:
             descriptive_name = tag_str
         
-        # Display name for Graph MUST be the HTTP Method
-        display_name = http_method
+        # Use the normalized endpoint as the node name; method remains in metadata.
+        display_name = endpoint
         if path_template and "{" in path_template:
             import re
             params = re.findall(r'\{([^}]+)\}', path_template)
             if params:
-                # Show last param to keep it concise but distinct (e.g., GET {id})
-                display_name = f"{http_method} {{{params[-1]}}}"
+                display_name = f"{endpoint} {{{params[-1]}}}"
         
         # Add descriptive info to metadata
         if descriptive_name:

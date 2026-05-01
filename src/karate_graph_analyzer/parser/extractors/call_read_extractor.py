@@ -50,7 +50,7 @@ class CallReadExtractor(IDependencyExtractor):
             resolved_path, scenario_tag = self._resolve_variable_expression(expression)
             dep_type = self._classify_call_dependency(resolved_path)
             
-            dep_params = {}
+            dep_params = self._build_resolution_params(resolved_path)
             if params_str: dep_params["params"] = params_str
             if scenario_tag: dep_params["scenario_tag"] = scenario_tag
             
@@ -72,7 +72,7 @@ class CallReadExtractor(IDependencyExtractor):
                 resolved_path, scenario_tag = self._resolve_variable_expression(expression)
                 dep_type = self._classify_call_dependency(resolved_path)
                 
-                dep_params = {}
+                dep_params = self._build_resolution_params(resolved_path)
                 if scenario_tag: dep_params["scenario_tag"] = scenario_tag
                 
                 dependencies.append(
@@ -87,16 +87,24 @@ class CallReadExtractor(IDependencyExtractor):
         return dependencies
 
     def _classify_call_dependency(self, path: str) -> DependencyType:
-        path_lower = path.lower()
+        path_parts = [p.lower() for p in path.replace("\\", "/").split("/")[:-1]]
         
-        if any(d.lower() in path_lower for d in getattr(self.config, "locator_directories", ["locators"])):
+        if any(d.lower() in path_parts for d in getattr(self.config, "locator_directories", ["locators"])):
             return DependencyType.LOCATOR
-        if any(d.lower() in path_lower for d in self.config.page_object_directories):
+        if any(d.lower() in path_parts for d in self.config.page_object_directories):
             return DependencyType.PAGE
-        if any(d.lower() in path_lower for d in getattr(self.config, "common_directories", ["common", "services"])):
+        if any(d.lower() in path_parts for d in getattr(self.config, "common_directories", ["common", "services"])):
             return DependencyType.COMMON
             
         return DependencyType.WORKFLOW
+
+    def _build_resolution_params(self, path: str) -> dict:
+        """Mark dynamic call targets so callers can degrade gracefully."""
+        if "${" in path:
+            return {"unresolved": True, "reason": "contains_variables"}
+        if "#(" in path:
+            return {"unresolved": True, "reason": "contains_karate_expression"}
+        return {}
 
     def _resolve_variable_expression(self, expression: str) -> Tuple[str, Optional[str]]:
         expression = expression.strip()
