@@ -167,12 +167,17 @@ visualizer.render_impact_view(
 )
 ```
 
-### Command Line (via Script)
+## 🤖 AI Steering System
+This project includes a dedicated **AI Steering** system in the `.ai_steering/` directory. 
+If you are an AI agent working on this codebase:
+1. Read `.ai_steering/ARCH_MAP.md` to understand the architecture.
+2. Refer to `.ai_steering/COMPONENT_REGISTRY.md` for class responsibilities.
+3. Use `.ai_steering/DEBUG_GUIDE.md` for rapid troubleshooting.
 
+## 🚀 Usage
 ```bash
-# Analyze large project
-python test_large_project.py
-
+python scan_project.py <path_to_karate_project> <output_name>
+```
 # Output will be in output/ directory:
 # - ecommerce-platform_full.html (full graph)
 # - ecommerce-platform_impact.html (impact view)

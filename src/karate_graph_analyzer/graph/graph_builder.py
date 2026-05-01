@@ -117,178 +117,141 @@ class GraphBuilder:
 
     def build_from_project(self, project: Project) -> DependencyGraph:
         """Build complete graph for a project using 2-pass strategy."""
-        # Use injected parser or create default
-        if self._injected_parser is not None:
-            parser = self._injected_parser
-        else:
-            from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
-            parser = FeatureFileParser(config=project.parser_config)
+        parser = self._injected_parser or self._create_default_parser(project)
         
-        dependency_node_map: Dict[Tuple, str] = {}
+        feature_files = self._get_feature_files(project)
         common_api_deps_map: Dict[Tuple[str, str], List] = {}
-        file_asts = []
+        file_asts: List[FeatureAST] = []
         
+        # Pass 1: Index all COMMON scenarios (API definitions)
+        self._index_common_scenarios(feature_files, parser, project, common_api_deps_map, file_asts)
+
+        # Pass 2: Build nodes and edges
+        dependency_node_map: Dict[Tuple, str] = {}
+        self._build_nodes_and_edges(file_asts, parser, project, common_api_deps_map, dependency_node_map)
+
+        return self._create_final_graph(project.name)
+
+    def _create_default_parser(self, project: Project):
+        from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
+        return FeatureFileParser(config=project.parser_config)
+
+    def _get_feature_files(self, project: Project) -> List[str]:
         feature_files = []
         for pattern in project.feature_file_patterns:
             full_pattern = os.path.join(project.root_path, pattern)
-            matched_files = glob.glob(full_pattern, recursive=True)
-            feature_files.extend(matched_files)
-        
-        feature_files = sorted(set(feature_files))
+            feature_files.extend(glob.glob(full_pattern, recursive=True))
+        return sorted(set(feature_files))
 
-        # Pass 1: Index all COMMON scenarios (API definitions)
-        for file_path in feature_files:
+    def _index_common_scenarios(self, files, parser, project, common_map, ast_list):
+        for path in files:
             try:
-                ast = parser.parse_file(file_path)
-                file_asts.append(ast)
-                norm_path = os.path.normpath(file_path).replace("\\", "/")
+                ast = parser.parse_file(path)
+                ast_list.append(ast)
+                norm_path = os.path.normpath(path).replace("\\", "/")
                 
                 for scenario in ast.scenarios:
-                    scenario_node_type = self.path_classifier.classify_scenario_by_path(
-                        scenario.file_path, project.parser_config
-                    )
-                    if scenario_node_type == NodeType.COMMON:
-                        dependencies = parser.extract_dependencies_with_background(
-                            scenario, ast.background_steps, validate_paths=False
-                        )
-                        api_deps = [d for d in dependencies if d.type == DependencyType.API]
-                        for d in api_deps:
-                            if "file_path" not in d.parameters:
-                                d.parameters["file_path"] = scenario.file_path
-                        for tag in scenario.tags:
-                            common_api_deps_map[(norm_path, tag)] = api_deps
-                        if not scenario.tags:
-                            common_api_deps_map[(norm_path, "")] = api_deps
+                    if self.path_classifier.classify_scenario_by_path(scenario.file_path, project.parser_config) == NodeType.COMMON:
+                        deps = parser.extract_dependencies_with_background(scenario, ast.background_steps)
+                        api_deps = [d for d in deps if d.type == DependencyType.API]
+                        for d in api_deps: d.parameters["file_path"] = scenario.file_path
+                        
+                        keys = [(norm_path, tag) for tag in scenario.tags] or [(norm_path, "")]
+                        for k in keys: common_map[k] = api_deps
             except Exception as e:
-                logger.error(f"Error in Pass 1 for {file_path}: {e}")
+                logger.error(f"Error indexing {path}: {e}")
 
-        # Pass 2: Build nodes and edges
-        for ast in file_asts:
+    def _build_nodes_and_edges(self, ast_list, parser, project, common_map, node_map):
+        for ast in ast_list:
             try:
                 for scenario in ast.scenarios:
-                    scenario_node_type = self.path_classifier.classify_scenario_by_path(
-                        scenario.file_path, project.parser_config
-                    )
+                    node_type = self.path_classifier.classify_scenario_by_path(scenario.file_path, project.parser_config)
+                    if node_type == NodeType.COMMON: continue
                     
-                    if scenario_node_type == NodeType.COMMON:
-                        continue
-                    
-                    display_name = self.path_classifier.build_scenario_display_name(scenario, scenario_node_type)
-                    scenario_metadata = NodeMetadata(
-                        file_path=scenario.file_path,
-                        line_number=scenario.line_number,
-                        jira_tags=scenario.jira_tags,
-                        project_name=project.name,
+                    metadata = NodeMetadata(
+                        file_path=scenario.file_path, line_number=scenario.line_number,
+                        jira_tags=scenario.jira_tags, project_name=project.name,
                         additional_data={"scenario_type": scenario.type.value, "tags": scenario.tags},
                     )
 
-                    rel_path = self.dependency_linker.normalize_path(scenario.file_path)
-
-                    if scenario_node_type == NodeType.TEST_CASE:
-                        node_id = self.nx_builder.add_test_case(scenario, scenario_metadata)
-                    elif scenario_node_type == NodeType.WORKFLOW:
-                        node_id = self.nx_builder.add_workflow_node(display_name, scenario_metadata)
-                    elif scenario_node_type == NodeType.API:
-                        # For API definition files, we want to register the descriptive name
-                        # so that when test cases call them, they use this nice name.
-                        
-                        # Find the API dependency in this scenario to get the endpoint
-                        dependencies = parser.extract_dependencies_with_background(
-                            scenario, ast.background_steps, validate_paths=False
-                        )
-                        
-                        for dep in dependencies:
-                            if dep.type == DependencyType.API:
-                                # Enrich dependency with current scenario info
-                                dep.parameters["scenario_name"] = scenario.name
-                                dep.parameters["scenario_tags"] = scenario.tags
-                                
-                                # This will create the hierarchy with the descriptive name
-                                self.dependency_linker.get_or_create_dependency_node(
-                                    dep, project.name, dependency_node_map
-                                )
-                                # Note: We don't need to link it here, 
-                                # it's just to ensure the node exists in node_map with the right name.
-
-                    elif scenario_node_type == NodeType.PAGE:
-                        file_key = (NodeType.PAGE, rel_path)
-                        if file_key in dependency_node_map:
-                            file_node_id = dependency_node_map[file_key]
-                        else:
-                            file_node_id = self.nx_builder.add_page_node(rel_path, scenario_metadata)
-                            dependency_node_map[file_key] = file_node_id
-                        
-                        action_tag = display_name
-                        key_tag = action_tag if action_tag.startswith('@') else f"@{action_tag}"
-                        action_key = (NodeType.ACTION, f"{rel_path}#{key_tag}")
-                        if action_key in dependency_node_map:
-                            node_id = dependency_node_map[action_key]
-                        else:
-                            node_id = self.nx_builder.add_action_node(action_tag, rel_path, scenario_metadata)
-                            dependency_node_map[action_key] = node_id
-                        
-                        if not self.nx_builder.graph.has_edge(file_node_id, node_id):
-                            self.nx_builder.add_dependency(file_node_id, node_id, DependencyType.PAGE)
+                    # Handle different node types
+                    if node_type == NodeType.TEST_CASE:
+                        node_id = self.nx_builder.add_test_case(scenario, metadata)
+                    elif node_type == NodeType.WORKFLOW:
+                        display_name = self.path_classifier.build_scenario_display_name(scenario, node_type)
+                        node_id = self.nx_builder.add_workflow_node(display_name, metadata)
+                    elif node_type == NodeType.API:
+                        # Register descriptive name for API files
+                        deps = parser.extract_dependencies_with_background(scenario, ast.background_steps)
+                        for d in [d for d in deps if d.type == DependencyType.API]:
+                            d.parameters.update({"scenario_name": scenario.name, "scenario_tags": scenario.tags})
+                            self.dependency_linker.get_or_create_dependency_node(d, project.name, node_map)
+                        continue
+                    elif node_type == NodeType.PAGE:
+                        node_id = self._handle_page_and_action(scenario, metadata, node_map)
                     else:
-                        node_id = self.nx_builder.add_test_case(scenario, scenario_metadata)
+                        node_id = self.nx_builder.add_test_case(scenario, metadata)
                     
-                    dependencies = parser.extract_dependencies_with_background(
-                        scenario, ast.background_steps, validate_paths=False
-                    )
-                    
-                    for dep in dependencies:
-                        if dep.type == DependencyType.COMMON:
-                            tag = dep.parameters.get("scenario_tag", "")
-                            if tag and not tag.startswith("@"):
-                                tag = "@" + tag
-                            
-                            target_norm = dep.target.replace("\\", "/")
-                            api_deps = None
-                            for map_path, map_tag in common_api_deps_map.keys():
-                                if map_path.endswith(target_norm) and map_tag == tag:
-                                    api_deps = common_api_deps_map.get((map_path, map_tag))
-                                    break
-                            
-                            if api_deps:
-                                for api_dep in api_deps:
-                                    dep_node_id = self.dependency_linker.get_or_create_dependency_node(
-                                        api_dep, project.name, dependency_node_map
-                                    )
-                                    self.nx_builder.add_dependency(node_id, dep_node_id, api_dep.type)
-                        else:
-                            dep_node_id = self.dependency_linker.get_or_create_dependency_node(
-                                dep, project.name, dependency_node_map
-                            )
-                            self.nx_builder.add_dependency(node_id, dep_node_id, dep.type)
+                    # Process and link dependencies
+                    self._link_scenario_dependencies(scenario, ast, parser, project, node_id, common_map, node_map)
             except Exception as e:
-                logger.error(f"Error in Pass 2: {e}", exc_info=True)
+                logger.error(f"Error building graph for {ast.file_path}: {e}", exc_info=True)
 
+    def _handle_page_and_action(self, scenario, metadata, node_map) -> str:
+        rel_path = self.dependency_linker.normalize_path(scenario.file_path)
+        file_key = (NodeType.PAGE, rel_path)
+        
+        if file_key in node_map:
+            file_node_id = node_map[file_key]
+        else:
+            file_node_id = self.nx_builder.add_page_node(rel_path, metadata)
+            node_map[file_key] = file_node_id
+        
+        action_tag = self.path_classifier.build_scenario_display_name(scenario, NodeType.PAGE)
+        key_tag = action_tag if action_tag.startswith('@') else f"@{action_tag}"
+        action_key = (NodeType.ACTION, f"{rel_path}#{key_tag}")
+        
+        if action_key in node_map:
+            node_id = node_map[action_key]
+        else:
+            node_id = self.nx_builder.add_action_node(action_tag, rel_path, metadata)
+            node_map[action_key] = node_id
+        
+        if not self.nx_builder.graph.has_edge(file_node_id, node_id):
+            self.nx_builder.add_dependency(file_node_id, node_id, DependencyType.PAGE)
+        return node_id
+
+    def _link_scenario_dependencies(self, scenario, ast, parser, project, node_id, common_map, node_map):
+        deps = parser.extract_dependencies_with_background(scenario, ast.background_steps)
+        for dep in deps:
+            if dep.type == DependencyType.COMMON:
+                tag = dep.parameters.get("scenario_tag", "")
+                if tag and not tag.startswith("@"): tag = "@" + tag
+                
+                target_norm = dep.target.replace("\\", "/")
+                api_deps = next((common_map[k] for k in common_map if k[0].endswith(target_norm) and k[1] == tag), None)
+                
+                if api_deps:
+                    for api_dep in api_deps:
+                        dep_id = self.dependency_linker.get_or_create_dependency_node(api_dep, project.name, node_map)
+                        self.nx_builder.add_dependency(node_id, dep_id, api_dep.type)
+            else:
+                dep_id = self.dependency_linker.get_or_create_dependency_node(dep, project.name, node_map)
+                self.nx_builder.add_dependency(node_id, dep_id, dep.type)
+
+    def _create_final_graph(self, project_name: str) -> DependencyGraph:
         cycles = self.nx_builder.detect_cycles()
-        
-        nodes_dict = {}
-        for node_id in self.nx_builder.graph.nodes():
-            nd = self.nx_builder.graph.nodes[node_id]
-            nodes_dict[node_id] = Node(
-                id=nd["id"], type=nd["type"], name=nd["name"],
-                metadata=NodeMetadata(
-                    file_path=nd["metadata"].get("file_path"),
-                    line_number=nd["metadata"].get("line_number"),
-                    jira_tags=nd["metadata"].get("jira_tags", []),
-                    project_name=nd["metadata"].get("project_name", project.name),
-                    additional_data=nd["metadata"].get("additional_data", {}),
-                ),
-            )
-        
-        edges_dict = {}
-        for u, v in self.nx_builder.graph.edges():
-            ed = self.nx_builder.graph.edges[u, v]
-            edges_dict[ed["id"]] = Edge(
-                id=ed["id"], from_node=ed["from_node"], to_node=ed["to_node"], type=ed["type"]
-            )
-        
-        return DependencyGraph(
-            project_name=project.name, nodes=nodes_dict, edges=edges_dict, cycles=cycles
-        )
+        nodes_dict = {
+            nid: Node(id=nd["id"], type=nd["type"], name=nd["name"],
+                     metadata=NodeMetadata(**{k: v for k, v in nd["metadata"].items() if k != "project_name"}, 
+                                        project_name=nd["metadata"].get("project_name", project_name)))
+            for nid, nd in self.nx_builder.graph.nodes(data=True)
+        }
+        edges_dict = {
+            ed["id"]: Edge(id=ed["id"], from_node=ed["from_node"], to_node=ed["to_node"], type=ed["type"])
+            for _, _, ed in self.nx_builder.graph.edges(data=True)
+        }
+        return DependencyGraph(project_name=project_name, nodes=nodes_dict, edges=edges_dict, cycles=cycles)
 
     def update_from_project(self, project: Project, existing_graph: DependencyGraph, cache_manager: "CacheManager") -> DependencyGraph:
         """Proxy to IncrementalUpdater."""

@@ -133,7 +133,7 @@ class GraphVisualizer:
                     "dragView": true,
                     "zoomView": true,
                     "hover": true,
-                    "navigationButtons": true,
+                    "navigationButtons": false,
                     "keyboard": {
                         "enabled": true,
                         "bindToWindow": false
@@ -238,10 +238,22 @@ class GraphVisualizer:
         with open(output_file, 'r', encoding='utf-8') as f:
             html_content = f.read()
         
-        # Insert legend before closing body tag
-        legend_html = ""
-        if hasattr(net, 'legend_html'):
-            legend_html = net.legend_html
+        # Prepare node data for JavaScript
+        import json
+        js_node_data = {}
+        for node_id, node in self.graph.nodes.items():
+            js_node_data[node_id] = {
+                "name": node.name,
+                "type": node.type.value,
+                "file_path": node.metadata.file_path,
+                "line_number": node.metadata.line_number,
+                "jira_tags": node.metadata.jira_tags,
+                "additional_data": node.metadata.additional_data
+            }
+        
+        # Insert legend and populate data
+        legend_html = getattr(net, 'legend_html', "")
+        legend_html = legend_html.replace('DATA_PLACEHOLDER', json.dumps(js_node_data))
         
         html_content = html_content.replace('</body>', f'{legend_html}</body>')
         
@@ -252,83 +264,195 @@ class GraphVisualizer:
         return str(output_file.absolute())
 
     def _add_legend(self, net) -> None:
-        """Add legend to visualization.
-
-        Args:
-            net: Pyvis network object
-        """
-        # Add legend as HTML overlay
+        """Add collapsible legend and node details sidebar to visualization."""
         legend_html = """
-        <div id="legend" style="
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background: white;
-            border: 2px solid #333;
-            border-radius: 8px;
-            padding: 15px;
-            font-family: Arial, sans-serif;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            z-index: 1000;
-            max-width: 300px;
-        ">
-            <h3 style="margin: 0 0 10px 0; font-size: 16px; border-bottom: 2px solid #333; padding-bottom: 5px;">
-                📊 Legend
-            </h3>
-            <div style="margin-bottom: 8px;">
-                <span style="display: inline-block; width: 20px; height: 20px; background: #4CAF50; border: 1px solid #333; margin-right: 8px; vertical-align: middle;"></span>
-                <strong>Test Case</strong> - Scenario hoặc test
-            </div>
-            <div style="margin-bottom: 8px;">
-                <span style="display: inline-block; width: 20px; height: 20px; background: #2196F3; border: 1px solid #333; border-radius: 50%; margin-right: 8px; vertical-align: middle;"></span>
-                <strong>Workflow</strong> - Reusable workflow
-            </div>
-            <div style="margin-bottom: 8px;">
-                <span style="display: inline-block; width: 20px; height: 20px; background: #9C27B0; border: 1px solid #333; transform: rotate(45deg); margin-right: 8px; vertical-align: middle;"></span>
-                <strong>Scenario</strong> - Workflow scenario (@tag)
-            </div>
-            <div style="margin-bottom: 8px;">
-                <span style="display: inline-block; width: 20px; height: 20px; background: #FF9800; border: 1px solid #333; transform: rotate(45deg); margin-right: 8px; vertical-align: middle;"></span>
-                <strong>API Method</strong> - HTTP method (GET, POST, etc.)
-            </div>
-            <div style="margin-bottom: 8px;">
-                <span style="display: inline-block; width: 20px; height: 20px; background: #FF5722; border: 1px solid #333; margin-right: 8px; vertical-align: middle;">⬡</span>
-                <strong>Domain</strong> - API domain (root)
-            </div>
-            <div style="margin-bottom: 8px;">
-                <span style="display: inline-block; width: 20px; height: 20px; background: #FFB74D; border: 1px solid #333; border-radius: 50%; margin-right: 8px; vertical-align: middle;"></span>
-                <strong>API Path</strong> - API path segment
-            </div>
-            <div style="margin-bottom: 8px;">
-                <span style="display: inline-block; width: 0; height: 0; border-left: 10px solid transparent; border-right: 10px solid transparent; border-bottom: 20px solid #9C27B0; margin-right: 8px; vertical-align: middle;"></span>
-                <strong>Page</strong> - Page object
-            </div>
-            <div style="margin-bottom: 8px;">
-                <span style="display: inline-block; width: 20px; height: 20px; background: #E91E63; border: 1px solid #333; transform: rotate(45deg); margin-right: 8px; vertical-align: middle;"></span>
-                <strong>Action</strong> - Page action (@tag)
-            </div>
-            <div style="margin-bottom: 8px;">
-                <span style="display: inline-block; width: 20px; height: 20px; background: #F44336; border: 1px solid #333; margin-right: 8px; vertical-align: middle;"></span>
-                <strong>Database</strong> - Database operation
-            </div>
-            <div style="margin-bottom: 8px;">
-                <span style="display: inline-block; width: 20px; height: 20px; background: #00BCD4; border: 1px solid #333; margin-right: 8px; vertical-align: middle;">⭐</span>
-                <strong>Feature Group</strong> - Feature category
-            </div>
-            <hr style="margin: 10px 0; border: none; border-top: 1px solid #ccc;">
-            <div style="font-size: 12px; color: #666;">
-                <strong>💡 Cách sử dụng:</strong><br>
-                🖱️ <strong>Click vào node</strong> để focus (chỉ hiện các cấp con)<br>
-                🖱️ <strong>Click vào vùng trống</strong> để clear focus<br>
-                 Hover để xem chi tiết<br>
-                📜 Scroll để zoom in/out<br>
-                🌳 Hierarchy: Domain → Path → Method → Test Case → Feature
+        <style>
+            #legend-container {
+                position: absolute;
+                top: 20px;
+                right: 20px;
+                z-index: 1000;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            }
+            /* Force hide Vis.js navigation buttons */
+            .vis-navigation {
+                display: none !important;
+            }
+
+            #legend {
+                background: rgba(255, 255, 255, 0.95);
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 15px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                max-width: 300px;
+                transition: all 0.3s ease;
+            }
+            #legend.minimized {
+                display: none;
+            }
+            #legend-toggle {
+                position: absolute;
+                top: 0;
+                right: 0;
+                background: #333;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 5px 10px;
+                cursor: pointer;
+                font-size: 12px;
+                z-index: 1001;
+            }
+            .legend-item {
+                margin-bottom: 8px;
+                display: flex;
+                align-items: center;
+                font-size: 13px;
+            }
+            .legend-color {
+                width: 16px;
+                height: 16px;
+                margin-right: 10px;
+                border: 1px solid #666;
+                flex-shrink: 0;
+            }
+            #node-details {
+                position: absolute;
+                bottom: 20px;
+                left: 20px;
+                background: rgba(255, 255, 255, 0.95);
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 20px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                width: 350px;
+                max-height: 400px;
+                overflow-y: auto;
+                display: none;
+                z-index: 1000;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            }
+            .detail-header {
+                font-weight: bold;
+                font-size: 18px;
+                border-bottom: 2px solid #4CAF50;
+                margin-bottom: 15px;
+                padding-bottom: 5px;
+                color: #333;
+            }
+            .detail-row {
+                margin-bottom: 10px;
+                font-size: 14px;
+                display: flex;
+                align-items: flex-start;
+            }
+            .detail-label {
+                font-weight: bold;
+                color: #666;
+                width: 140px;
+                display: inline-block;
+                margin-right: 10px;
+                flex-shrink: 0;
+            }
+            .detail-value {
+                color: #111;
+                word-break: break-word;
+                flex: 1;
+            }
+            .jira-tag {
+                display: inline-block;
+                background: #E3F2FD;
+                color: #1976D2;
+                padding: 2px 6px;
+                border-radius: 4px;
+                margin-right: 5px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+        </style>
+
+        <div id="legend-container">
+            <button id="legend-toggle" onclick="toggleLegend()">Legend ☰</button>
+            <div id="legend">
+                <h3 style="margin: 0 0 12px 0; font-size: 16px;">📊 Graph Legend</h3>
+                <div class="legend-item"><span class="legend-color" style="background: #4CAF50;"></span><strong>Test Case</strong></div>
+                <div class="legend-item"><span class="legend-color" style="background: #2196F3; border-radius: 50%;"></span><strong>Workflow</strong></div>
+                <div class="legend-item"><span class="legend-color" style="background: #9C27B0; transform: rotate(45deg);"></span><strong>Scenario (@tag)</strong></div>
+                <div class="legend-item"><span class="legend-color" style="background: #FF9800; transform: rotate(45deg);"></span><strong>API Method</strong></div>
+                <div class="legend-item"><span class="legend-color" style="background: #FF5722; clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);"></span><strong>Domain (Root)</strong></div>
+                <div class="legend-item"><span class="legend-color" style="background: #FFB74D; border-radius: 50%;"></span><strong>API Path</strong></div>
+                <div class="legend-item"><span class="legend-color" style="background: #9C27B0; clip-path: polygon(50% 0%, 0% 100%, 100% 100%);"></span><strong>Page Object</strong></div>
+                <div class="legend-item"><span class="legend-color" style="background: #E91E63; transform: rotate(45deg);"></span><strong>Action (@tag)</strong></div>
+                <div class="legend-item"><span class="legend-color" style="background: #F44336;"></span><strong>Database</strong></div>
+                <hr>
+                <div style="font-size: 11px; color: #777;">Click a node to see details</div>
             </div>
         </div>
+
+        <div id="node-details">
+            <div id="details-content">
+                <div class="detail-header">Node Details</div>
+                <p>Select a node to see full information.</p>
+            </div>
+        </div>
+
+        <script>
+            function toggleLegend() {
+                var legend = document.getElementById('legend');
+                if (legend.style.display === 'none') {
+                    legend.style.display = 'block';
+                } else {
+                    legend.style.display = 'none';
+                }
+            }
+
+            // This data will be populated by Python
+            var nodeData = DATA_PLACEHOLDER;
+
+            network.on("click", function(params) {
+                var detailsDiv = document.getElementById('node-details');
+                if (params.nodes.length > 0) {
+                    var nodeId = params.nodes[0];
+                    var data = nodeData[nodeId];
+                    if (data) {
+                        var html = '<div class="detail-header">' + data.name + '</div>';
+                        html += '<div class="detail-row"><span class="detail-label">Type:</span><span class="detail-value">' + data.type + '</span></div>';
+                        
+                        if (data.file_path) {
+                            html += '<div class="detail-row"><span class="detail-label">File:</span><span class="detail-value">' + data.file_path + '</span></div>';
+                        }
+                        if (data.line_number) {
+                            html += '<div class="detail-row"><span class="detail-label">Line:</span><span class="detail-value">' + data.line_number + '</span></div>';
+                        }
+                        
+                        if (data.jira_tags && data.jira_tags.length > 0) {
+                            html += '<div class="detail-row"><span class="detail-label">Jira:</span>';
+                            data.jira_tags.forEach(function(tag) {
+                                html += '<span class="jira-tag">' + tag + '</span>';
+                            });
+                            html += '</div>';
+                        }
+
+                        if (data.additional_data) {
+                            html += '<hr><div style="font-weight:bold; margin-bottom:5px;">Metadata:</div>';
+                            for (var key in data.additional_data) {
+                                var val = data.additional_data[key];
+                                if (val && typeof val !== 'object') {
+                                    html += '<div class="detail-row" style="font-size:12px;"><span class="detail-label">' + key + ':</span><span class="detail-value">' + val + '</span></div>';
+                                }
+                            }
+                        }
+
+                        document.getElementById('details-content').innerHTML = html;
+                        detailsDiv.style.display = 'block';
+                    }
+                } else {
+                    detailsDiv.style.display = 'none';
+                }
+            });
+        </script>
         """
-        
-        # This will be injected into the HTML after generation
-        # Store it as an attribute for post-processing
         net.legend_html = legend_html
 
     def get_statistics(self) -> Dict[str, any]:

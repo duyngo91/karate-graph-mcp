@@ -39,12 +39,15 @@ class DependencyLinker:
                 norm = norm[len(prefix):].lstrip("/")
         
         # 3. Handle absolute paths by looking for common root markers
-        # If the path is very long (absolute), try to find the standard project structure
         markers = ["src/test/java/", "src/test/resources/", "features/"]
         for marker in markers:
             if marker in norm:
                 norm = norm.split(marker)[-1]
                 break
+
+        # 4. Ensure .feature extension if it's likely a feature file path
+        if "." not in norm.split("/")[-1] and not norm.endswith("/"):
+            norm += ".feature"
         
         return norm
 
