@@ -409,46 +409,125 @@ class GraphVisualizer:
 
             // This data will be populated by Python
             var nodeData = DATA_PLACEHOLDER;
+            var isFocused = false;
 
+            // Handle double click to focus on a node and its full recursive dependency chain
+            network.on("doubleClick", function(params) {
+                if (params.nodes.length > 0) {
+                    var targetId = params.nodes[0];
+                    var nodesToKeep = new Set();
+                    nodesToKeep.add(targetId);
+
+                    // Recursive function to find all descendants
+                    function findDescendants(nodeId) {
+                        var children = network.getConnectedNodes(nodeId, 'to');
+                        children.forEach(function(childId) {
+                            if (!nodesToKeep.has(childId)) {
+                                nodesToKeep.add(childId);
+                                findDescendants(childId);
+                            }
+                        });
+                    }
+
+                    // Recursive function to find all ancestors
+                    function findAncestors(nodeId) {
+                        var parents = network.getConnectedNodes(nodeId, 'from');
+                        parents.forEach(function(parentId) {
+                            if (!nodesToKeep.has(parentId)) {
+                                nodesToKeep.add(parentId);
+                                findAncestors(parentId);
+                            }
+                        });
+                    }
+
+                    // Find everything
+                    findDescendants(targetId);
+                    findAncestors(targetId);
+
+                    // Add immediate neighbors of every node in the chain to show context
+                    // (e.g., other nodes pointing to the same children)
+                    var contextNodes = new Set();
+                    nodesToKeep.forEach(function(nodeId) {
+                        var neighbors = network.getConnectedNodes(nodeId);
+                        neighbors.forEach(function(neighborId) {
+                            contextNodes.add(neighborId);
+                        });
+                    });
+                    
+                    // Merge context into nodesToKeep
+                    contextNodes.forEach(id => nodesToKeep.add(id));
+
+                    // Update all nodes visibility
+                    var allNodeIds = nodes.getIds();
+                    var updates = allNodeIds.map(function(id) {
+                        return { id: id, hidden: !nodesToKeep.has(id) };
+                    });
+                    nodes.update(updates);
+                    isFocused = true;
+                    
+                    // Fit view to focused nodes
+                    setTimeout(function() {
+                        network.fit({
+                            nodes: Array.from(nodesToKeep),
+                            animation: true
+                        });
+                    }, 100);
+                }
+            });
+
+            // Handle single click to show details or reset focus
             network.on("click", function(params) {
                 var detailsDiv = document.getElementById('node-details');
-                if (params.nodes.length > 0) {
-                    var nodeId = params.nodes[0];
-                    var data = nodeData[nodeId];
-                    if (data) {
-                        var html = '<div class="detail-header">' + data.name + '</div>';
-                        html += '<div class="detail-row"><span class="detail-label">Type:</span><span class="detail-value">' + data.type + '</span></div>';
-                        
-                        if (data.file_path) {
-                            html += '<div class="detail-row"><span class="detail-label">File:</span><span class="detail-value">' + data.file_path + '</span></div>';
-                        }
-                        if (data.line_number) {
-                            html += '<div class="detail-row"><span class="detail-label">Line:</span><span class="detail-value">' + data.line_number + '</span></div>';
-                        }
-                        
-                        if (data.jira_tags && data.jira_tags.length > 0) {
-                            html += '<div class="detail-row"><span class="detail-label">Jira:</span>';
-                            data.jira_tags.forEach(function(tag) {
-                                html += '<span class="jira-tag">' + tag + '</span>';
-                            });
-                            html += '</div>';
-                        }
+                
+                // If clicked on background, reset focus
+                if (params.nodes.length === 0) {
+                    if (isFocused) {
+                        var allNodeIds = nodes.getIds();
+                        var updates = allNodeIds.map(function(id) {
+                            return { id: id, hidden: false };
+                        });
+                        nodes.update(updates);
+                        isFocused = false;
+                        network.fit({ animation: true });
+                    }
+                    detailsDiv.style.display = 'none';
+                    return;
+                }
 
-                        if (data.additional_data) {
-                            html += '<hr><div style="font-weight:bold; margin-bottom:5px;">Metadata:</div>';
-                            for (var key in data.additional_data) {
-                                var val = data.additional_data[key];
-                                if (val && typeof val !== 'object') {
-                                    html += '<div class="detail-row" style="font-size:12px;"><span class="detail-label">' + key + ':</span><span class="detail-value">' + val + '</span></div>';
-                                }
+                // Show details for single clicked node
+                var nodeId = params.nodes[0];
+                var data = nodeData[nodeId];
+                if (data) {
+                    var html = '<div class="detail-header">' + data.name + '</div>';
+                    html += '<div class="detail-row"><span class="detail-label">Type:</span><span class="detail-value">' + data.type + '</span></div>';
+                    
+                    if (data.file_path) {
+                        html += '<div class="detail-row"><span class="detail-label">File:</span><span class="detail-value">' + data.file_path + '</span></div>';
+                    }
+                    if (data.line_number) {
+                        html += '<div class="detail-row"><span class="detail-label">Line:</span><span class="detail-value">' + data.line_number + '</span></div>';
+                    }
+                    
+                    if (data.jira_tags && data.jira_tags.length > 0) {
+                        html += '<div class="detail-row"><span class="detail-label">Jira:</span>';
+                        data.jira_tags.forEach(function(tag) {
+                            html += '<span class="jira-tag">' + tag + '</span>';
+                        });
+                        html += '</div>';
+                    }
+
+                    if (data.additional_data) {
+                        html += '<hr><div style="font-weight:bold; margin-bottom:5px;">Metadata:</div>';
+                        for (var key in data.additional_data) {
+                            var val = data.additional_data[key];
+                            if (val && typeof val !== 'object') {
+                                html += '<div class="detail-row" style="font-size:12px;"><span class="detail-label">' + key + ':</span><span class="detail-value">' + val + '</span></div>';
                             }
                         }
-
-                        document.getElementById('details-content').innerHTML = html;
-                        detailsDiv.style.display = 'block';
                     }
-                } else {
-                    detailsDiv.style.display = 'none';
+
+                    document.getElementById('details-content').innerHTML = html;
+                    detailsDiv.style.display = 'block';
                 }
             });
         </script>
