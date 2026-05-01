@@ -25,6 +25,7 @@ from karate_graph_analyzer.models import (
     ReusableComponent,
 )
 from karate_graph_analyzer.storage.project_registry import ProjectRegistry
+from karate_graph_analyzer.utils.source_snippet import get_source_snippet
 
 logger = logging.getLogger(__name__)
 
@@ -472,6 +473,10 @@ class KarateGraphAnalyzerTool:
             # Convert to dictionary
             affected_test_cases = []
             for test_case in result.affected_test_cases:
+                # Get full node metadata to find the file path
+                node = analyzer.graph.nodes.get(test_case.node_id)
+                file_path = node.metadata.file_path if node else None
+                
                 affected_test_cases.append(
                     {
                         "node_id": test_case.node_id,
@@ -479,6 +484,8 @@ class KarateGraphAnalyzerTool:
                         "jira_tags": test_case.jira_tags,
                         "dependency_path": test_case.dependency_path,
                         "depth": test_case.depth,
+                        "line_number": test_case.line_number,
+                        "source_snippet": get_source_snippet(file_path, test_case.line_number)
                     }
                 )
 
@@ -528,6 +535,7 @@ class KarateGraphAnalyzerTool:
                                 "line_number": node.metadata.line_number,
                                 "jira_tags": node.metadata.jira_tags,
                                 "project_name": node.metadata.project_name,
+                                "source_snippet": get_source_snippet(node.metadata.file_path, node.metadata.line_number),
                                 "additional_data": node.metadata.additional_data,
                             },
                         },

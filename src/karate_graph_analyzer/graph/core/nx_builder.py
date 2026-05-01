@@ -265,7 +265,7 @@ class NetworkXBuilder:
         self.graph.add_node(node_id, **node_data)
         return node_id
 
-    def add_dependency(self, from_node: str, to_node: str, dep_type: DependencyType) -> str:
+    def add_dependency(self, from_node: str, to_node: str, dep_type: DependencyType, line_number: Optional[int] = None) -> str:
         """Add directed edge representing dependency."""
         edge_id = f"edge_{from_node}_{to_node}_{dep_type.value}"
         edge_data = {
@@ -273,6 +273,7 @@ class NetworkXBuilder:
             "from_node": from_node,
             "to_node": to_node,
             "type": dep_type,
+            "line_number": line_number,
         }
         self.graph.add_edge(from_node, to_node, **edge_data)
         return edge_id

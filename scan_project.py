@@ -171,6 +171,7 @@ def scan_project(project_root: str, output_name: str = None):
                 "from_node": edge.from_node,
                 "to_node": edge.to_node,
                 "type": edge.type.value,
+                "line_number": edge.line_number,
             })
         
         export_data = {

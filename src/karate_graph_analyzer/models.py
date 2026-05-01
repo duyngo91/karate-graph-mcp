@@ -114,6 +114,7 @@ class Edge:
     from_node: str
     to_node: str
     type: DependencyType
+    line_number: Optional[int] = None
 
 
 @dataclass
@@ -149,6 +150,7 @@ class AffectedTestCase:
     jira_tags: List[str]
     dependency_path: List[str]  # Path from test case to changed component
     depth: int
+    line_number: Optional[int] = None  # Specific line causing the dependency
 
 
 @dataclass

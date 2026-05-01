@@ -234,10 +234,10 @@ class GraphBuilder:
                 if api_deps:
                     for api_dep in api_deps:
                         dep_id = self.dependency_linker.get_or_create_dependency_node(api_dep, project.name, node_map)
-                        self.nx_builder.add_dependency(node_id, dep_id, api_dep.type)
+                        self.nx_builder.add_dependency(node_id, dep_id, api_dep.type, line_number=dep.line_number)
             else:
                 dep_id = self.dependency_linker.get_or_create_dependency_node(dep, project.name, node_map)
-                self.nx_builder.add_dependency(node_id, dep_id, dep.type)
+                self.nx_builder.add_dependency(node_id, dep_id, dep.type, line_number=dep.line_number)
 
     def _create_final_graph(self, project_name: str) -> DependencyGraph:
         cycles = self.nx_builder.detect_cycles()
@@ -248,7 +248,13 @@ class GraphBuilder:
             for nid, nd in self.nx_builder.graph.nodes(data=True)
         }
         edges_dict = {
-            ed["id"]: Edge(id=ed["id"], from_node=ed["from_node"], to_node=ed["to_node"], type=ed["type"])
+            ed["id"]: Edge(
+                id=ed["id"], 
+                from_node=ed["from_node"], 
+                to_node=ed["to_node"], 
+                type=ed["type"],
+                line_number=ed.get("line_number")
+            )
             for _, _, ed in self.nx_builder.graph.edges(data=True)
         }
         return DependencyGraph(project_name=project_name, nodes=nodes_dict, edges=edges_dict, cycles=cycles)

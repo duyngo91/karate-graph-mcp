@@ -44,7 +44,13 @@ class DependencyAnalyzer:
         
         # Add all edges
         for edge in self.graph.edges.values():
-            self._nx_graph.add_edge(edge.from_node, edge.to_node)
+            self._nx_graph.add_edge(
+                edge.from_node, 
+                edge.to_node, 
+                id=edge.id, 
+                type=edge.type,
+                line_number=edge.line_number
+            )
 
         # Initialize expert analyzer
         from karate_graph_analyzer.analyzer.analysis_expert import AnalysisExpert
@@ -106,6 +112,14 @@ class DependencyAnalyzer:
             shortest_path = min(all_paths, key=len)
             depth = len(shortest_path) - 1  # Number of edges = number of nodes - 1
             
+            # Find the specific line number that causes the dependency
+            # This is the line in the test case that calls the next component in the path
+            line_number = node.metadata.line_number # Default to node start
+            if len(shortest_path) >= 2:
+                edge_data = self._nx_graph.get_edge_data(shortest_path[0], shortest_path[1])
+                if edge_data and "line_number" in edge_data and edge_data["line_number"] is not None:
+                    line_number = edge_data["line_number"]
+            
             # Create AffectedTestCase object
             affected_test_case = AffectedTestCase(
                 node_id=node.id,
@@ -113,6 +127,7 @@ class DependencyAnalyzer:
                 jira_tags=node.metadata.jira_tags,
                 dependency_path=shortest_path,
                 depth=depth,
+                line_number=line_number,
             )
             affected_test_cases.append(affected_test_case)
         

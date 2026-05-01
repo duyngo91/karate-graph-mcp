@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from karate_graph_analyzer.graph.graph_query import GraphQuery
 from karate_graph_analyzer.models import DependencyGraph, Node
+from karate_graph_analyzer.utils.source_snippet import get_source_snippet
 
 logger = logging.getLogger(__name__)
 
@@ -507,5 +508,6 @@ class SearchTools:
             "line_number": node.metadata.line_number,
             "jira_tags": node.metadata.jira_tags,
             "usage_count": usage_count,
+            "source_snippet": get_source_snippet(node.metadata.file_path, node.metadata.line_number),
             "metadata": node.metadata.additional_data
         }
