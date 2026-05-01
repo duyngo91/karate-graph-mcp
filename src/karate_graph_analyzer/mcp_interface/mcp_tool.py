@@ -105,6 +105,13 @@ class ImportGraphRequest(BaseModel):
         return v.lower()
 
 
+class MergeProjectsRequest(BaseModel):
+    """Request model for merge_projects."""
+
+    project_names: List[str] = Field(..., min_length=1, description="List of project names to merge")
+    new_project_name: str = Field(default="Merged_Project", description="Name for the resulting merged project")
+
+
 class KarateGraphAnalyzerTool:
     """MCP protocol interface for graph analyzer."""
 
@@ -283,6 +290,100 @@ class KarateGraphAnalyzerTool:
 
         except Exception as e:
             logger.error(f"Failed to analyze project '{project_name}': {e}")
+            return self._error_response("6003", "INTERNAL_ERROR", str(e))
+
+    def bulk_analyze(self) -> Dict[str, Any]:
+        """Analyze all registered projects.
+
+        Returns:
+            Dictionary with results for each project
+        """
+        try:
+            projects = self.registry.list()
+            results = {}
+            success_count = 0
+            
+            for project in projects:
+                res = self.analyze_project(project.name)
+                results[project.name] = res
+                if res.get("success"):
+                    success_count += 1
+            
+            return {
+                "success": True,
+                "total_projects": len(projects),
+                "analyzed_successfully": success_count,
+                "results": results
+            }
+        except Exception as e:
+            logger.error(f"Failed in bulk analysis: {e}")
+            return self._error_response("6003", "INTERNAL_ERROR", str(e))
+
+    def merge_projects(self, project_names: List[str], new_project_name: str = "Merged_Project") -> Dict[str, Any]:
+        """Merge multiple analyzed projects into a single graph.
+
+        Args:
+            project_names: List of project names to merge
+            new_project_name: Name for the resulting merged project
+
+        Returns:
+            Result with merged graph statistics
+        """
+        try:
+            # Validate input
+            request = MergeProjectsRequest(project_names=project_names, new_project_name=new_project_name)
+            
+            if not request.project_names:
+                return self._error_response("4003", "MERGE_ERROR", "No projects specified for merge")
+            
+            merged_graph = None
+            
+            for name in request.project_names:
+                if name not in self.graphs:
+                    # Try to analyze it first if registered
+                    project = self.registry.get(name)
+                    if project:
+                        self.analyze_project(name)
+                    else:
+                        logger.warning(f"Project '{name}' not found for merge, skipping")
+                        continue
+                
+                graph = self.graphs[name]
+                if merged_graph is None:
+                    # Create a deep-ish copy by creating a new graph object
+                    merged_graph = DependencyGraph(
+                        project_name=request.new_project_name,
+                        nodes=graph.nodes.copy(),
+                        edges=graph.edges.copy(),
+                        cycles=graph.cycles.copy()
+                    )
+                else:
+                    merged_graph.merge(graph)
+            
+            if not merged_graph:
+                return self._error_response("4003", "MERGE_ERROR", "No valid projects found to merge")
+            
+            # Store merged graph
+            self.graphs[request.new_project_name] = merged_graph
+            self.analyzers[request.new_project_name] = DependencyAnalyzer(merged_graph)
+            
+            # Update search tools
+            if self.search_tools:
+                self.search_tools.graphs = self.graphs
+                self.search_tools.query_apis.clear()
+
+            return {
+                "success": True,
+                "merged_project_name": request.new_project_name,
+                "statistics": {
+                    "total_nodes": len(merged_graph.nodes),
+                    "total_edges": len(merged_graph.edges),
+                    "projects_merged": request.project_names
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to merge projects: {e}")
             return self._error_response("6003", "INTERNAL_ERROR", str(e))
 
     def query_dependencies(

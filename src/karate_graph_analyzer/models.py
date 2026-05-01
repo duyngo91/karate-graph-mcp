@@ -125,6 +125,20 @@ class DependencyGraph:
     edges: Dict[str, Edge]
     cycles: List[List[str]] = field(default_factory=list)
 
+    def merge(self, other: "DependencyGraph", new_project_name: Optional[str] = None) -> "DependencyGraph":
+        """Merge another graph into this one."""
+        if new_project_name:
+            self.project_name = new_project_name
+            
+        self.nodes.update(other.nodes)
+        self.edges.update(other.edges)
+        
+        for cycle in other.cycles:
+            if cycle not in self.cycles:
+                self.cycles.append(cycle)
+                
+        return self
+
 
 @dataclass
 class AffectedTestCase:

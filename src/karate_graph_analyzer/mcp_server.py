@@ -98,6 +98,12 @@ class MCPServer:
             
             elif method == "find_redundant_components":
                 return self.tool.find_redundant_components(**params)
+            
+            elif method == "bulk_analyze":
+                return self.tool.bulk_analyze()
+            
+            elif method == "merge_projects":
+                return self.tool.merge_projects(**params)
 
             else:
                 return {
