@@ -191,14 +191,14 @@ class IncrementalUpdater:
                                 dep_node_id = self.dependency_linker.get_or_create_dependency_node(
                                     dep, project.name, dependency_node_map
                                 )
-                                self.nx_builder.add_dependency(dep_node_id, test_case_id, dep.type)
+                                self.nx_builder.add_dependency(test_case_id, dep_node_id, dep.type)
                             except Exception as e:
                                 logger.warning(f"Could not link COMMON dependency in incremental mode: {e}")
                         else:
                             dep_node_id = self.dependency_linker.get_or_create_dependency_node(
                                 dep, project.name, dependency_node_map
                             )
-                            self.nx_builder.add_dependency(dep_node_id, test_case_id, dep.type)
+                            self.nx_builder.add_dependency(test_case_id, dep_node_id, dep.type)
             
             except ParseError as e:
                 logger.error(f"Failed to parse {file_path}: {e}")

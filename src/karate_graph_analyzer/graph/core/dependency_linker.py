@@ -25,6 +25,29 @@ class DependencyLinker:
         """
         self.nx_builder = nx_builder
 
+    def normalize_path(self, path: str) -> str:
+        """Normalize feature file path for consistent keys."""
+        if not path:
+            return ""
+        
+        # 1. Convert to forward slashes
+        norm = path.replace("\\", "/")
+        
+        # 2. Strip prefixes like classpath: or file:
+        for prefix in ["classpath:", "file:"]:
+            if norm.startswith(prefix):
+                norm = norm[len(prefix):].lstrip("/")
+        
+        # 3. Handle absolute paths by looking for common root markers
+        # If the path is very long (absolute), try to find the standard project structure
+        markers = ["src/test/java/", "src/test/resources/", "features/"]
+        for marker in markers:
+            if marker in norm:
+                norm = norm.split(marker)[-1]
+                break
+        
+        return norm
+
     def get_or_create_dependency_node(
         self, 
         dep: Dependency, 
@@ -60,23 +83,25 @@ class DependencyLinker:
         )
         
         # Create node based on type
+        norm_target = self.normalize_path(dep.target)
+        
         if dep.type == DependencyType.WORKFLOW:
-            node_key = (node_type, dep.target)
+            node_key = (node_type, norm_target)
             if node_key in node_map:
                 workflow_node_id = node_map[node_key]
             else:
-                workflow_node_id = self.nx_builder.add_workflow_node(dep.target, metadata)
+                workflow_node_id = self.nx_builder.add_workflow_node(norm_target, metadata)
                 node_map[node_key] = workflow_node_id
             
             scenario_tag = dep.parameters.get('scenario_tag')
             if scenario_tag:
-                scenario_key = (NodeType.SCENARIO, f"{dep.target}#{scenario_tag}")
+                scenario_key = (NodeType.SCENARIO, f"{norm_target}#{scenario_tag}")
                 if scenario_key in node_map:
                     scenario_node_id = node_map[scenario_key]
                 else:
                     scenario_node_id = self.nx_builder.add_scenario_node(
                         scenario_tag=scenario_tag,
-                        workflow_path=dep.target,
+                        workflow_path=norm_target,
                         metadata=metadata
                     )
                     node_map[scenario_key] = scenario_node_id
@@ -90,22 +115,25 @@ class DependencyLinker:
             return self.create_api_hierarchy(dep.target, metadata, node_map)
             
         elif dep.type == DependencyType.PAGE:
-            node_key = (node_type, dep.target)
+            node_key = (node_type, norm_target)
             if node_key in node_map:
                 page_node_id = node_map[node_key]
             else:
-                page_node_id = self.nx_builder.add_page_node(dep.target, metadata)
+                page_node_id = self.nx_builder.add_page_node(norm_target, metadata)
                 node_map[node_key] = page_node_id
             
             action_tag = dep.parameters.get('scenario_tag')
             if action_tag:
-                action_key = (NodeType.ACTION, f"{dep.target}#{action_tag}")
+                # Normalize action tag (ensure it starts with @ for the key)
+                key_tag = action_tag if action_tag.startswith('@') else f"@{action_tag}"
+                action_key = (NodeType.ACTION, f"{norm_target}#{key_tag}")
+                
                 if action_key in node_map:
                     action_node_id = node_map[action_key]
                 else:
                     action_node_id = self.nx_builder.add_action_node(
                         action_tag=action_tag,
-                        page_path=dep.target,
+                        page_path=norm_target,
                         metadata=metadata
                     )
                     node_map[action_key] = action_node_id
@@ -116,20 +144,20 @@ class DependencyLinker:
             return page_node_id
             
         elif dep.type == DependencyType.LOCATOR:
-            node_key = (node_type, dep.target)
+            node_key = (node_type, norm_target)
             if node_key in node_map:
                 locator_node_id = node_map[node_key]
             else:
-                locator_node_id = self.nx_builder.add_locator_node(dep.target, metadata)
+                locator_node_id = self.nx_builder.add_locator_node(norm_target, metadata)
                 node_map[node_key] = locator_node_id
             return locator_node_id
             
         elif dep.type == DependencyType.DATABASE:
-            node_key = (node_type, dep.target)
+            node_key = (node_type, norm_target)
             if node_key in node_map:
                 return node_map[node_key]
             
-            node_id = self.nx_builder.add_database_node(dep.target, metadata)
+            node_id = self.nx_builder.add_database_node(norm_target, metadata)
             node_map[node_key] = node_id
             return node_id
         else:
@@ -200,12 +228,33 @@ class DependencyLinker:
             
         static_segments = [seg for seg in segments if '{' not in seg]
         
-        leaf_name = http_method
+        # Determine descriptive leaf name for metadata
+        scenario_name = metadata.additional_data.get("scenario_name")
+        scenario_tags = metadata.additional_data.get("scenario_tags", [])
+        
+        tag_str = ""
+        if scenario_tags:
+            first_tag = scenario_tags[0]
+            tag_str = first_tag if first_tag.startswith("@") else f"@{first_tag}"
+            
+        descriptive_name = ""
+        if scenario_name and scenario_name.strip():
+            descriptive_name = f"{tag_str} - {scenario_name}" if tag_str else scenario_name
+        elif tag_str:
+            descriptive_name = tag_str
+        
+        # Display name for Graph MUST be the HTTP Method
+        display_name = http_method
         if path_template and "{" in path_template:
             import re
             params = re.findall(r'\{([^}]+)\}', path_template)
             if params:
-                leaf_name = f"{http_method} {{{params[-1]}}}"
+                # Show last param to keep it concise but distinct (e.g., GET {id})
+                display_name = f"{http_method} {{{params[-1]}}}"
+        
+        # Add descriptive info to metadata
+        if descriptive_name:
+            metadata.additional_data["descriptive_name"] = descriptive_name
         
         parent_node_id = None
         for i, segment in enumerate(static_segments):
@@ -215,7 +264,7 @@ class DependencyLinker:
             if node_key in node_map:
                 current_node_id = node_map[node_key]
             else:
-                display_name = base_url if (i == 0 and base_url) else segment
+                group_display_name = base_url if (i == 0 and base_url) else segment
                 group_metadata = NodeMetadata(
                     file_path=None,
                     line_number=None,
@@ -223,7 +272,7 @@ class DependencyLinker:
                     project_name=metadata.project_name,
                     additional_data={"level": i, "segment": segment, "base_url": base_url if i == 0 else None},
                 )
-                current_node_id = self.nx_builder.add_api_group_node(display_name, group_metadata)
+                current_node_id = self.nx_builder.add_api_group_node(group_display_name, group_metadata)
                 node_map[node_key] = current_node_id
             
             if parent_node_id:
@@ -235,21 +284,33 @@ class DependencyLinker:
         node_key = (NodeType.API, f"{endpoint}#{http_method}")
         if node_key in node_map:
             leaf_node_id = node_map[node_key]
+            # Update descriptive metadata if we found better info during definition scan
+            if descriptive_name:
+                self.nx_builder.update_node_metadata(leaf_node_id, {
+                    "descriptive_name": descriptive_name,
+                    "scenario_name": scenario_name,
+                    "scenario_tags": scenario_tags
+                })
         else:
+            # Create new API node with HTTP Method as display name
             leaf_metadata = NodeMetadata(
                 file_path=metadata.file_path,
                 line_number=metadata.line_number,
-                jira_tags=[],
+                jira_tags=metadata.jira_tags,
                 project_name=metadata.project_name,
                 additional_data={
                     "full_url": endpoint,
                     "http_method": http_method,
                     "path_template": path_template,
-                    "examples": examples,
-                    "level": len(static_segments),
-                },
+                    "examples": metadata.additional_data.get("examples", []),
+                    "level": metadata.additional_data.get("level", 0),
+                    "descriptive_name": descriptive_name,
+                    "scenario_name": scenario_name,
+                    "scenario_tags": scenario_tags
+                }
             )
-            leaf_node_id = self.nx_builder.add_api_node(leaf_name, leaf_metadata)
+            # Use display_name (Method) here, NOT the segment name
+            leaf_node_id = self.nx_builder.add_api_node(display_name, leaf_metadata)
             node_map[node_key] = leaf_node_id
         
         if parent_node_id:
@@ -269,6 +330,20 @@ class DependencyLinker:
         if node_key in node_map:
             return node_map[node_key]
         
-        node_id = self.nx_builder.add_api_node(endpoint, metadata)
+        # Determine descriptive name
+        scenario_name = metadata.additional_data.get("scenario_name")
+        scenario_tags = metadata.additional_data.get("scenario_tags", [])
+        
+        tag_prefix = ""
+        if scenario_tags:
+            first_tag = scenario_tags[0]
+            tag_prefix = first_tag if first_tag.startswith("@") else f"@{first_tag}"
+            
+        if scenario_name:
+            display_name = f"{tag_prefix} - {scenario_name}" if tag_prefix else scenario_name
+        else:
+            display_name = endpoint
+
+        node_id = self.nx_builder.add_api_node(display_name, metadata)
         node_map[node_key] = node_id
         return node_id

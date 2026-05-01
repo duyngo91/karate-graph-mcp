@@ -154,55 +154,50 @@ class FeatureFileParser:
         return ast.scenarios
 
     def extract_dependencies(self, scenario: Scenario, validate_paths: bool = False) -> List[Dependency]:
-        """Extract call read(), API calls, page objects, DB operations.
-
-        Args:
-            scenario: Scenario to extract dependencies from
-            validate_paths: If True, validate that referenced files exist (default: False for graceful degradation)
-
-        Returns:
-            List of dependencies found in the scenario
-        """
+        """Extract call read(), API calls, page objects, DB operations."""
         dependencies: List[Dependency] = []
-        
-        # Track baseUrl and paths to combine them
         base_url = None
         api_paths = []
         
-        # Process all steps (scenario steps only - background is handled separately)
+        # Track HTTP method for this scenario
+        http_method = self._extract_http_method(scenario.steps) or "GET"
+        
+        # Process all steps
         for step in scenario.steps:
             step_text = step.text
             
-            # Extract call read() dependencies (workflows/page objects)
+            # 1. Workflows/Page Objects
             call_deps = self._extract_call_read_dependencies(step_text, step.line_number, validate_paths)
             dependencies.extend(call_deps)
             
-            # Extract API dependencies
+            # 2. APIs
             api_deps = self._extract_api_dependencies(step_text, step.line_number)
-            
-            # Separate baseUrl from paths
-            for api_dep in api_deps:
-                if api_dep.parameters.get("path_only"):
-                    api_paths.append(api_dep)
-                elif api_dep.parameters.get("resolved_from"):
-                    # This is a resolved baseUrl
-                    base_url = api_dep
-                elif "${" in api_dep.target or "baseUrl" in api_dep.target.lower():
-                    # This is an unresolved baseUrl
-                    base_url = api_dep
+            for dep in api_deps:
+                # Skip method markers, they are handled by _extract_http_method
+                if dep.target == "METHOD_MARKER":
+                    continue
+                    
+                dep.parameters["scenario_name"] = scenario.name
+                dep.parameters["scenario_tags"] = scenario.tags
+                dep.parameters["http_method"] = http_method
+                
+                if dep.parameters.get("path_only"):
+                    api_paths.append(dep)
+                elif dep.parameters.get("resolved_from") or "${" in dep.target or "baseUrl" in dep.target.lower():
+                    base_url = dep
                 else:
-                    # This is a complete URL, add directly
-                    dependencies.append(api_dep)
+                    dependencies.append(dep)
             
-            # Extract database dependencies
+            # 3. Database
             db_deps = self._extract_database_dependencies(step_text, step.line_number)
-            dependencies.extend(db_deps)
+            for dep in db_deps:
+                dep.parameters["scenario_name"] = scenario.name
+                dep.parameters["scenario_tags"] = scenario.tags
+                dependencies.append(dep)
         
-        # Combine baseUrl with paths to create full endpoints
+        # Combine baseUrl with paths
         if base_url and api_paths:
-            # We have both baseUrl and paths - combine them
             for path_dep in api_paths:
-                # Create combined endpoint (full URL)
                 combined_target = f"{base_url.target}{path_dep.target}"
                 combined_dep = Dependency(
                     type=DependencyType.API,
@@ -211,16 +206,16 @@ class FeatureFileParser:
                     parameters={
                         "base_url": base_url.target,
                         "path": path_dep.target,
-                        "combined": True
+                        "combined": True,
+                        "http_method": http_method,
+                        "scenario_name": scenario.name,
+                        "scenario_tags": scenario.tags
                     }
                 )
                 dependencies.append(combined_dep)
-            # Don't add base_url separately - it's already part of combined URLs
         elif base_url and not api_paths:
-            # Only baseUrl, no paths - add it
             dependencies.append(base_url)
         elif api_paths and not base_url:
-            # Only paths, no baseUrl - add them as-is
             for path_dep in api_paths:
                 dependencies.append(path_dep)
         
@@ -253,7 +248,7 @@ class FeatureFileParser:
         api_paths = []
         
         # Extract HTTP method from scenario steps
-        http_method = self._extract_http_method(scenario.steps)
+        http_method = self._extract_http_method(scenario.steps) or "GET"
         
         # Process background steps first (to get baseUrl)
         for step in background_steps:
@@ -283,6 +278,13 @@ class FeatureFileParser:
             
             # Separate baseUrl from paths
             for api_dep in api_deps:
+                if api_dep.target == "METHOD_MARKER":
+                    continue
+                
+                api_dep.parameters["scenario_name"] = scenario.name
+                api_dep.parameters["scenario_tags"] = scenario.tags
+                api_dep.parameters["http_method"] = http_method
+                
                 if api_dep.parameters.get("path_only"):
                     api_paths.append(api_dep)
                 elif api_dep.parameters.get("resolved_from"):
@@ -292,14 +294,14 @@ class FeatureFileParser:
                     # Override baseUrl if found in scenario
                     base_url = api_dep
                 else:
-                    # This is a complete URL, add directly with method
-                    if http_method:
-                        api_dep.parameters["http_method"] = http_method
                     dependencies.append(api_dep)
             
             # Extract database dependencies
             db_deps = self._extract_database_dependencies(step_text, step.line_number)
-            dependencies.extend(db_deps)
+            for dep in db_deps:
+                dep.parameters["scenario_name"] = scenario.name
+                dep.parameters["scenario_tags"] = scenario.tags
+                dependencies.append(dep)
         
         # Combine baseUrl with paths to create full endpoints
         if base_url and api_paths:
@@ -320,6 +322,8 @@ class FeatureFileParser:
                         "path": path_dep.target,
                         "path_template": template_path,
                         "http_method": http_method,
+                        "scenario_name": scenario.name,
+                        "scenario_tags": scenario.tags,
                         "examples": examples,
                         "combined": True
                     }
@@ -328,14 +332,11 @@ class FeatureFileParser:
             # Don't add base_url separately - it's already part of combined URLs
         elif base_url and not api_paths:
             # Only baseUrl, no paths - add it with method
-            if http_method:
-                base_url.parameters["http_method"] = http_method
+            base_url.parameters["http_method"] = http_method
             dependencies.append(base_url)
         elif api_paths and not base_url:
             # Only paths, no baseUrl - add them as-is with method
             for path_dep in api_paths:
-                if http_method:
-                    path_dep.parameters["http_method"] = http_method
                 # Detect dynamic params
                 template_path, examples = self._detect_dynamic_params(path_dep.target)
                 path_dep.parameters["path_template"] = template_path
@@ -909,19 +910,23 @@ class FeatureFileParser:
         return DependencyType.WORKFLOW
 
     def _extract_api_dependencies(self, step_text: str, line_number: int) -> List[Dependency]:
-        """Extract API call dependencies from step text.
-        
-        Handles:
-        - Explicit URL strings: url 'http://example.com/api'
-        - Variable references: baseUrl + '/endpoint'
-        - Variable-only references: url apiEndpoint
-        - Path statements: path '/api/users'
-        - Combined url + path to create full endpoint
-        - Resolves baseUrl using config mapping
-        """
+        """Extract API call dependencies from step text."""
         dependencies: List[Dependency] = []
         
-        # Use configured API extraction rules
+        # 1. Extract HTTP Methods (e.g., "method GET", "method POST")
+        method_pattern = re.compile(r"\bmethod\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b", re.IGNORECASE)
+        for match in method_pattern.finditer(step_text):
+            method = match.group(1).upper()
+            dependencies.append(
+                Dependency(
+                    type=DependencyType.API,
+                    target="METHOD_MARKER",
+                    line_number=line_number,
+                    parameters={"http_method": method}
+                )
+            )
+
+        # 2. Use configured API extraction rules (URL/BaseURL)
         for rule in self.config.api_extraction_rules:
             pattern = re.compile(rule, re.IGNORECASE)
             for match in pattern.finditer(step_text):
@@ -935,19 +940,14 @@ class FeatureFileParser:
                     )
                 )
         
-        # Additional pattern for variable-only references (e.g., "url apiEndpoint" or "url baseUrl")
-        # This catches cases where the URL is stored in a variable
+        # 3. Additional pattern for variable-only references
         var_url_pattern = re.compile(r"\burl\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", re.IGNORECASE)
         for match in var_url_pattern.finditer(step_text):
             var_name = match.group(1)
-            
-            # Try to resolve variable from config base_url_mapping
-            # Check both plain name and ${name} format
             resolved_url = self.config.base_url_mapping.get(var_name) or \
                            self.config.base_url_mapping.get(f"${{{var_name}}}")
             
             if resolved_url:
-                # Use resolved URL instead of variable
                 if not any(dep.target == resolved_url for dep in dependencies):
                     dependencies.append(
                         Dependency(
@@ -958,7 +958,6 @@ class FeatureFileParser:
                         )
                     )
             else:
-                # Fallback: keep variable reference (unresolved)
                 if not any(dep.target == f"${{{var_name}}}" for dep in dependencies):
                     dependencies.append(
                         Dependency(
@@ -969,11 +968,10 @@ class FeatureFileParser:
                         )
                     )
         
-        # Extract path statements (e.g., "path '/api/users'")
+        # 4. Extract path statements
         path_pattern = re.compile(r"\bpath\s+['\"]([^'\"]+)['\"]", re.IGNORECASE)
         for match in path_pattern.finditer(step_text):
             api_path = match.group(1)
-            # Only add if it's not already captured
             if not any(dep.target == api_path for dep in dependencies):
                 dependencies.append(
                     Dependency(

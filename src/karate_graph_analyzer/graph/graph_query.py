@@ -500,8 +500,12 @@ class GraphQuery:
         }
         
         for node in self.graph.nodes.values():
-            # Check if node has no outgoing edges (not used by anyone)
-            if not self.outgoing.get(node.id):
+            # Check if node has no incoming edges (not used by anyone)
+            if not self.incoming.get(node.id):
+                # Skip Test Cases as they are entry points
+                if node.type == NodeType.TEST_CASE:
+                    continue
+                    
                 if node.type == NodeType.WORKFLOW:
                     unused["workflows"].append(node)
                 elif node.type == NodeType.PAGE:

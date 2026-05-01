@@ -105,6 +105,25 @@ def scan_project(project_root: str, output_name: str = None):
         for node_type, count in sorted(node_counts.items()):
             print(f"   • {node_type}: {count}")
         
+        # --- NEW: Architectural Health Analysis ---
+        from karate_graph_analyzer.analyzer.dependency_analyzer import DependencyAnalyzer
+        analyzer = DependencyAnalyzer(graph)
+        expert = analyzer.expert
+        
+        print("\n" + "🩺" + " PROJECT HEALTH REPORT")
+        print("-" * 30)
+        health = expert.get_health_summary()
+        print(f"   ❤️  Health Score: {health['health_score']:.1f}/100")
+        print(f"   🗑️  Orphan Components: {health['orphan_count']}")
+        print(f"   👯 Redundant APIs: {health['redundant_api_count']}")
+        print(f"   🌀 Cycles: {health['cycle_count']}")
+        
+        print(f"\n   🔥 Top 3 Complex Test Cases:")
+        for item in health['top_complex_test_cases'][:3]:
+            print(f"      • {item['name']} (Score: {item['score']})")
+
+        # --- End Analysis ---
+
         # Create visualization
         print(f"\n🎨 Creating visualization...")
         output_dir = Path(__file__).parent / "output"

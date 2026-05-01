@@ -182,16 +182,34 @@ class GraphBuilder:
                         additional_data={"scenario_type": scenario.type.value, "tags": scenario.tags},
                     )
 
-                    rel_path = scenario.file_path.replace("\\", "/")
-                    if "src/test/java/" in rel_path:
-                        rel_path = rel_path.split("src/test/java/")[-1]
-                    if "features/" in rel_path:
-                        rel_path = rel_path.split("features/")[-1]
+                    rel_path = self.dependency_linker.normalize_path(scenario.file_path)
 
                     if scenario_node_type == NodeType.TEST_CASE:
                         node_id = self.nx_builder.add_test_case(scenario, scenario_metadata)
                     elif scenario_node_type == NodeType.WORKFLOW:
                         node_id = self.nx_builder.add_workflow_node(display_name, scenario_metadata)
+                    elif scenario_node_type == NodeType.API:
+                        # For API definition files, we want to register the descriptive name
+                        # so that when test cases call them, they use this nice name.
+                        
+                        # Find the API dependency in this scenario to get the endpoint
+                        dependencies = parser.extract_dependencies_with_background(
+                            scenario, ast.background_steps, validate_paths=False
+                        )
+                        
+                        for dep in dependencies:
+                            if dep.type == DependencyType.API:
+                                # Enrich dependency with current scenario info
+                                dep.parameters["scenario_name"] = scenario.name
+                                dep.parameters["scenario_tags"] = scenario.tags
+                                
+                                # This will create the hierarchy with the descriptive name
+                                self.dependency_linker.get_or_create_dependency_node(
+                                    dep, project.name, dependency_node_map
+                                )
+                                # Note: We don't need to link it here, 
+                                # it's just to ensure the node exists in node_map with the right name.
+
                     elif scenario_node_type == NodeType.PAGE:
                         file_key = (NodeType.PAGE, rel_path)
                         if file_key in dependency_node_map:
@@ -201,7 +219,8 @@ class GraphBuilder:
                             dependency_node_map[file_key] = file_node_id
                         
                         action_tag = display_name
-                        action_key = (NodeType.ACTION, f"{rel_path}#{action_tag}")
+                        key_tag = action_tag if action_tag.startswith('@') else f"@{action_tag}"
+                        action_key = (NodeType.ACTION, f"{rel_path}#{key_tag}")
                         if action_key in dependency_node_map:
                             node_id = dependency_node_map[action_key]
                         else:
@@ -235,12 +254,12 @@ class GraphBuilder:
                                     dep_node_id = self.dependency_linker.get_or_create_dependency_node(
                                         api_dep, project.name, dependency_node_map
                                     )
-                                    self.nx_builder.add_dependency(dep_node_id, node_id, api_dep.type)
+                                    self.nx_builder.add_dependency(node_id, dep_node_id, api_dep.type)
                         else:
                             dep_node_id = self.dependency_linker.get_or_create_dependency_node(
                                 dep, project.name, dependency_node_map
                             )
-                            self.nx_builder.add_dependency(dep_node_id, node_id, dep.type)
+                            self.nx_builder.add_dependency(node_id, dep_node_id, dep.type)
             except Exception as e:
                 logger.error(f"Error in Pass 2: {e}", exc_info=True)
 

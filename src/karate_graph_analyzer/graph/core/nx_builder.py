@@ -31,6 +31,24 @@ class NetworkXBuilder:
         self.graph: nx.DiGraph = graph if graph is not None else nx.DiGraph()
         self._node_counter: Dict[str, int] = {}  # Track node IDs by type
 
+    def update_node_name(self, node_id: str, new_name: str) -> None:
+        """Update the display name of an existing node."""
+        if node_id in self.graph.nodes:
+            self.graph.nodes[node_id]["name"] = new_name
+
+    def update_node_metadata(self, node_id: str, additional_metadata: dict) -> None:
+        """Update or add to the metadata of an existing node."""
+        if node_id in self.graph.nodes:
+            node = self.graph.nodes[node_id]
+            if "metadata" not in node:
+                node["metadata"] = {"additional_data": {}}
+            
+            # Update additional_data safely
+            if "additional_data" not in node["metadata"]:
+                node["metadata"]["additional_data"] = {}
+                
+            node["metadata"]["additional_data"].update(additional_metadata)
+
     def _generate_node_id(self, node_type: NodeType) -> str:
         """Generate unique node ID for a given node type.
 

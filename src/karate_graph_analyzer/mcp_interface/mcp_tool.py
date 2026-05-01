@@ -836,6 +836,61 @@ class KarateGraphAnalyzerTool:
         
         return self.search_tools.find_unused_components(project_name)
 
+    def get_project_health(self, project_name: str) -> Dict[str, Any]:
+        """Get architectural health report for a project.
+        
+        Args:
+            project_name: Name of the project
+            
+        Returns:
+            Health report dictionary
+        """
+        if project_name not in self.analyzers:
+            return self._error_response("7001", "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
+        
+        analyzer = self.analyzers[project_name]
+        summary = analyzer.expert.get_health_summary()
+        
+        return {
+            "success": True,
+            "project_name": project_name,
+            "health": summary
+        }
+
+    def find_redundant_components(self, project_name: str) -> Dict[str, Any]:
+        """Find potential duplicate API definitions.
+        
+        Args:
+            project_name: Name of the project
+            
+        Returns:
+            Dictionary of redundant components
+        """
+        if project_name not in self.analyzers:
+            return self._error_response("7001", "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
+        
+        analyzer = self.analyzers[project_name]
+        duplicates = analyzer.expert.find_redundant_apis()
+        
+        results = {}
+        for key, nodes in duplicates.items():
+            results[key] = [
+                {
+                    "id": node.id,
+                    "name": node.name,
+                    "file_path": node.metadata.file_path,
+                    "line_number": node.metadata.line_number
+                }
+                for node in nodes
+            ]
+            
+        return {
+            "success": True,
+            "project_name": project_name,
+            "redundant_apis": results,
+            "count": len(results)
+        }
+
     def _error_response(self, code: str, category: str, message: str) -> Dict[str, Any]:
         """Create structured error response.
 

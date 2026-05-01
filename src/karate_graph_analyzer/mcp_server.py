@@ -92,6 +92,12 @@ class MCPServer:
             
             elif method == "find_unused_components":
                 return self.tool.find_unused_components(**params)
+            
+            elif method == "get_project_health":
+                return self.tool.get_project_health(**params)
+            
+            elif method == "find_redundant_components":
+                return self.tool.find_redundant_components(**params)
 
             else:
                 return {

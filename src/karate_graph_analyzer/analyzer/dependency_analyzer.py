@@ -46,6 +46,10 @@ class DependencyAnalyzer:
         for edge in self.graph.edges.values():
             self._nx_graph.add_edge(edge.from_node, edge.to_node)
 
+        # Initialize expert analyzer
+        from karate_graph_analyzer.analyzer.analysis_expert import AnalysisExpert
+        self.expert = AnalysisExpert(self.graph, self._nx_graph)
+
     def impact_analysis(self, component_id: str) -> ImpactResult:
         """Find all test cases affected by component change.
 
