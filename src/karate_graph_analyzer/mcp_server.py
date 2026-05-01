@@ -1,14 +1,10 @@
 """
-MCP Server for Karate Feature Graph Analyzer.
-
-This module provides an MCP server interface that can be used by AI agents
-to analyze Karate feature files and generate dependency graphs.
+Proper MCP Server for Karate Feature Graph Analyzer using FastMCP.
 """
 
-import json
 import logging
-import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from fastmcp import FastMCP
 
 from karate_graph_analyzer.mcp_interface.mcp_tool import KarateGraphAnalyzerTool
 
@@ -19,157 +15,166 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Initialize FastMCP
+mcp = FastMCP("Karate-Graph-Analyzer")
 
-class MCPServer:
-    """MCP Server for Karate Graph Analyzer."""
+# Initialize Implementation Tool
+# We use a global instance to persist state across tool calls if needed
+# (FastMCP handles lifecycle, but we want the registry to be consistent)
+analyzer_tool = KarateGraphAnalyzerTool()
 
-    def __init__(self):
-        """Initialize MCP server."""
-        self.tool = KarateGraphAnalyzerTool()
-        logger.info("MCP Server initialized")
+@mcp.tool()
+def register_project(
+    name: str,
+    root_path: str,
+    feature_file_patterns: Optional[List[str]] = None,
+    parser_config: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Register a new Karate project for analysis.
+    
+    Args:
+        name: Unique name for the project.
+        root_path: Absolute path to project root.
+        feature_file_patterns: Optional list of glob patterns (default: ["**/*.feature"]).
+        parser_config: Optional configuration for the parser.
+    """
+    return analyzer_tool.register_project(name, root_path, feature_file_patterns, parser_config)
 
-    def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle MCP request.
+@mcp.tool()
+def list_projects() -> List[Dict[str, Any]]:
+    """List all registered projects and their analysis status."""
+    return analyzer_tool.list_projects()
 
-        Args:
-            request: MCP request dictionary with 'method' and 'params'
+@mcp.tool()
+def analyze_project(project_name: str) -> Dict[str, Any]:
+    """
+    Analyze a registered project to build its dependency graph.
+    
+    Args:
+        project_name: Name of the registered project.
+    """
+    return analyzer_tool.analyze_project(project_name)
 
-        Returns:
-            MCP response dictionary
-        """
-        method = request.get("method")
-        params = request.get("params", {})
+@mcp.tool()
+def bulk_analyze() -> Dict[str, Any]:
+    """Analyze all registered projects at once."""
+    return analyzer_tool.bulk_analyze()
 
-        logger.info(f"Handling request: {method}")
+@mcp.tool()
+def query_dependencies(component_id: str, transitive: bool = True) -> Dict[str, Any]:
+    """
+    Find all components that the specified component depends on.
+    
+    Args:
+        component_id: ID of the component (e.g., file path or scenario tag).
+        transitive: Whether to include indirect dependencies (default: True).
+    """
+    return analyzer_tool.query_dependencies(component_id, transitive)
 
-        try:
-            # Route to appropriate method
-            if method == "register_project":
-                return self.tool.register_project(**params)
+@mcp.tool()
+def impact_analysis(component_id: str) -> Dict[str, Any]:
+    """
+    Identify all test cases and workflows affected by a change in this component.
+    
+    Args:
+        component_id: ID of the component being changed.
+    """
+    return analyzer_tool.impact_analysis(component_id)
 
-            elif method == "list_projects":
-                return {"success": True, "projects": self.tool.list_projects()}
+@mcp.tool()
+def search_api(
+    project_name: str,
+    method: Optional[str] = None,
+    path: Optional[str] = None,
+    domain: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Search for API endpoints in an analyzed project.
+    
+    Args:
+        project_name: Name of the analyzed project.
+        method: HTTP method (GET, POST, etc).
+        path: Path pattern to search for.
+        domain: Domain name to filter by.
+    """
+    return analyzer_tool.search_api(project_name, method, path, domain)
 
-            elif method == "analyze_project":
-                return self.tool.analyze_project(**params)
+@mcp.tool()
+def search_workflow(
+    project_name: str,
+    path: Optional[str] = None,
+    scenario_tag: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Search for workflows or specific scenarios.
+    
+    Args:
+        project_name: Name of the analyzed project.
+        path: Workflow file path pattern.
+        scenario_tag: Scenario tag (e.g., '@AddPayment').
+    """
+    return analyzer_tool.search_workflow(project_name, path, scenario_tag)
 
-            elif method == "query_dependencies":
-                return self.tool.query_dependencies(**params)
+@mcp.tool()
+def search_test_case(
+    project_name: str,
+    jira_tag: Optional[str] = None,
+    name_pattern: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Search for test cases by Jira ID or name.
+    
+    Args:
+        project_name: Name of the analyzed project.
+        jira_tag: Jira tag (e.g., '@JiraId-123').
+        name_pattern: Pattern in test case name.
+    """
+    return analyzer_tool.search_test_case(project_name, jira_tag, name_pattern)
 
-            elif method == "impact_analysis":
-                return self.tool.impact_analysis(**params)
+@mcp.tool()
+def get_project_health(project_name: str) -> Dict[str, Any]:
+    """
+    Get an architectural health report (cycles, orphans, complexity).
+    
+    Args:
+        project_name: Name of the analyzed project.
+    """
+    return analyzer_tool.get_project_health(project_name)
 
-            elif method == "get_node_details":
-                return self.tool.get_node_details(**params)
+@mcp.tool()
+def visualize_project(project_name: str, output_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Generate an interactive HTML visualization for a project.
+    
+    Args:
+        project_name: Name of the analyzed project.
+        output_path: Optional custom path to save the HTML file.
+    """
+    return analyzer_tool.visualize_project(project_name, output_path)
 
-            elif method == "find_common_components":
-                return self.tool.find_common_components(**params)
+@mcp.tool()
+def merge_projects(project_names: List[str], new_project_name: str = "Merged_Project") -> Dict[str, Any]:
+    """
+    Merge multiple projects into one global dependency graph.
+    
+    Args:
+        project_names: List of project names to merge.
+        new_project_name: Name for the merged project.
+    """
+    return analyzer_tool.merge_projects(project_names, new_project_name)
 
-            elif method == "export_graph":
-                return self.tool.export_graph(**params)
-
-            elif method == "import_graph":
-                return self.tool.import_graph(**params)
-            
-            # Search and Query methods
-            elif method == "search_api":
-                return self.tool.search_api(**params)
-            
-            elif method == "search_workflow":
-                return self.tool.search_workflow(**params)
-            
-            elif method == "search_page":
-                return self.tool.search_page(**params)
-            
-            elif method == "search_test_case":
-                return self.tool.search_test_case(**params)
-            
-            elif method == "get_usage_stats":
-                return self.tool.get_usage_stats(**params)
-            
-            elif method == "get_most_used_components":
-                return self.tool.get_most_used_components(**params)
-            
-            elif method == "find_unused_components":
-                return self.tool.find_unused_components(**params)
-            
-            elif method == "get_project_health":
-                return self.tool.get_project_health(**params)
-            
-            elif method == "find_redundant_components":
-                return self.tool.find_redundant_components(**params)
-            
-            elif method == "bulk_analyze":
-                return self.tool.bulk_analyze()
-            
-            elif method == "merge_projects":
-                return self.tool.merge_projects(**params)
-
-            else:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "6002",
-                        "category": "MCP_ERROR",
-                        "message": f"Unknown method: {method}"
-                    }
-                }
-
-        except Exception as e:
-            logger.error(f"Error handling request: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": {
-                    "code": "6003",
-                    "category": "INTERNAL_ERROR",
-                    "message": str(e)
-                }
-            }
-
-    def run(self):
-        """Run MCP server (stdio mode)."""
-        logger.info("MCP Server starting in stdio mode")
-
-        try:
-            while True:
-                # Read request from stdin
-                line = sys.stdin.readline()
-                if not line:
-                    break
-
-                try:
-                    request = json.loads(line.strip())
-                    response = self.handle_request(request)
-
-                    # Write response to stdout
-                    sys.stdout.write(json.dumps(response) + "\n")
-                    sys.stdout.flush()
-
-                except json.JSONDecodeError as e:
-                    error_response = {
-                        "success": False,
-                        "error": {
-                            "code": "6001",
-                            "category": "MCP_ERROR",
-                            "message": f"Invalid JSON: {e}"
-                        }
-                    }
-                    sys.stdout.write(json.dumps(error_response) + "\n")
-                    sys.stdout.flush()
-
-        except KeyboardInterrupt:
-            logger.info("MCP Server stopped by user")
-        except Exception as e:
-            logger.error(f"MCP Server error: {e}", exc_info=True)
-        finally:
-            logger.info("MCP Server shutting down")
-
-
-def main():
-    """Main entry point for MCP server."""
-    server = MCPServer()
-    server.run()
-
+@mcp.tool()
+def export_graph(project_name: str, format: str = "json") -> Dict[str, Any]:
+    """
+    Export the dependency graph to a file format.
+    
+    Args:
+        project_name: Name of the project.
+        format: Export format ('json' or 'graphml').
+    """
+    return analyzer_tool.export_graph(project_name, format)
 
 if __name__ == "__main__":
-    main()
+    # Start the server using stdio
+    mcp.run()

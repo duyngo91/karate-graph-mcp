@@ -8,6 +8,7 @@ import json
 import logging
 from dataclasses import asdict
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -24,6 +25,7 @@ from karate_graph_analyzer.models import (
     Project,
     ReusableComponent,
 )
+from karate_graph_analyzer.visualization.graph_visualizer import GraphVisualizer
 from karate_graph_analyzer.storage.project_registry import ProjectRegistry
 from karate_graph_analyzer.utils.source_snippet import get_source_snippet
 
@@ -162,13 +164,23 @@ class KarateGraphAnalyzerTool:
                 parser_config=parser_config,
             )
 
-            # Create parser config if provided
+            # Create parser config
             config = ParserConfig()
             if parser_config:
                 config = ParserConfig(**parser_config)
+            else:
+                # Auto-detect config from karate-config.js or environment variables
+                from karate_graph_analyzer.parser.config_parser import auto_detect_config
+                auto_config = auto_detect_config(root_path)
+                if auto_config:
+                    logger.info(f"Auto-detected {len(auto_config)} config variables for project '{name}'")
+                    config = ParserConfig(
+                        base_url_mapping=auto_config,
+                        variable_patterns=auto_config
+                    )
 
-            # Create project
-            patterns = feature_file_patterns or ["**/*.feature"]
+            # Create project - Default to src/ only to avoid target/ build/ folders
+            patterns = feature_file_patterns or ["src/test/java/**/*.feature", "src/main/resources/**/*.feature"]
             project = Project(
                 name=request.name,
                 root_path=request.root_path,
@@ -196,10 +208,10 @@ class KarateGraphAnalyzerTool:
 
         except ValueError as e:
             logger.error(f"Failed to register project '{name}': {e}")
-            return self._error_response("3001", "PROJECT_MANAGEMENT", str(e))
+            return self._error_response(3001, "PROJECT_MANAGEMENT", str(e))
         except Exception as e:
             logger.error(f"Unexpected error registering project '{name}': {e}")
-            return self._error_response("6003", "INTERNAL_ERROR", str(e))
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def list_projects(self) -> List[Dict[str, Any]]:
         """List all registered projects.
@@ -226,7 +238,7 @@ class KarateGraphAnalyzerTool:
 
         except Exception as e:
             logger.error(f"Failed to list projects: {e}")
-            return [self._error_response("6003", "INTERNAL_ERROR", str(e))]
+            return [self._error_response(6003, "INTERNAL_ERROR", str(e))]
 
     def analyze_project(self, project_name: str) -> Dict[str, Any]:
         """Build dependency graph for project.
@@ -245,7 +257,7 @@ class KarateGraphAnalyzerTool:
             project = self.registry.get(request.project_name)
             if not project:
                 return self._error_response(
-                    "3003",
+                    3003,
                     "PROJECT_MANAGEMENT",
                     f"Project '{project_name}' not found in registry",
                 )
@@ -291,7 +303,7 @@ class KarateGraphAnalyzerTool:
 
         except Exception as e:
             logger.error(f"Failed to analyze project '{project_name}': {e}")
-            return self._error_response("6003", "INTERNAL_ERROR", str(e))
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def bulk_analyze(self) -> Dict[str, Any]:
         """Analyze all registered projects.
@@ -318,7 +330,7 @@ class KarateGraphAnalyzerTool:
             }
         except Exception as e:
             logger.error(f"Failed in bulk analysis: {e}")
-            return self._error_response("6003", "INTERNAL_ERROR", str(e))
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def merge_projects(self, project_names: List[str], new_project_name: str = "Merged_Project") -> Dict[str, Any]:
         """Merge multiple analyzed projects into a single graph.
@@ -335,7 +347,7 @@ class KarateGraphAnalyzerTool:
             request = MergeProjectsRequest(project_names=project_names, new_project_name=new_project_name)
             
             if not request.project_names:
-                return self._error_response("4003", "MERGE_ERROR", "No projects specified for merge")
+                return self._error_response(4003, "MERGE_ERROR", "No projects specified for merge")
             
             merged_graph = None
             
@@ -362,7 +374,7 @@ class KarateGraphAnalyzerTool:
                     merged_graph.merge(graph)
             
             if not merged_graph:
-                return self._error_response("4003", "MERGE_ERROR", "No valid projects found to merge")
+                return self._error_response(4003, "MERGE_ERROR", "No valid projects found to merge")
             
             # Store merged graph
             self.graphs[request.new_project_name] = merged_graph
@@ -385,7 +397,7 @@ class KarateGraphAnalyzerTool:
             
         except Exception as e:
             logger.error(f"Failed to merge projects: {e}")
-            return self._error_response("6003", "INTERNAL_ERROR", str(e))
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def query_dependencies(
         self, component_id: str, transitive: bool = True
@@ -407,7 +419,7 @@ class KarateGraphAnalyzerTool:
             analyzer = self._find_analyzer_for_node(request.component_id)
             if not analyzer:
                 return self._error_response(
-                    "4001", "QUERY_ERROR", f"Node '{component_id}' not found in any project"
+                    4001, "QUERY_ERROR", f"Node '{component_id}' not found in any project"
                 )
 
             # Query dependencies
@@ -445,7 +457,7 @@ class KarateGraphAnalyzerTool:
 
         except Exception as e:
             logger.error(f"Failed to query dependencies for '{component_id}': {e}")
-            return self._error_response("6003", "INTERNAL_ERROR", str(e))
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def impact_analysis(self, component_id: str) -> Dict[str, Any]:
         """Perform impact analysis for component change.
@@ -464,7 +476,7 @@ class KarateGraphAnalyzerTool:
             analyzer = self._find_analyzer_for_node(request.component_id)
             if not analyzer:
                 return self._error_response(
-                    "4001", "QUERY_ERROR", f"Node '{component_id}' not found in any project"
+                    4001, "QUERY_ERROR", f"Node '{component_id}' not found in any project"
                 )
 
             # Perform impact analysis
@@ -502,7 +514,7 @@ class KarateGraphAnalyzerTool:
 
         except Exception as e:
             logger.error(f"Failed to perform impact analysis for '{component_id}': {e}")
-            return self._error_response("6003", "INTERNAL_ERROR", str(e))
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def get_node_details(self, node_id: str) -> Dict[str, Any]:
         """Get full metadata for a node.
@@ -544,12 +556,12 @@ class KarateGraphAnalyzerTool:
 
             # Node not found
             return self._error_response(
-                "4001", "QUERY_ERROR", f"Node '{node_id}' not found in any project"
+                4001, "QUERY_ERROR", f"Node '{node_id}' not found in any project"
             )
 
         except Exception as e:
             logger.error(f"Failed to get node details for '{node_id}': {e}")
-            return self._error_response("6003", "INTERNAL_ERROR", str(e))
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def find_common_components(self, project_names: List[str]) -> Dict[str, Any]:
         """Find reusable components across projects.
@@ -570,7 +582,7 @@ class KarateGraphAnalyzerTool:
                 project = self.registry.get(project_name)
                 if not project:
                     return self._error_response(
-                        "3003",
+                        3003,
                         "PROJECT_MANAGEMENT",
                         f"Project '{project_name}' not found in registry",
                     )
@@ -579,7 +591,7 @@ class KarateGraphAnalyzerTool:
             # Use any analyzer to find common components
             if not self.analyzers:
                 return self._error_response(
-                    "4002",
+                    4002,
                     "QUERY_ERROR",
                     "No projects have been analyzed. Analyze projects first.",
                 )
@@ -626,7 +638,7 @@ class KarateGraphAnalyzerTool:
 
         except Exception as e:
             logger.error(f"Failed to find common components: {e}")
-            return self._error_response("6003", "INTERNAL_ERROR", str(e))
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def export_graph(self, project_name: str, format: str) -> Dict[str, Any]:
         """Export graph to JSON or GraphML.
@@ -645,7 +657,7 @@ class KarateGraphAnalyzerTool:
             # Get graph
             if request.project_name not in self.graphs:
                 return self._error_response(
-                    "3003",
+                    3003,
                     "PROJECT_MANAGEMENT",
                     f"Project '{project_name}' has not been analyzed",
                 )
@@ -658,7 +670,7 @@ class KarateGraphAnalyzerTool:
                 export_data = exporter.export(graph)
             except ValueError as e:
                 return self._error_response(
-                    "5001", "EXPORT_ERROR", str(e)
+                    5001, "EXPORT_ERROR", str(e)
                 )
 
             logger.info(f"Exported graph for project '{project_name}' to {format}")
@@ -672,7 +684,7 @@ class KarateGraphAnalyzerTool:
 
         except Exception as e:
             logger.error(f"Failed to export graph for '{project_name}': {e}")
-            return self._error_response("5004", "EXPORT_ERROR", str(e))
+            return self._error_response(5004, "EXPORT_ERROR", str(e))
 
     def import_graph(self, data: str, format: str, project_name: str) -> Dict[str, Any]:
         """Import graph from JSON or GraphML.
@@ -696,11 +708,11 @@ class KarateGraphAnalyzerTool:
             except json.JSONDecodeError as e:
                 # json.JSONDecodeError is a subclass of ValueError — catch first
                 return self._error_response(
-                    "5001", "IMPORT_ERROR", f"Invalid JSON: {e}"
+                    5001, "IMPORT_ERROR", f"Invalid JSON: {e}"
                 )
             except ValueError as e:
                 return self._error_response(
-                    "5002", "IMPORT_ERROR", str(e)
+                    5002, "IMPORT_ERROR", str(e)
                 )
 
             # Store graph and create analyzer
@@ -725,10 +737,10 @@ class KarateGraphAnalyzerTool:
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to import graph: invalid JSON - {e}")
-            return self._error_response("5001", "IMPORT_ERROR", f"Invalid JSON: {e}")
+            return self._error_response(5001, "IMPORT_ERROR", f"Invalid JSON: {e}")
         except Exception as e:
             logger.error(f"Failed to import graph: {e}")
-            return self._error_response("5003", "IMPORT_ERROR", str(e))
+            return self._error_response(5003, "IMPORT_ERROR", str(e))
 
     def _find_analyzer_for_node(self, node_id: str) -> Optional[DependencyAnalyzer]:
         """Find the analyzer that contains the specified node.
@@ -788,7 +800,7 @@ class KarateGraphAnalyzerTool:
         """
         if self.search_tools is None:
             return self._error_response(
-                "7000",
+                7000,
                 "SEARCH_ERROR",
                 "No projects have been analyzed. Analyze a project first."
             )
@@ -813,7 +825,7 @@ class KarateGraphAnalyzerTool:
         """
         if self.search_tools is None:
             return self._error_response(
-                "7000",
+                7000,
                 "SEARCH_ERROR",
                 "No projects have been analyzed. Analyze a project first."
             )
@@ -838,7 +850,7 @@ class KarateGraphAnalyzerTool:
         """
         if self.search_tools is None:
             return self._error_response(
-                "7000",
+                7000,
                 "SEARCH_ERROR",
                 "No projects have been analyzed. Analyze a project first."
             )
@@ -867,7 +879,7 @@ class KarateGraphAnalyzerTool:
         """
         if self.search_tools is None:
             return self._error_response(
-                "7000",
+                7000,
                 "SEARCH_ERROR",
                 "No projects have been analyzed. Analyze a project first."
             )
@@ -892,7 +904,7 @@ class KarateGraphAnalyzerTool:
         """
         if self.search_tools is None:
             return self._error_response(
-                "7000",
+                7000,
                 "SEARCH_ERROR",
                 "No projects have been analyzed. Analyze a project first."
             )
@@ -917,7 +929,7 @@ class KarateGraphAnalyzerTool:
         """
         if self.search_tools is None:
             return self._error_response(
-                "7000",
+                7000,
                 "SEARCH_ERROR",
                 "No projects have been analyzed. Analyze a project first."
             )
@@ -938,7 +950,7 @@ class KarateGraphAnalyzerTool:
         """
         if self.search_tools is None:
             return self._error_response(
-                "7000",
+                7000,
                 "SEARCH_ERROR",
                 "No projects have been analyzed. Analyze a project first."
             )
@@ -955,7 +967,7 @@ class KarateGraphAnalyzerTool:
             Health report dictionary
         """
         if project_name not in self.analyzers:
-            return self._error_response("7001", "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
+            return self._error_response(7001, "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
         
         analyzer = self.analyzers[project_name]
         summary = analyzer.expert.get_health_summary()
@@ -976,7 +988,7 @@ class KarateGraphAnalyzerTool:
             Dictionary of redundant components
         """
         if project_name not in self.analyzers:
-            return self._error_response("7001", "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
+            return self._error_response(7001, "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
         
         analyzer = self.analyzers[project_name]
         duplicates = analyzer.expert.find_redundant_apis()
@@ -1000,11 +1012,51 @@ class KarateGraphAnalyzerTool:
             "count": len(results)
         }
 
-    def _error_response(self, code: str, category: str, message: str) -> Dict[str, Any]:
+    def visualize_project(self, project_name: str, output_path: Optional[str] = None) -> Dict[str, Any]:
+        """Generate interactive HTML visualization for a project.
+        
+        Args:
+            project_name: Name of the project
+            output_path: Optional output path for HTML file
+            
+        Returns:
+            Dictionary with visualization path
+        """
+        if project_name not in self.graphs:
+            return self._error_response(3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' has not been analyzed")
+        
+        graph = self.graphs[project_name]
+        
+        # Default output path
+        if not output_path:
+            # Try to save in project root / output
+            project = self.registry.get(project_name)
+            if project:
+                out_dir = Path(project.root_path) / "output"
+                out_dir.mkdir(exist_ok=True)
+                output_path = str(out_dir / f"{project_name}_graph.html")
+            else:
+                output_path = f"{project_name}_graph.html"
+        
+        try:
+            visualizer = GraphVisualizer(graph)
+            final_path = visualizer.render(output_path=output_path)
+            
+            return {
+                "success": True,
+                "project_name": project_name,
+                "visualization_path": final_path,
+                "message": f"Visualization generated successfully at {final_path}"
+            }
+        except Exception as e:
+            logger.error(f"Failed to visualize project '{project_name}': {e}")
+            return self._error_response(8001, "VISUALIZATION_ERROR", str(e))
+
+    def _error_response(self, code: int, category: str, message: str) -> Dict[str, Any]:
         """Create structured error response.
 
         Args:
-            code: Error code
+            code: Error code (integer)
             category: Error category
             message: Error message
 
