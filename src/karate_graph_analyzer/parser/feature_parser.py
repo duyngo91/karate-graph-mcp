@@ -119,6 +119,15 @@ class FeatureFileParser:
                 
                 jira_tags = self._filter_jira_tags(merged_tags)
                 
+                # Check for @setup linkage
+                setup_name = None
+                setup_line = None
+                if token.type == GherkinTokenType.SCENARIO_OUTLINE and scenarios:
+                    last_s = scenarios[-1]
+                    if "@setup" in last_s.tags:
+                        setup_name = last_s.name
+                        setup_line = last_s.line_number
+
                 current_scenario = Scenario(
                     name=token.text or f"Unnamed Scenario at {token.line_number}",
                     type=ScenarioType.SCENARIO if token.type == GherkinTokenType.SCENARIO else ScenarioType.SCENARIO_OUTLINE,
@@ -127,7 +136,9 @@ class FeatureFileParser:
                     file_path=file_path,
                     line_number=token.line_number,
                     steps=[],
-                    examples=None
+                    examples=None,
+                    setup_scenario=setup_name,
+                    setup_line_number=setup_line
                 )
                 scenarios.append(current_scenario)
                 current_tags = [] # Reset for next scenario
@@ -208,6 +219,10 @@ class FeatureFileParser:
         api_extractor = self.orchestrator.get_extractor_by_type(ApiExtractor)
         http_method = (api_extractor.extract_http_method(scenario.steps) if api_extractor else "GET") or "GET"
 
+        # Resolve scoped config for this specific file
+        original_mapping = self.config.base_url_mapping
+        self.config.base_url_mapping = self.config.get_config_for_path(scenario.file_path)
+
         tracker = ApiContextTracker(api_extractor)
         dependencies: List[Dependency] = []
         
@@ -227,6 +242,18 @@ class FeatureFileParser:
         # 2. Finalize API dependencies
         dependencies.extend(tracker.finalize(scenario.line_number, scenario, http_method))
 
+        # 3. Add @setup dependency if present
+        if scenario.setup_scenario:
+            dependencies.append(Dependency(
+                type=DependencyType.SETUP,
+                target=scenario.setup_scenario,
+                line_number=scenario.line_number,
+                parameters={
+                    "file_path": scenario.file_path,
+                    "setup_line_number": scenario.setup_line_number
+                }
+            ))
+
         # 4. Final Deduplication
         unique_deps: List[Dependency] = []
         seen = set()
@@ -245,6 +272,9 @@ class FeatureFileParser:
                     )
                 unique_deps.append(d)
                 seen.add(key)
+        
+        # Restore original mapping
+        self.config.base_url_mapping = original_mapping
         
         return unique_deps
 

@@ -154,8 +154,16 @@ function showDetails(nodeId) {
             html += '<hr><div style="font-weight:bold; margin-bottom:5px;">Metadata:</div>';
             for (var key in data.additional_data) {
                 var val = data.additional_data[key];
-                if (val && typeof val !== 'object') {
-                    html += '<div class="detail-row" style="font-size:12px;"><span class="detail-label">' + key + ':</span><span class="detail-value">' + val + '</span></div>';
+                if (val !== null && val !== undefined) {
+                    if (typeof val === 'object') {
+                        html += '<div class="detail-row" style="font-size:12px; align-items:flex-start;"><span class="detail-label" style="margin-top:2px;">' + key + ':</span><div style="display:flex; flex-direction:column; gap:2px;">';
+                        for (var subKey in val) {
+                            html += '<div><span style="color:#666; font-weight:600; text-transform:uppercase;">[' + subKey + ']</span> <span style="word-break:break-all;">' + val[subKey] + '</span></div>';
+                        }
+                        html += '</div></div>';
+                    } else {
+                        html += '<div class="detail-row" style="font-size:12px;"><span class="detail-label">' + key + ':</span><span class="detail-value">' + val + '</span></div>';
+                    }
                 }
             }
         }

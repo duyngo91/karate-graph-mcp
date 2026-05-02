@@ -50,11 +50,30 @@ class NetworkXBuilder:
         return f"{prefix}_{digest}"
 
     def _add_node_internal(self, node_id: str, node_type: NodeType, name: str, metadata: NodeMetadata, extra_data: Dict[str, Any] = None) -> str:
-        """Centralized method to add a node to the graph with consistent data structure."""
-        
-        # Ensure tags are always present and filter out ALM2 tags
+        """Centralized method to add a node to the graph with consistent data structure.
+        Handles merging if node already exists.
+        """
         raw_tags = metadata.additional_data.get("tags", [])
         tags = [t for t in raw_tags if not t.startswith("@ALM2:")]
+
+        if node_id in self.graph:
+            # Merging Logic for duplicate logical nodes (e.g. multi-environment)
+            node = self.graph.nodes[node_id]
+            
+            # 1. Merge tags
+            existing_tags = node.get("tags", [])
+            node["tags"] = list(dict.fromkeys(existing_tags + tags))
+            
+            # 2. Merge environment variants
+            if hasattr(metadata, "environment_variants") and metadata.environment_variants:
+                current_variants = node["metadata"].get("environment_variants", [])
+                node["metadata"]["environment_variants"] = list(dict.fromkeys(current_variants + metadata.environment_variants))
+            
+            # 3. Merge additional data
+            if metadata.additional_data:
+                node["metadata"]["additional_data"].update(metadata.additional_data)
+                
+            return node_id
         
         node_data = {
             "id": node_id,
@@ -66,11 +85,12 @@ class NetworkXBuilder:
                 "line_number": metadata.line_number,
                 "jira_tags": metadata.jira_tags,
                 "project_name": metadata.project_name,
+                "category": metadata.category,
+                "environment_variants": metadata.environment_variants,
                 "additional_data": metadata.additional_data,
             }
         }
         
-        # Merge extra data if provided (for backward compatibility or type-specific fields)
         if extra_data:
             node_data.update(extra_data)
             
@@ -97,6 +117,17 @@ class NetworkXBuilder:
         metadata.additional_data["tags"] = list(dict.fromkeys(existing_tags + scenario.tags))
         
         return self._add_node_internal(node_id, NodeType.TEST_CASE, scenario.name, metadata, extra)
+
+    def get_test_case_id(self, project_name: str, file_path: str, line_number: int, name: str) -> str:
+        """Generate the stable ID for a test case without creating the node."""
+        identity = "|".join([
+            project_name,
+            NodeType.TEST_CASE.value,
+            file_path or "",
+            str(line_number or ""),
+            name,
+        ])
+        return self._generate_stable_node_id(NodeType.TEST_CASE, identity)
 
     def add_workflow_node(self, name: str, metadata: NodeMetadata) -> str:
         """Add workflow node to graph."""
@@ -150,6 +181,12 @@ class NetworkXBuilder:
         identity = "|".join([metadata.project_name, NodeType.LOCATOR.value, locator_path])
         node_id = self._generate_stable_node_id(NodeType.LOCATOR, identity)
         return self._add_node_internal(node_id, NodeType.LOCATOR, locator_path, metadata)
+
+    def add_data_node(self, data_path: str, metadata: NodeMetadata) -> str:
+        """Add external data file node (JSON/CSV) to graph."""
+        identity = "|".join([metadata.project_name, NodeType.DATA.value, data_path])
+        node_id = self._generate_stable_node_id(NodeType.DATA, identity)
+        return self._add_node_internal(node_id, NodeType.DATA, data_path, metadata)
 
     def add_scenario_node(self, scenario_tag: str, workflow_path: str, metadata: NodeMetadata) -> str:
         """Add workflow scenario node to graph (@AddPayment, etc.)."""

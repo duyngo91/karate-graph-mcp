@@ -34,6 +34,7 @@ LEGEND_HTML_BODY = """
         <div class="legend-item"><span class="legend-color" style="background: #FF9800; transform: rotate(45deg);"></span><strong>API Method</strong></div>
         <div class="legend-item"><span class="legend-color" style="background: #FF5722; clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);"></span><strong>Domain (Root)</strong></div>
         <div class="legend-item"><span class="legend-color" style="background: #FFB74D; border-radius: 50%;"></span><strong>API Path</strong></div>
+        <div class="legend-item"><span class="legend-color" style="background: #795548; border-radius: 4px;"></span><strong>Data (JSON/CSV)</strong></div>
         <div class="legend-item"><span class="legend-color" style="background: #9C27B0; clip-path: polygon(50% 0%, 0% 100%, 100% 100%);"></span><strong>Page Object</strong></div>
         <div class="legend-item"><span class="legend-color" style="background: #E91E63; transform: rotate(45deg);"></span><strong>Action (@tag)</strong></div>
         <div class="legend-item"><span class="legend-color" style="background: #F44336; border-radius: 4px;"></span><strong>Database</strong></div>

@@ -31,6 +31,7 @@ class GraphVisualizer:
         NodeType.PAGE: "#9C27B0",         # Purple
         NodeType.ACTION: "#E91E63",       # Pink
         NodeType.DATABASE: "#F44336",     # Red
+        NodeType.DATA: "#795548",         # Brown (Data files)
         NodeType.LOCATOR: "#9E9E9E",      # Grey
     }
 
@@ -123,10 +124,27 @@ class GraphVisualizer:
         """Add nodes and edges from the dependency graph using mode-specific coloring."""
         # 1. Add Nodes
         for node in self.graph.nodes.values():
-            mass = 5 if node.type == NodeType.API_GROUP and node.metadata.additional_data.get("level") == 0 else 1
+            level = node.metadata.additional_data.get("level", 0)
+            is_root_domain = (node.type == NodeType.API_GROUP and level == 0)
+            is_api_path = (node.type == NodeType.API_GROUP and level > 0)
+            
+            mass = 5 if is_root_domain else 1
             
             # Initialize with default type-based styles
             color = self.NODE_COLORS.get(node.type, "#808080")
+            shape = self.NODE_SHAPES.get(node.type, "dot")
+            size = 25
+            
+            # Sub-type styling for API Groups
+            if is_root_domain:
+                color = "#FF5722" # Deep Orange
+                shape = "hexagon"
+                size = 40
+            elif is_api_path:
+                color = "#FFB74D" # Lighter Orange
+                shape = "dot"
+                size = 25
+
             border_width = 1
             border_color = "#2c3e50"
             node_name = node.name
@@ -142,8 +160,6 @@ class GraphVisualizer:
                     border_width = 3
                     border_color = color
                 else:
-                    # Keep type color but maybe fade it? 
-                    # For now, let's use NEUTRAL gray to emphasize run nodes
                     color = self.STATUS_COLORS["NEUTRAL"]
                     border_width = 1
             
@@ -162,8 +178,7 @@ class GraphVisualizer:
                     border_width = 3
                     border_color = color
                 else:
-                    # Unchanged nodes in Diff mode
-                    color = self.STATUS_COLORS["NEUTRAL"] # Brown
+                    color = self.STATUS_COLORS["NEUTRAL"]
                     border_width = 1
             
             net.add_node(
@@ -172,8 +187,8 @@ class GraphVisualizer:
                 title=self._build_tooltip(node),
                 color={"background": color, "border": border_color},
                 borderWidth=border_width,
-                shape=self.NODE_SHAPES.get(node.type, "dot"),
-                size=40 if mass > 1 else 25,
+                shape=shape,
+                size=size,
                 mass=mass
             )
 
@@ -232,6 +247,17 @@ class GraphVisualizer:
     def _build_tooltip(self, node: Any) -> str:
         parts = [f"<b>{node.name}</b>", f"<b>Type:</b> {node.type.value}", f"ID: {node.id}"]
         if node.metadata.file_path: parts.append(f"<b>File:</b> {node.metadata.file_path}")
+        
+        # Add API specific info
+        if node.type == NodeType.API_GROUP:
+            level = node.metadata.additional_data.get("level")
+            if level is not None:
+                parts.append(f"<b>Hierarchy Level:</b> {level}")
+            
+            phys_url = node.metadata.additional_data.get("physical_url")
+            if phys_url:
+                parts.append(f"<b>Physical URL:</b> {phys_url}")
+                
         if node.metadata.jira_tags: parts.append(f"<b>Jira:</b> {', '.join(node.metadata.jira_tags)}")
         clean_tags = [t for t in node.tags if not (t.startswith("@ALM2:") or t == "@ignore")]
         if clean_tags: parts.append(f"<b>Tags:</b> {', '.join(clean_tags)}")

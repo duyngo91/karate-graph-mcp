@@ -42,6 +42,24 @@ def register_project(
     return analyzer_tool.register_project(name, root_path, feature_file_patterns, parser_config)
 
 @mcp.tool()
+def delete_project(name: str) -> Dict[str, Any]:
+    """
+    Delete a project from the registry and in-memory cache.
+    
+    Args:
+        name: Name of the project to delete.
+    """
+    return analyzer_tool.delete_project(name)
+
+@mcp.tool()
+def clear_all_projects() -> Dict[str, Any]:
+    """
+    Clear all registered projects from the registry and in-memory cache.
+    Useful for resetting the analyzer state.
+    """
+    return analyzer_tool.clear_all_projects()
+
+@mcp.tool()
 def list_projects() -> List[Dict[str, Any]]:
     """List all registered projects and their analysis status."""
     return analyzer_tool.list_projects()

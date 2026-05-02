@@ -6,7 +6,7 @@ their file paths and directory structures.
 """
 
 from typing import TYPE_CHECKING
-from karate_graph_analyzer.models import NodeType, Scenario
+from karate_graph_analyzer.models import NodeType, Scenario, ComponentCategory
 from typing import Optional
 
 if TYPE_CHECKING:
@@ -125,5 +125,22 @@ class PathClassifier:
         for pattern in exclude_patterns:
             if pattern in normalized_path:
                 return None
-        
         return self.detect_business_domain(file_path)
+
+    def classify_component_category(self, file_path: str) -> ComponentCategory:
+        """Classify a component as BUSINESS or INFRASTRUCTURE based on path heuristics."""
+        if not file_path:
+            return ComponentCategory.UNKNOWN
+            
+        normalized = file_path.replace('\\', '/').lower()
+        
+        # Heuristics for infrastructure/framework internal components
+        infra_keywords = [
+            'internal', 'util', 'framework', 'core', 'base', 'parallel', 
+            'setup', 'teardown', 'driver', 'mock', 'temp', 'io/karatelabs'
+        ]
+        
+        if any(kw in normalized for kw in infra_keywords):
+            return ComponentCategory.INFRASTRUCTURE
+            
+        return ComponentCategory.BUSINESS

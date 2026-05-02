@@ -9,6 +9,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
+from karate_graph_analyzer.utils.path_resolver import PathResolver
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class KarateConfigParser:
         """
         self.project_root = Path(project_root)
         self.config_cache: Dict[str, Dict[str, str]] = {}
+        self.global_reverse_mapping: Dict[str, str] = {}  # physical -> logical
     
     def find_config_files(self) -> List[Path]:
         """Find all karate-config*.js files in the project.
@@ -69,24 +71,57 @@ class KarateConfigParser:
             # - 'varName' : 'value'
             # - var/let/const varName = 'value'
             patterns = [
-                r"['\"](\w+)['\"]\s*:\s*['\"]([^'\"]+)['\"]",
-                r"(?:var|let|const)\s+(\w+)\s*=\s*['\"]([^'\"]+)['\"]",
-                r"(\w+)\s*=\s*['\"]([^'\"]+)['\"]"
+                r"['\"]([\w\.]+)['\"]\s*:\s*['\"]([^'\"]+)['\"]",
+                r"(?:var|let|const)\s+([\w\.]+)\s*=\s*['\"]([^'\"]+)['\"]",
+                r"([\w\.]+)\s*=\s*['\"]([^'\"]+)['\"]"
             ]
             
             for pattern in patterns:
                 matches = re.findall(pattern, content)
                 for var_name, value in matches:
+                    # Strip 'config.' prefix if present
+                    if var_name.startswith('config.'):
+                        var_name = var_name[7:]
+                        
                     # Nới lỏng filter: Bất kỳ biến nào có giá trị trông giống đường dẫn hoặc URL đều lấy
                     if self._is_url_or_path_variable(var_name, value):
                         variables[var_name] = value
+                        self.global_reverse_mapping[value] = var_name
                         logger.debug(f"Extracted: {var_name} = {value}")
             
-            # 2. Extract nested objects (e.g., let services = { ... })
+            # 2. Extract nested objects (e.g., let environments = { ... })
             nested_vars = self.parse_nested_objects(content)
             for key, value in nested_vars.items():
-                variables[key] = value
-                logger.debug(f"Extracted nested: {key} = {value}")
+                # Strip common wrapper prefixes to match how they are used in Karate
+                clean_key = key
+                prefixes_to_strip = ['environments.', 'envConfig.', 'config.', 'pathConfig.', 'basicConfig.']
+                for prefix in prefixes_to_strip:
+                    if clean_key.startswith(prefix):
+                        clean_key = clean_key[len(prefix):]
+                        break
+                
+                variables[clean_key] = value
+                self.global_reverse_mapping[value] = clean_key
+                logger.debug(f"Extracted nested: {clean_key} = {value}")
+                
+                # Also keep the full key for safety if it's different
+                if clean_key != key:
+                    variables[key] = value
+                    # Note: We prioritize the short name in global_reverse_mapping
+            
+            # 3. Detect read('...json')
+            json_reads = re.findall(r"read\s*\(\s*['\"]([^'\"]+\.json)['\"]\s*\)", content)
+            for json_file in json_reads:
+                # Try to resolve relative to config_path
+                json_path = config_path.parent / json_file
+                if not json_path.exists():
+                    # Fallback to project root
+                    json_path = self.project_root / json_file
+                
+                if json_path.exists():
+                    json_vars = self.parse_json_config(json_path)
+                    variables.update(json_vars)
+                    logger.debug(f"Extracted {len(json_vars)} variables from {json_file}")
             
             logger.info(f"Parsed {config_path.name}: {len(variables)} variables")
             return variables
@@ -97,34 +132,91 @@ class KarateConfigParser:
     
     def _is_url_or_path_variable(self, var_name: str, value: str) -> bool:
         """Check if a variable is a URL or path variable."""
-        # 1. Check value patterns (High priority)
-        # Any value starting with common Karate path prefixes
+        if not value or len(value) > 255:
+            return False
+            
+        # 1. Filter out code-like strings
+        logic_keywords = ["var ", "let ", "const ", "if (", "karate.log(", "return ", ";", "{", "}", "\n", "\r"]
+        if any(keyword in value for keyword in logic_keywords):
+            return False
+
+        # 2. Check value patterns (High priority)
         value_patterns = [
             'http://', 'https://', 'classpath:', 'file:', '/', './', '../'
         ]
         
         lower_val = value.lower()
-        if any(pattern in lower_val for pattern in value_patterns):
+        if lower_val == '/':
+            return False
+
+        if any(lower_val.startswith(pattern) for pattern in value_patterns):
             return True
             
-        # 2. Check extension-like values
+        # 3. Check name-based heuristics but ONLY if value looks path-like
+        # A path-like value should contain at least one slash or be a domain-like string
+        name_lower = var_name.lower()
+        is_path_like_name = any(k in name_lower for k in ['url', 'endpoint', 'host', 'base', 'path'])
+        
+        if is_path_like_name:
+            # If name says it's a URL, but value is just a short string without slash, it's risky
+            if '/' in value or '.' in value or len(value) > 10:
+                return True
+
+        # 4. Check extension-like values
         if any(lower_val.endswith(ext) for ext in ['.json', '.feature', '.yaml', '.yml', '.js', '.csv']):
             return True
-
-        # 3. Check variable name patterns (Fallback)
-        name_patterns = [
-            'url', 'path', 'endpoint', 'service', 'api', 
-            'page', 'locator', 'feature', 'data', 'base', 'host'
-        ]
         
-        if any(pattern in var_name.lower() for pattern in name_patterns):
-            return True
-        
-        # 4. If the variable name is all caps, it's likely a constant/config
+        # 5. If the variable name is all caps, it's likely a constant/config
         if var_name.isupper() and len(var_name) > 2:
             return True
             
         return False
+    
+    def parse_json_config(self, json_path: Path) -> Dict[str, str]:
+        """Parse a JSON configuration file, identifying potential environment-specific blocks.
+        
+        Args:
+            json_path: Path to the JSON file
+            
+        Returns:
+            Dictionary of extracted logical variables
+        """
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            variables = {}
+            # Common environment keywords to look for
+            environments = ['sit', 'stg', 'uat', 'prod', 'dev', 'local', 'test', 'sit-v6']
+            
+            if isinstance(data, dict):
+                # Heuristic: if top-level contains env keys, flatten them
+                found_env = False
+                for key in data:
+                    if key.lower() in environments and isinstance(data[key], dict):
+                        found_env = True
+                        for var_name, value in data[key].items():
+                            if isinstance(value, str) and self._is_url_or_path_variable(var_name, value):
+                                variables[var_name] = value
+                                self.global_reverse_mapping[value] = var_name
+                
+                if not found_env:
+                    # Flat JSON or nested without env keys
+                    self._extract_from_dict(data, variables)
+            
+            return variables
+        except Exception as e:
+            logger.error(f"Failed to parse JSON config {json_path}: {e}")
+            return {}
+
+    def _extract_from_dict(self, data: Dict, variables: Dict, parent_key: str = ""):
+        """Helper to recursively extract variables from a dictionary."""
+        for k, v in data.items():
+            full_key = f"{parent_key}.{k}" if parent_key else k
+            if isinstance(v, dict):
+                self._extract_from_dict(v, variables, full_key)
+            elif isinstance(v, str) and self._is_url_or_path_variable(k, v):
+                variables[full_key] = v
     
     def parse_all_configs(self) -> Dict[str, str]:
         """Parse all karate-config*.js files and merge variables.
@@ -146,15 +238,44 @@ class KarateConfigParser:
         return all_variables
     
     def get_base_url_mapping(self) -> Dict[str, str]:
-        """Get base URL mapping for parser configuration.
-        
-        This is a convenience method that returns variables in the format
-        expected by ParserConfig.base_url_mapping.
-        
-        Returns:
-            Dictionary suitable for ParserConfig.base_url_mapping
-        """
+        """Get base URL mapping for parser configuration."""
         return self.parse_all_configs()
+    
+    def get_scoped_config_mapping(self) -> Dict[str, Dict[str, str]]:
+        """Map directory paths to their specific variables extracted from local configs."""
+        mapping = {}
+        config_files = self.find_config_files()
+        
+        for config_file in config_files:
+            # Normalize path for matching
+            dir_path = PathResolver.normalize_path(str(config_file.parent))
+            mapping[dir_path] = self.parse_config_file(config_file)
+            
+        return mapping
+        
+    def get_env_url_mapping(self) -> Dict[str, Dict[str, str]]:
+        """Extract environment specific URLs mapping: var_name -> {env_name: url}"""
+        env_mapping = {}
+        config_files = self.find_config_files()
+        
+        for config_file in config_files:
+            variables = self.parse_config_file(config_file)
+            
+            # Determine env name from file name (e.g. karate-config-env-sit.js -> sit)
+            env_name = "default"
+            match = re.search(r'karate-config(?:-env)?-(.+?)\.js$', config_file.name, re.IGNORECASE)
+            if match:
+                env_name = match.group(1).lower()
+            elif "karate-config.js" == config_file.name:
+                env_name = "default"
+                
+            for k, v in variables.items():
+                if k not in env_mapping:
+                    env_mapping[k] = {}
+                env_mapping[k][env_name] = v
+                
+        return env_mapping
+    
     
     def parse_nested_objects(self, content: str, parent_key: str = "") -> Dict[str, str]:
         """Parse nested objects from JavaScript content recursively.
@@ -326,4 +447,7 @@ def auto_detect_config(project_root: str) -> Dict[str, str]:
         {'t24Url': 'https://t24.com', 'demoUrl': 'https://...', ...}
     """
     parser = KarateConfigParser(project_root)
-    return parser.get_base_url_mapping()
+    variables = parser.get_base_url_mapping()
+    # Inject reverse mapping into the return if needed, 
+    # but usually we want the full parser object for complex tasks.
+    return variables

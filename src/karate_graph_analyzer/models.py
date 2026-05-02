@@ -27,6 +27,8 @@ class DependencyType(str, Enum):
     PAGE = "PAGE"
     DATABASE = "DATABASE"
     LOCATOR = "LOCATOR"
+    SETUP = "SETUP"
+    DATA = "DATA"
 
 
 class NodeType(str, Enum):
@@ -42,6 +44,15 @@ class NodeType(str, Enum):
     ACTION = "ACTION"  # Page action (@login, @navigate)
     DATABASE = "DATABASE"
     LOCATOR = "LOCATOR"
+    DATA = "DATA"
+
+
+class ComponentCategory(str, Enum):
+    """Broad category for component classification."""
+
+    BUSINESS = "BUSINESS"
+    INFRASTRUCTURE = "INFRASTRUCTURE"
+    UNKNOWN = "UNKNOWN"
 
 
 @dataclass
@@ -74,6 +85,8 @@ class Scenario:
     line_number: int
     steps: List[Step]
     examples: Optional[Examples] = None
+    setup_scenario: Optional[str] = None  # Name of the @setup scenario for this outline
+    setup_line_number: Optional[int] = None  # Line number of the @setup scenario
 
 
 @dataclass
@@ -94,6 +107,8 @@ class NodeMetadata:
     line_number: Optional[int]
     jira_tags: List[str]
     project_name: str
+    category: ComponentCategory = ComponentCategory.UNKNOWN
+    environment_variants: List[str] = field(default_factory=list)  # Physical paths/URLs for this logical node
     additional_data: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -265,9 +280,13 @@ class ParserConfig:
     page_object_directories: List[str] = field(default_factory=lambda: ["pages", "webPages"])
     locator_directories: List[str] = field(default_factory=lambda: ["locators", "resources/locators"])
     variable_patterns: Dict[str, str] = field(default_factory=dict)
+    base_url_mapping: Dict[str, str] = field(default_factory=dict)
+    global_reverse_mapping: Dict[str, str] = field(default_factory=dict)  # physical -> logical
     api_extraction_rules: List[str] = field(
         default_factory=lambda: [
             r"url\s+['\"]([^'\"]+)['\"]",  # url 'http://...'
+            r"url\s+['\"]([^'\"]+)['\"]\s*\+", # url 'http://...' + var
+            r"url\s+[\w\.]+\s*\+\s*['\"]([^'\"]+)['\"]", # url baseUrl + '/endpoint'
             r"baseUrl\s*\+\s*['\"]([^'\"]+)['\"]",  # baseUrl + '/endpoint'
         ]
     )
@@ -278,6 +297,16 @@ class ParserConfig:
             "${baseUrl}": "https://api.example.com",
         }
     )
+    
+    # Scoped URL mappings - maps directory paths to variable dictionaries
+    scoped_url_mappings: Dict[str, Dict[str, str]] = field(default_factory=dict)
+
+    # Multi-environment mapping - maps variable names to environment dictionary
+    # e.g., "t24Url": {"sit": "https://sit.t24.com", "stg": "https://t24.com"}
+    env_url_mapping: Dict[str, Dict[str, str]] = field(default_factory=dict)
+
+    # Reverse mapping for logical name resolution (physical -> logical)
+    global_reverse_mapping: Dict[str, str] = field(default_factory=dict)
 
     # Tags to ignore for node identification and display (regression/technical tags)
     metadata_tags: List[str] = field(
@@ -300,6 +329,25 @@ class ParserConfig:
             'admin': 'Administration', 'report': 'Reporting', 'reports': 'Reporting', 'analytics': 'Analytics',
         }
     )
+
+    def get_config_for_path(self, file_path: str) -> Dict[str, str]:
+        """Get the most specific variable mapping for a given file path."""
+        if not self.scoped_url_mappings:
+            return self.base_url_mapping
+            
+        norm_path = re.sub(r'\\', '/', file_path)
+        
+        # Sort keys by length descending to match longest (most specific) path first
+        sorted_dirs = sorted(self.scoped_url_mappings.keys(), key=len, reverse=True)
+        
+        for d in sorted_dirs:
+            if norm_path.startswith(d):
+                # Found a matching directory, merge with base mapping
+                merged = self.base_url_mapping.copy()
+                merged.update(self.scoped_url_mappings[d])
+                return merged
+                
+        return self.base_url_mapping
 
 
 @dataclass
@@ -343,66 +391,60 @@ class InvertedIndices:
         self.action_tag_index: Dict[str, List[str]] = {}  # @tag → [action_node_ids]
         self.domain_index: Dict[str, List[str]] = {}  # domain → [api_node_ids]
         self.http_method_index: Dict[str, List[str]] = {}  # method → [api_node_ids]
+        self.data_file_index: Dict[str, List[str]] = {}  # file_path → [data_node_ids]
+
+    def _add_to_index(self, index: Dict[str, List[str]], key: str, node_id: str) -> None:
+        """Helper to add a key to a specific index dictionary."""
+        if not key:
+            return
+        if key not in index:
+            index[key] = []
+        if node_id not in index[key]:
+            index[key].append(node_id)
 
     def add_jira_tag(self, tag: str, node_id: str) -> None:
         """Add a Jira tag to node mapping."""
-        if tag not in self.jira_tag_index:
-            self.jira_tag_index[tag] = []
-        if node_id not in self.jira_tag_index[tag]:
-            self.jira_tag_index[tag].append(node_id)
+        self._add_to_index(self.jira_tag_index, tag, node_id)
 
     def add_api_endpoint(self, endpoint: str, node_id: str) -> None:
         """Add an API endpoint to node mapping."""
-        if endpoint not in self.api_endpoint_index:
-            self.api_endpoint_index[endpoint] = []
-        if node_id not in self.api_endpoint_index[endpoint]:
-            self.api_endpoint_index[endpoint].append(node_id)
+        self._add_to_index(self.api_endpoint_index, endpoint, node_id)
 
     def add_page_object(self, page: str, node_id: str) -> None:
         """Add a page object to node mapping."""
-        if page not in self.page_object_index:
-            self.page_object_index[page] = []
-        if node_id not in self.page_object_index[page]:
-            self.page_object_index[page].append(node_id)
+        self._add_to_index(self.page_object_index, page, node_id)
 
     def add_database_op(self, operation: str, node_id: str) -> None:
         """Add a database operation to node mapping."""
-        if operation not in self.database_op_index:
-            self.database_op_index[operation] = []
-        if node_id not in self.database_op_index[operation]:
-            self.database_op_index[operation].append(node_id)
+        self._add_to_index(self.database_op_index, operation, node_id)
     
     def add_scenario_tag(self, tag: str, node_id: str) -> None:
         """Add a scenario tag to node mapping."""
-        if tag not in self.scenario_tag_index:
-            self.scenario_tag_index[tag] = []
-        if node_id not in self.scenario_tag_index[tag]:
-            self.scenario_tag_index[tag].append(node_id)
+        self._add_to_index(self.scenario_tag_index, tag, node_id)
     
     def add_action_tag(self, tag: str, node_id: str) -> None:
         """Add an action tag to node mapping."""
-        if tag not in self.action_tag_index:
-            self.action_tag_index[tag] = []
-        if node_id not in self.action_tag_index[tag]:
-            self.action_tag_index[tag].append(node_id)
+        self._add_to_index(self.action_tag_index, tag, node_id)
     
     def add_domain(self, domain: str, node_id: str) -> None:
         """Add a domain to API node mapping."""
-        if domain not in self.domain_index:
-            self.domain_index[domain] = []
-        if node_id not in self.domain_index[domain]:
-            self.domain_index[domain].append(node_id)
-    
+        self._add_to_index(self.domain_index, domain, node_id)
+        
     def add_http_method(self, method: str, node_id: str) -> None:
         """Add an HTTP method to API node mapping."""
-        if method not in self.http_method_index:
-            self.http_method_index[method] = []
-        if node_id not in self.http_method_index[method]:
-            self.http_method_index[method].append(node_id)
+        self._add_to_index(self.http_method_index, method, node_id)
+
+    def add_data_file(self, file_path: str, node_id: str) -> None:
+        """Add a data file path to node mapping."""
+        self._add_to_index(self.data_file_index, file_path, node_id)
 
     def get_by_jira_tag(self, tag: str) -> List[str]:
         """Get all node IDs associated with a Jira tag."""
         return self.jira_tag_index.get(tag, [])
+
+    def get_by_data_file(self, file_path: str) -> List[str]:
+        """Get all node IDs associated with a data file."""
+        return self.data_file_index.get(file_path, [])
 
     def get_by_api_endpoint(self, endpoint: str) -> List[str]:
         """Get all node IDs associated with an API endpoint."""
@@ -443,6 +485,7 @@ class InvertedIndices:
         self.action_tag_index.clear()
         self.domain_index.clear()
         self.http_method_index.clear()
+        self.data_file_index.clear()
         
         # Build indices by scanning all nodes
         for node_id, node in graph.nodes.items():
@@ -453,7 +496,12 @@ class InvertedIndices:
             # Index by node type
             if node.type == NodeType.API:
                 self.add_api_endpoint(node.name, node_id)
-                for key in ("full_url", "path", "path_template"):
+                
+                # Multi-key environment indexing
+                for variant in node.metadata.environment_variants:
+                    self.add_api_endpoint(variant, node_id)
+
+                for key in ("full_url", "path", "path_template", "physical_url"):
                     endpoint = node.metadata.additional_data.get(key)
                     if endpoint:
                         self.add_api_endpoint(endpoint, node_id)
@@ -481,6 +529,16 @@ class InvertedIndices:
                 action_tag = node.metadata.additional_data.get('action_tag')
                 if action_tag:
                     self.add_action_tag(action_tag, node_id)
+            
+            elif node.type == NodeType.DATA:
+                self.add_data_file(node.name, node_id)
+                # Index environment-specific physical paths
+                for variant in node.metadata.environment_variants:
+                    self.add_data_file(variant, node_id)
+                
+                physical_path = node.metadata.additional_data.get('physical_path')
+                if physical_path:
+                    self.add_data_file(physical_path, node_id)
 
 
 @dataclass

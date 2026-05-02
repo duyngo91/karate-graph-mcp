@@ -47,7 +47,7 @@ class CallReadExtractor(IDependencyExtractor):
             expression = match.group(1)
             params_str = match.group(2).strip() if match.group(2) else ""
             
-            resolved_path, scenario_tag = self._resolve_variable_expression(expression)
+            resolved_path, scenario_tag, logical_path = self._resolve_variable_expression(expression)
             dep_type = self._classify_call_dependency(resolved_path)
             
             dep_params = self._build_resolution_params(resolved_path)
@@ -57,9 +57,14 @@ class CallReadExtractor(IDependencyExtractor):
             dependencies.append(
                 Dependency(
                     type=dep_type,
-                    target=resolved_path,
+                    target=logical_path or resolved_path,
                     line_number=line_number,
-                    parameters=dep_params,
+                    parameters={
+                        **dep_params,
+                        "original_expression": expression,
+                        "physical_path": resolved_path if logical_path else None,
+                        "scenario_tag": scenario_tag
+                    },
                 )
             )
 
@@ -69,7 +74,7 @@ class CallReadExtractor(IDependencyExtractor):
                 expression = match.group(1).strip()
                 if expression.startswith(("'", '"')): continue
                 
-                resolved_path, scenario_tag = self._resolve_variable_expression(expression)
+                resolved_path, scenario_tag, logical_path = self._resolve_variable_expression(expression)
                 dep_type = self._classify_call_dependency(resolved_path)
                 
                 dep_params = self._build_resolution_params(resolved_path)
@@ -78,15 +83,27 @@ class CallReadExtractor(IDependencyExtractor):
                 dependencies.append(
                     Dependency(
                         type=dep_type,
-                        target=resolved_path,
+                        target=logical_path or resolved_path,
                         line_number=line_number,
-                        parameters=dep_params,
+                        parameters={
+                            **dep_params,
+                            "original_expression": expression,
+                            "physical_path": resolved_path if logical_path else None,
+                            "scenario_tag": scenario_tag
+                        },
                     )
                 )
 
         return dependencies
 
     def _classify_call_dependency(self, path: str) -> DependencyType:
+        path_lower = path.lower()
+        
+        # 1. Detect Data files
+        if any(path_lower.endswith(ext) for ext in ['.json', '.csv', '.yaml', '.yml']):
+            return DependencyType.DATA
+            
+        # 2. Detect by directory
         path_parts = [p.lower() for p in path.replace("\\", "/").split("/")[:-1]]
         
         if any(d.lower() in path_parts for d in getattr(self.config, "locator_directories", ["locators"])):
@@ -106,47 +123,66 @@ class CallReadExtractor(IDependencyExtractor):
             return {"unresolved": True, "reason": "contains_karate_expression"}
         return {}
 
-    def _resolve_variable_expression(self, expression: str) -> Tuple[str, Optional[str]]:
+    def _resolve_variable_expression(self, expression: str) -> Tuple[str, Optional[str], Optional[str]]:
+        """Resolve a variable expression to (physical_path, scenario_tag, logical_path)."""
         expression = expression.strip()
         scenario_tag = None
+        logical_path = None
 
         # Handle cases like: read(var '@tag') or read(var, '@tag')
-        # Check for @ outside of quotes or in a trailing string
         if "@" in expression:
-            # Check if it's like: var '@tag'
             match = re.search(r"['\"]?@([\w\-_]+)['\"]?\s*$", expression)
             if match:
                 scenario_tag = match.group(1)
-                # Remove the tag part from expression
                 expression = expression[:match.start()].strip().rstrip(",")
             else:
-                # Fallback for standard @ separator
                 parts = expression.split("@", 1)
                 expression = parts[0].strip()
                 scenario_tag = parts[1].strip().strip("\"'")
 
         if "+" in expression:
-            parts = expression.split("+")
-            resolved_path = "".join(self._resolve_single_variable(p.strip().strip("\"'")) for p in parts)
+            parts = [p.strip() for p in expression.split("+")]
+            resolved_parts = []
+            logical_parts = []
+            has_variable = False
+            
+            for p in parts:
+                raw = p.strip("\"'")
+                # Check if it's a known variable from config
+                res = self.config.variable_patterns.get(raw)
+                if res and not p.startswith(("'","\"")):
+                    resolved_parts.append(res)
+                    logical_parts.append(f"${{{raw}}}")
+                    has_variable = True
+                else:
+                    resolved_parts.append(raw)
+                    logical_parts.append(raw)
+            
+            resolved_path = "".join(resolved_parts)
+            if has_variable:
+                logical_path = "".join(logical_parts)
         else:
-            # Also handle potential comma-separated arguments where the first is the variable
-            first_arg = expression.split(",")[0].strip()
-            resolved_path = self._resolve_single_variable(first_arg.strip("\"'"))
+            first_arg = expression.split(",")[0].strip().strip("\"'")
+            resolved_path = self.config.variable_patterns.get(first_arg, first_arg)
+            if first_arg in self.config.variable_patterns and not expression.strip().startswith(("'","\"")):
+                logical_path = f"${{{first_arg}}}"
 
         # Normalize separators BEFORE stripping prefixes
         resolved_path = resolved_path.replace("\\", "/")
-        if resolved_path.startswith("classpath:/"):
-            resolved_path = resolved_path[11:]
-        elif resolved_path.startswith("classpath:"):
-            resolved_path = resolved_path[10:]
         
-        # Strip leading slashes after prefix removal
-        resolved_path = resolved_path.lstrip("/")
-
-        return resolved_path, scenario_tag
+        # If it's a classpath: path, keep it relative to resources
+        if resolved_path.startswith("classpath:"):
+            resolved_path = resolved_path.replace("classpath:", "").lstrip("/")
+            
+        return resolved_path, scenario_tag, logical_path
 
     def _resolve_single_variable(self, var_expression: str) -> str:
         var_expression = var_expression.strip()
         if "/" in var_expression or "\\" in var_expression:
             return var_expression
+            
+        # Logical Logic: If it's a known variable like dataPath, 
+        # we might want to keep the name for the graph ID but 
+        # for now we return the resolved value to maintain path resolution.
+        # The 'original_expression' parameter will help in logical merging.
         return self.config.variable_patterns.get(var_expression, var_expression)

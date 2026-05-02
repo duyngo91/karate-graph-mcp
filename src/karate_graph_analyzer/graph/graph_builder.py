@@ -169,6 +169,7 @@ class GraphBuilder:
                 metadata = NodeMetadata(
                     file_path=scenario.file_path, line_number=scenario.line_number,
                     jira_tags=scenario.jira_tags, project_name=project.name,
+                    category=self.path_classifier.classify_component_category(scenario.file_path),
                     additional_data={"scenario_type": scenario.type.value, "tags": scenario.tags},
                 )
 

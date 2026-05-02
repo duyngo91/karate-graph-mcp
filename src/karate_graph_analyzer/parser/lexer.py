@@ -42,8 +42,8 @@ class GherkinLexer:
         self._patterns = {
             GherkinTokenType.FEATURE: re.compile(r"^\s*Feature\s*:?\s*(.*)$", re.IGNORECASE),
             GherkinTokenType.BACKGROUND: re.compile(r"^\s*Background\s*:?\s*$", re.IGNORECASE),
-            GherkinTokenType.SCENARIO: re.compile(r"^\s*Scenario\s*:?\s*(.*)$", re.IGNORECASE),
             GherkinTokenType.SCENARIO_OUTLINE: re.compile(r"^\s*Scenario Outline\s*:?\s*(.*)$", re.IGNORECASE),
+            GherkinTokenType.SCENARIO: re.compile(r"^\s*Scenario\s*:?\s*(.*)$", re.IGNORECASE),
             GherkinTokenType.EXAMPLES: re.compile(r"^\s*Examples:\s*$", re.IGNORECASE),
             GherkinTokenType.STEP: re.compile(r"^\s*(Given|When|Then|And|But|\*)\s+(.+)$", re.IGNORECASE),
             GherkinTokenType.TAG: re.compile(r"^\s*@"),

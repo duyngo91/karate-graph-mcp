@@ -20,17 +20,31 @@ class DatabaseExtractor(IDependencyExtractor):
 
     def __init__(self, config: ParserConfig) -> None:
         self.config = config
-        self.DB_KEYWORDS = [
-            re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE)\b", re.IGNORECASE),
+        self.DB_PREFIXES = [
             re.compile(r"\b(db|database)\s*\.", re.IGNORECASE),
+        ]
+        self.DB_SQL_PATTERNS = [
+            re.compile(r"\bSELECT\s+.*?\s+FROM\b", re.IGNORECASE),
+            re.compile(r"\bINSERT\s+INTO\b", re.IGNORECASE),
+            re.compile(r"\bUPDATE\s+.*?\s+SET\b", re.IGNORECASE),
+            re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE),
+            re.compile(r"\bCREATE\s+(TABLE|DATABASE|INDEX|VIEW)\b", re.IGNORECASE),
+            re.compile(r"\bDROP\s+(TABLE|DATABASE|INDEX|VIEW)\b", re.IGNORECASE),
+            re.compile(r"\bALTER\s+TABLE\b", re.IGNORECASE),
+            re.compile(r"\bTRUNCATE\s+TABLE\b", re.IGNORECASE),
+            re.compile(r"\bUSE\s+[a-zA-Z_]\b", re.IGNORECASE),
         ]
 
     def can_extract(self, step_text: str) -> bool:
-        return any(pattern.search(step_text) for pattern in self.DB_KEYWORDS)
+        # Check for explicit prefixes first (highest confidence)
+        if any(pattern.search(step_text) for pattern in self.DB_PREFIXES):
+            return True
+        # Check for structural SQL patterns
+        return any(pattern.search(step_text) for pattern in self.DB_SQL_PATTERNS)
 
     def extract(self, step_text: str, line_number: int) -> List[Dependency]:
         details = self._parse_database_details(step_text)
-        if not details and not any(p.search(step_text) for p in self.DB_KEYWORDS):
+        if not details and not self.can_extract(step_text):
             return []
 
         target_parts = []
@@ -52,7 +66,7 @@ class DatabaseExtractor(IDependencyExtractor):
         details = {}
         
         # Operation
-        op_match = re.search(r"\b(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE)\b", step_text, re.IGNORECASE)
+        op_match = re.search(r"\b(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE|USE)\b", step_text, re.IGNORECASE)
         if op_match: details["operation"] = op_match.group(1).upper()
 
         # Table

@@ -144,8 +144,13 @@ class GetApiStatsRequest(BaseModel):
 class GetPageStatsRequest(BaseModel):
     """Request model for get_page_stats."""
 
-    project_name: str = Field(..., min_length=1, description="Name of the project")
     domain: Optional[str] = Field(default=None, description="Optional business domain to filter pages (e.g. 'Authentication')")
+
+
+class DeleteProjectRequest(BaseModel):
+    """Request model for delete_project."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project to delete")
 
 
 class KarateGraphAnalyzerTool:
@@ -202,14 +207,23 @@ class KarateGraphAnalyzerTool:
             if parser_config:
                 config = ParserConfig(**parser_config)
             else:
-                # Auto-detect config from karate-config.js or environment variables
-                from karate_graph_analyzer.parser.config_parser import auto_detect_config
-                auto_config = auto_detect_config(root_path)
-                if auto_config:
-                    logger.info(f"Auto-detected {len(auto_config)} config variables for project '{name}'")
+                # Use a single parser instance to collect all data
+                from karate_graph_analyzer.parser.config_parser import KarateConfigParser
+                config_parser = KarateConfigParser(root_path)
+                
+                # 1. Parse all configs (Root + Cascading)
+                auto_config = config_parser.get_base_url_mapping()
+                
+                # 2. Get scoped configs
+                scoped_configs = config_parser.get_scoped_config_mapping()
+                
+                if auto_config or scoped_configs:
+                    logger.info(f"Auto-detected {len(auto_config)} config variables and {len(scoped_configs)} scoped configs for project '{name}'")
                     config = ParserConfig(
                         base_url_mapping=auto_config,
-                        variable_patterns=auto_config
+                        variable_patterns=auto_config,
+                        scoped_url_mappings=scoped_configs,
+                        global_reverse_mapping=config_parser.global_reverse_mapping
                     )
 
             # Create project - Use broad pattern by default but exclude build artifacts
@@ -244,6 +258,83 @@ class KarateGraphAnalyzerTool:
             return self._error_response(3001, "PROJECT_MANAGEMENT", str(e))
         except Exception as e:
             logger.error(f"Unexpected error registering project '{name}': {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def delete_project(self, name: str) -> Dict[str, Any]:
+        """Delete a project from the registry.
+
+        Args:
+            name: Project name to delete
+
+        Returns:
+            Result dictionary with success status
+        """
+        try:
+            # Validate input
+            request = DeleteProjectRequest(project_name=name)
+
+            # Check if project exists
+            if not self.registry.get(request.project_name):
+                return self._error_response(3003, "PROJECT_MANAGEMENT", f"Project '{name}' not found")
+
+            # Remove from registry
+            self.registry.remove(request.project_name)
+
+            # Remove from in-memory graphs and analyzers
+            if request.project_name in self.graphs:
+                del self.graphs[request.project_name]
+            if request.project_name in self.analyzers:
+                del self.analyzers[request.project_name]
+
+            # Update search tools
+            if self.search_tools:
+                self.search_tools.graphs = self.graphs
+                self.search_tools.query_apis.clear()
+
+            logger.info(f"Deleted project '{name}'")
+
+            return {
+                "success": True,
+                "message": f"Project '{name}' deleted successfully",
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to delete project '{name}': {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def clear_all_projects(self) -> Dict[str, Any]:
+        """Clear all projects from the registry and memory.
+
+        Returns:
+            Result dictionary with success status
+        """
+        try:
+            # Get all project names
+            projects = self.registry.list()
+            count = len(projects)
+
+            # Clear registry
+            for project in projects:
+                self.registry.remove(project.name)
+
+            # Clear memory
+            self.graphs.clear()
+            self.analyzers.clear()
+
+            # Update search tools
+            if self.search_tools:
+                self.search_tools.graphs = self.graphs
+                self.search_tools.query_apis.clear()
+
+            logger.info(f"Cleared all {count} projects")
+
+            return {
+                "success": True,
+                "message": f"All {count} projects cleared successfully",
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to clear projects: {e}")
             return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def list_projects(self) -> List[Dict[str, Any]]:

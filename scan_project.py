@@ -49,9 +49,12 @@ def scan_project(project_root: str, output_name: str = None):
     print(f"\n📁 Project: {project_name}")
     print(f"📂 Root: {project_root}")
     
-    # Auto-detect config from karate-config*.js files
-    print(f"\n🔍 Auto-detecting configuration...")
-    auto_config = auto_detect_config(str(project_path))
+    # Use full parser instance to get all mapping data
+    from karate_graph_analyzer.parser.config_parser import KarateConfigParser
+    config_parser = KarateConfigParser(str(project_path))
+    auto_config = config_parser.get_base_url_mapping()
+    reverse_config = config_parser.global_reverse_mapping
+    scoped_configs = config_parser.get_scoped_config_mapping()
     
     if auto_config:
         print(f"✅ Found {len(auto_config)} environment variables")
@@ -65,10 +68,13 @@ def scan_project(project_root: str, output_name: str = None):
     else:
         print("⚠️  No config variables found")
     
-    # Parser configuration with auto-detected variables
+    # Parser configuration with auto-detected variables and reverse mapping
     parser_config = ParserConfig(
         base_url_mapping=auto_config,
         variable_patterns=auto_config,  # Also use for call read() variable resolution
+        global_reverse_mapping=reverse_config,
+        scoped_url_mappings=scoped_configs,
+        env_url_mapping=config_parser.get_env_url_mapping()
     )
     
     # Create project — exclude target/ and build/ directories (Maven/Gradle compiled copies)

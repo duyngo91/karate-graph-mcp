@@ -84,8 +84,17 @@ class DependencyLinker:
             DependencyType.DATABASE: NodeType.DATABASE,
             DependencyType.LOCATOR: NodeType.LOCATOR,
             DependencyType.COMMON: NodeType.COMMON,
+            DependencyType.DATA: NodeType.DATA,
         }
-        
+
+        if dep.type == DependencyType.SETUP:
+            return self.nx_builder.get_test_case_id(
+                project_name, 
+                dep.parameters.get("file_path"), 
+                dep.parameters.get("setup_line_number"), 
+                dep.target
+            )
+
         node_type = node_type_map[dep.type]
         norm_target = self.normalize_path(dep.target)
         
@@ -106,6 +115,8 @@ class DependencyLinker:
             line_number=dep.line_number,
             jira_tags=[],
             project_name=project_name,
+            category=self.path_classifier.classify_component_category(file_path) if self.path_classifier else ComponentCategory.UNKNOWN,
+            environment_variants=[dep.parameters.get("physical_url")] if dep.parameters.get("physical_url") else [],
             additional_data=dep.parameters,
         )
         
@@ -142,6 +153,7 @@ class DependencyLinker:
             NodeType.PAGE: self.nx_builder.add_page_node,
             NodeType.LOCATOR: self.nx_builder.add_locator_node,
             NodeType.DATABASE: self.nx_builder.add_database_node,
+            NodeType.DATA: self.nx_builder.add_data_node,
         }
         return mapping.get(node_type)
 
@@ -196,17 +208,52 @@ class DependencyLinker:
             
         if not endpoint_clean or endpoint_clean == '/':
             return []
+        endpoint_clean = endpoint.strip()
+        domain = None
+        
+        # Handle protocol
+        protocol = ""
+        if "://" in endpoint_clean:
+            parts = endpoint_clean.split("://", 1)
+            protocol = parts[0] + "://"
+            endpoint_clean = parts[1]
             
         if endpoint_clean.startswith('/'):
             domain, path = None, endpoint_clean
         else:
             parts = endpoint_clean.split('/', 1)
             first_part = parts[0]
-            if '.' in first_part or first_part.startswith('${'):
-                domain = first_part
-                path = '/' + parts[1] if len(parts) > 1 else ''
-            else:
-                domain, path = None, '/' + endpoint_clean
+            path = '/' + parts[1] if len(parts) > 1 else ""
+            
+            # Use global reverse mapping to resolve physical domain back to variable
+            if first_part and self.context and self.context.config:
+                rev_map = self.context.config.global_reverse_mapping
+                if rev_map:
+                    # Try with protocol if we found one
+                    if protocol:
+                        target = f"{protocol}{first_part}"
+                        # Check for exact or prefix match
+                        for phys, logical in sorted(rev_map.items(), key=lambda x: len(x[0]), reverse=True):
+                            if target.startswith(phys):
+                                domain = f"${{{logical}}}"
+                                break
+                    
+                    # Fallback to standard protocols if not resolved
+                    if not domain:
+                        for p in ["https://", "http://"]:
+                            target = f"{p}{first_part}"
+                            for phys, logical in sorted(rev_map.items(), key=lambda x: len(x[0]), reverse=True):
+                                if target.startswith(phys):
+                                    domain = f"${{{logical}}}"
+                                    break
+                            if domain: break
+            
+            if not domain:
+                if '.' in first_part or first_part.startswith('${'):
+                    domain = first_part
+                else:
+                    # No clear domain, treat first part as path
+                    domain, path = None, '/' + endpoint_clean
         
         segments = []
         if domain: segments.append(domain)
@@ -225,7 +272,10 @@ class DependencyLinker:
         if not segments:
             return self.create_single_api_node(endpoint, metadata, node_map)
             
-        static_segments = [seg for seg in segments if '{' not in seg]
+        # Filter out dynamic path params like {id} or {orderId}, but KEEP ${varName} Karate variables
+        # - Dynamic params: {xxx}   → remove (they vary per request)
+        # - Karate vars:   ${xxx}   → keep (they represent logical environments/domains)
+        static_segments = [seg for seg in segments if not re.search(r'(?<!\$)\{[^}]+\}', seg)]
         descriptive_name = self._build_descriptive_api_name(metadata)
         
         # Display name for leaf node
@@ -257,23 +307,46 @@ class DependencyLinker:
     def _build_api_group_chain(self, segments: List[str], base_url: str, metadata: NodeMetadata, node_map: Dict) -> Optional[str]:
         parent_id = None
         for i, segment in enumerate(segments):
+            # cumulative_path must include ALL segments from root to current
+            # to avoid key collision between domain-prefixed and path-only hierarchies
             cumulative_path = '/'.join(segments[:i+1])
             node_key = (NodeType.API_GROUP, cumulative_path)
             
             if node_key in node_map:
                 current_id = node_map[node_key]
             else:
+                # Display name: always use the segment (e.g. "${t24Url}", "api", "v2")
+                # base_url is only stored as metadata for reference, not as the node label
+                display_name = segment
+                additional_data = {
+                    "level": i,
+                    "segment": segment,
+                    "base_url": base_url if i == 0 else None,
+                    "cumulative_segment": cumulative_path
+                }
+                
+                # Check for environment-specific URLs for domain nodes
+                if i == 0 and self.context and self.context.project and self.context.project.parser_config:
+                    var_name = segment.replace("${", "").replace("}", "")
+                    env_map = self.context.project.parser_config.env_url_mapping.get(var_name)
+                    if not env_map: # Try with original segment just in case
+                        env_map = self.context.project.parser_config.env_url_mapping.get(segment)
+                        
+                    if env_map:
+                        additional_data["environments"] = env_map
+
                 group_meta = NodeMetadata(
                     file_path=None, line_number=None, jira_tags=[], project_name=metadata.project_name,
-                    additional_data={"level": i, "segment": segment, "base_url": base_url if i == 0 else None, "cumulative_segment": cumulative_path}
+                    additional_data=additional_data
                 )
-                current_id = self.nx_builder.add_api_group_node(base_url if (i == 0 and base_url) else segment, group_meta)
+                current_id = self.nx_builder.add_api_group_node(display_name, group_meta)
                 node_map[node_key] = current_id
 
             if parent_id and not self.nx_builder.graph.has_edge(parent_id, current_id):
                 self.nx_builder.add_dependency(parent_id, current_id, DependencyType.API)
             parent_id = current_id
         return parent_id
+
 
     def _get_or_create_leaf_api_node(self, endpoint: str, method: str, display: str, metadata: NodeMetadata, parent_id: str, node_map: Dict) -> str:
         # Check for dynamic method existing concrete match
