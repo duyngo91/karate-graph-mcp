@@ -20,7 +20,7 @@ class CallReadExtractor(IDependencyExtractor):
 
     def __init__(self, config: ParserConfig) -> None:
         self.config = config
-        prefix_pattern = r"(?:(?:call|callonce)\s+read|karate\.call(?:Single)?)\s*\(\s*(?:(?:true|false)\s*,\s*)?"
+        prefix_pattern = r"(?:(?:(?:call|callonce)\s+)?read|karate\.call(?:Single)?)\s*\(\s*(?:(?:true|false)\s*,\s*)?"
         
         self._quoted_pattern = re.compile(
             prefix_pattern + r"['\"]([^'\"]+)['\"](?:\s*,\s*(.+?))?\s*\)",
@@ -32,7 +32,7 @@ class CallReadExtractor(IDependencyExtractor):
         )
 
     def can_extract(self, step_text: str) -> bool:
-        return bool(re.search(r"(?:call|callonce)\s+read|karate\.call", step_text, re.IGNORECASE))
+        return bool(re.search(r"(?:(?:call|callonce)\s+)?read|karate\.call", step_text, re.IGNORECASE))
 
     def extract(self, step_text: str, line_number: int) -> List[Dependency]:
         return self._extract_call_read_dependencies(step_text, line_number)

@@ -75,7 +75,7 @@ class DependencyLinker:
             DependencyType.PAGE: NodeType.PAGE,
             DependencyType.DATABASE: NodeType.DATABASE,
             DependencyType.LOCATOR: NodeType.LOCATOR,
-            DependencyType.COMMON: NodeType.WORKFLOW, # Fallback
+            DependencyType.COMMON: NodeType.COMMON,
         }
         
         node_type = node_type_map[dep.type]
@@ -99,8 +99,8 @@ class DependencyLinker:
         # Create node based on type
         norm_target = self.normalize_path(dep.target)
         
-        if dep.type in [DependencyType.WORKFLOW, DependencyType.COMMON]:
-            node_key = (node_type, norm_target)
+        if dep.type == DependencyType.WORKFLOW:
+            node_key = (NodeType.WORKFLOW, norm_target)
             if node_key in node_map:
                 workflow_node_id = node_map[node_key]
             else:
@@ -124,6 +124,32 @@ class DependencyLinker:
                         self.nx_builder.add_dependency(workflow_node_id, scenario_node_id, dep.type)
                 return scenario_node_id
             return workflow_node_id
+            
+        elif dep.type == DependencyType.COMMON:
+            node_key = (NodeType.COMMON, norm_target)
+            if node_key in node_map:
+                common_node_id = node_map[node_key]
+            else:
+                common_node_id = self.nx_builder.add_common_node(norm_target, metadata)
+                node_map[node_key] = common_node_id
+            
+            scenario_tag = dep.parameters.get('scenario_tag')
+            if scenario_tag:
+                scenario_key = (NodeType.SCENARIO, f"{norm_target}#{scenario_tag}")
+                if scenario_key in node_map:
+                    scenario_node_id = node_map[scenario_key]
+                else:
+                    scenario_node_id = self.nx_builder.add_scenario_node(
+                        scenario_tag=scenario_tag,
+                        workflow_path=norm_target,
+                        metadata=metadata
+                    )
+                    node_map[scenario_key] = scenario_node_id
+                    
+                    if not self.nx_builder.graph.has_edge(common_node_id, scenario_node_id):
+                        self.nx_builder.add_dependency(common_node_id, scenario_node_id, dep.type)
+                return scenario_node_id
+            return common_node_id
             
         elif dep.type == DependencyType.API:
             return self.create_api_hierarchy(dep.target, metadata, node_map)

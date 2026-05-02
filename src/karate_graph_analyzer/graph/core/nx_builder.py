@@ -63,6 +63,7 @@ class NetworkXBuilder:
         prefix_map = {
             NodeType.TEST_CASE: "tc",
             NodeType.WORKFLOW: "wf",
+            NodeType.COMMON: "com",
             NodeType.SCENARIO: "scn",
             NodeType.API: "api",
             NodeType.API_GROUP: "apig",
@@ -85,6 +86,7 @@ class NetworkXBuilder:
         prefix_map = {
             NodeType.TEST_CASE: "tc",
             NodeType.WORKFLOW: "wf",
+            NodeType.COMMON: "com",
             NodeType.SCENARIO: "scn",
             NodeType.API: "api",
             NodeType.API_GROUP: "apig",
@@ -136,6 +138,25 @@ class NetworkXBuilder:
         node_data = {
             "id": node_id,
             "type": NodeType.WORKFLOW,
+            "name": name,
+            "metadata": {
+                "file_path": metadata.file_path,
+                "line_number": metadata.line_number,
+                "jira_tags": metadata.jira_tags,
+                "project_name": metadata.project_name,
+                "additional_data": metadata.additional_data,
+            },
+        }
+        self.graph.add_node(node_id, **node_data)
+        return node_id
+
+    def add_common_node(self, name: str, metadata: NodeMetadata) -> str:
+        """Add common service/API definition node to graph."""
+        identity = "|".join([metadata.project_name, NodeType.COMMON.value, name])
+        node_id = self._generate_stable_node_id(NodeType.COMMON, identity)
+        node_data = {
+            "id": node_id,
+            "type": NodeType.COMMON,
             "name": name,
             "metadata": {
                 "file_path": metadata.file_path,

@@ -20,6 +20,7 @@ class GraphVisualizer:
     NODE_COLORS = {
         NodeType.TEST_CASE: "#4CAF50",      # Green
         NodeType.WORKFLOW: "#2196F3",       # Blue
+        NodeType.COMMON: "#2196F3",         # Blue (shared with workflow family)
         NodeType.API: "#FF9800",            # Orange
         NodeType.API_GROUP: "#FFB74D",      # Light Orange (for API hierarchy)
         NodeType.PAGE: "#9C27B0",           # Purple
@@ -33,6 +34,7 @@ class GraphVisualizer:
     NODE_SHAPES = {
         NodeType.TEST_CASE: "box",
         NodeType.WORKFLOW: "ellipse",
+        NodeType.COMMON: "ellipse",
         NodeType.API: "diamond",
         NodeType.API_GROUP: "dot",          # Circle for API groups
         NodeType.PAGE: "triangle",
@@ -377,7 +379,7 @@ class GraphVisualizer:
             <div id="legend">
                 <h3 style="margin: 0 0 12px 0; font-size: 16px;">📊 Graph Legend</h3>
                 <div class="legend-item"><span class="legend-color" style="background: #4CAF50;"></span><strong>Test Case</strong></div>
-                <div class="legend-item"><span class="legend-color" style="background: #2196F3; border-radius: 50%;"></span><strong>Workflow</strong></div>
+                <div class="legend-item"><span class="legend-color" style="background: #2196F3; border-radius: 50%;"></span><strong>Common</strong></div>
                 <div class="legend-item"><span class="legend-color" style="background: #9C27B0; transform: rotate(45deg);"></span><strong>Scenario (@tag)</strong></div>
                 <div class="legend-item"><span class="legend-color" style="background: #FF9800; transform: rotate(45deg);"></span><strong>API Method</strong></div>
                 <div class="legend-item"><span class="legend-color" style="background: #FF5722; clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);"></span><strong>Domain (Root)</strong></div>
