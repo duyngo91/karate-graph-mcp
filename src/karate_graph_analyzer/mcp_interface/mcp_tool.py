@@ -207,24 +207,10 @@ class KarateGraphAnalyzerTool:
             if parser_config:
                 config = ParserConfig(**parser_config)
             else:
-                # Use a single parser instance to collect all data
                 from karate_graph_analyzer.parser.config_parser import KarateConfigParser
                 config_parser = KarateConfigParser(root_path)
-                
-                # 1. Parse all configs (Root + Cascading)
-                auto_config = config_parser.get_base_url_mapping()
-                
-                # 2. Get scoped configs
-                scoped_configs = config_parser.get_scoped_config_mapping()
-                
-                if auto_config or scoped_configs:
-                    logger.info(f"Auto-detected {len(auto_config)} config variables and {len(scoped_configs)} scoped configs for project '{name}'")
-                    config = ParserConfig(
-                        base_url_mapping=auto_config,
-                        variable_patterns=auto_config,
-                        scoped_url_mappings=scoped_configs,
-                        global_reverse_mapping=config_parser.global_reverse_mapping
-                    )
+                config = config_parser.auto_configure()
+                logger.info(f"Auto-detected configuration for project '{name}'")
 
             # Create project - Use broad pattern by default but exclude build artifacts
             patterns = feature_file_patterns or ["**/*.feature"]
@@ -410,7 +396,7 @@ class KarateGraphAnalyzerTool:
             return {
                 "success": True,
                 "project_name": project_name,
-                "message": f"Analysis completed for {project_name} [VERSION V11-CLEAN-2]",
+                "message": f"Analysis completed for {project_name} [VERSION V12-ENV-FIX]",
                 "statistics": {
                     "total_nodes": len(graph.nodes),
                     "total_edges": len(graph.edges),
@@ -468,6 +454,8 @@ class KarateGraphAnalyzerTool:
             if not request.project_names:
                 return self._error_response(4003, "MERGE_ERROR", "No projects specified for merge")
             
+            from karate_graph_analyzer.graph.core.graph_merger import DependencyGraphMerger
+            merger = DependencyGraphMerger()
             merged_graph = None
             
             for name in request.project_names:
@@ -482,7 +470,7 @@ class KarateGraphAnalyzerTool:
                 
                 graph = self.graphs[name]
                 if merged_graph is None:
-                    # Create a deep-ish copy by creating a new graph object
+                    # Create the base graph for merging
                     merged_graph = DependencyGraph(
                         project_name=request.new_project_name,
                         nodes=graph.nodes.copy(),
@@ -490,7 +478,7 @@ class KarateGraphAnalyzerTool:
                         cycles=graph.cycles.copy()
                     )
                 else:
-                    merged_graph.merge(graph)
+                    merged_graph = merger.merge(merged_graph, graph)
             
             if not merged_graph:
                 return self._error_response(4003, "MERGE_ERROR", "No valid projects found to merge")
@@ -1032,59 +1020,19 @@ class KarateGraphAnalyzerTool:
         Returns:
             Dictionary with API counts and breakdown
         """
-        if project_name not in self.graphs:
-            return self._error_response(
-                3003, 
-                "PROJECT_MANAGEMENT", 
-                f"Project '{project_name}' has not been analyzed"
-            )
-        
-        from karate_graph_analyzer.models import NodeType
-        graph = self.graphs[project_name]
-        
-        # Get all API nodes
-        api_nodes = [n for n in graph.nodes.values() if n.type == NodeType.API]
-        
-        # Apply keyword filter if provided
-        if keyword:
-            kw = keyword.lower()
-            filtered = []
-            for node in api_nodes:
-                meta = node.metadata.additional_data
-                domain = str(meta.get('domain', '') or meta.get('base_url', '') or "").lower()
-                path = str(meta.get('path', '') or "").lower()
-                if kw in domain or kw in path:
-                    filtered.append(node)
-            api_nodes = filtered
-
-        # Group by domain
-        domain_stats = {}
-        for node in api_nodes:
-            meta = node.metadata.additional_data
-            domain = str(meta.get('domain', '') or meta.get('base_url', '') or "Unknown")
-            domain_stats[domain] = domain_stats.get(domain, 0) + 1
-            
-        # Sort results
-        sorted_apis = sorted(
-            api_nodes, 
-            key=lambda n: (str(n.metadata.additional_data.get('base_url', '')), str(n.metadata.additional_data.get('path', '')))
-        )
+        query_api = self.search_tools._get_query_api(project_name)
+        if not query_api:
+             return self._error_response(3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' not found")
+             
+        stats = query_api.get_api_stats(keyword)
 
         return {
             "success": True,
             "project_name": project_name,
             "keyword_filter": keyword,
-            "total_apis": len(api_nodes),
-            "domain_breakdown": domain_stats,
-            "apis": [
-                {
-                    "id": n.id,
-                    "method": n.metadata.additional_data.get('http_method'),
-                    "url": n.name,
-                    "path": n.metadata.additional_data.get('path')
-                }
-                for n in sorted_apis
-            ]
+            "total_apis": stats["total_count"],
+            "domain_breakdown": stats["domain_breakdown"],
+            "apis": stats["results"]
         }
     
     def get_page_stats(self, project_name: str, domain: Optional[str] = None) -> Dict[str, Any]:
@@ -1097,50 +1045,19 @@ class KarateGraphAnalyzerTool:
         Returns:
             Dictionary with page counts and breakdown
         """
-        if project_name not in self.graphs:
-            return self._error_response(
-                3003, 
-                "PROJECT_MANAGEMENT", 
-                f"Project '{project_name}' has not been analyzed"
-            )
-        
-        from karate_graph_analyzer.models import NodeType
-        graph = self.graphs[project_name]
-        
-        # Get all Page nodes
-        page_nodes = [n for n in graph.nodes.values() if n.type == NodeType.PAGE]
-        
-        # Group by Business Domain (feature)
-        domain_stats = {}
-        for node in page_nodes:
-            # Business domain is stored in 'feature' attribute of metadata
-            biz_domain = node.metadata.additional_data.get('feature', 'Unclassified')
-            domain_stats[biz_domain] = domain_stats.get(biz_domain, 0) + 1
-            
-        # Apply domain filter if provided
-        if domain:
-            target = domain.lower()
-            api_nodes = [
-                n for n in page_nodes 
-                if n.metadata.additional_data.get('feature', '').lower() == target
-            ]
-            page_nodes = api_nodes
+        query_api = self.search_tools._get_query_api(project_name)
+        if not query_api:
+             return self._error_response(3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' not found")
+             
+        stats = query_api.get_page_stats(domain)
 
         return {
             "success": True,
             "project_name": project_name,
             "domain_filter": domain,
-            "total_pages": len(page_nodes),
-            "domain_breakdown": domain_stats,
-            "pages": [
-                {
-                    "id": n.id,
-                    "name": n.name,
-                    "file_path": n.metadata.file_path,
-                    "business_domain": n.metadata.additional_data.get('feature')
-                }
-                for n in page_nodes
-            ]
+            "total_pages": stats["total_count"],
+            "domain_breakdown": stats["domain_breakdown"],
+            "pages": stats["results"]
         }
     
     def search_workflow(

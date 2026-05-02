@@ -298,3 +298,71 @@ class GraphQuery:
                 unused["actions"].append(node)
 
         return unused
+
+    def get_api_stats(self, keyword: Optional[str] = None) -> Dict[str, Any]:
+        """Get API statistics for the graph."""
+        api_nodes = [n for n in self.graph.nodes.values() if n.type == NodeType.API]
+        
+        if keyword:
+            keyword_lower = keyword.lower()
+            api_nodes = [
+                n for n in api_nodes 
+                if keyword_lower in n.name.lower() or 
+                   keyword_lower in n.metadata.additional_data.get('path', '').lower()
+            ]
+            
+        domain_stats = {}
+        for node in api_nodes:
+            meta = node.metadata.additional_data
+            domain = str(meta.get('domain', '') or meta.get('base_url', '') or "Unknown")
+            domain_stats[domain] = domain_stats.get(domain, 0) + 1
+            
+        sorted_apis = sorted(
+            api_nodes, 
+            key=lambda n: (str(n.metadata.additional_data.get('base_url', '')), str(n.metadata.additional_data.get('path', '')))
+        )
+        
+        return {
+            "total_count": len(api_nodes),
+            "domain_breakdown": domain_stats,
+            "results": [
+                {
+                    "id": n.id,
+                    "method": n.metadata.additional_data.get('http_method'),
+                    "url": n.name,
+                    "path": n.metadata.additional_data.get('path'),
+                    "domain": str(n.metadata.additional_data.get('domain', '') or n.metadata.additional_data.get('base_url', ''))
+                }
+                for n in sorted_apis
+            ]
+        }
+
+    def get_page_stats(self, domain: Optional[str] = None) -> Dict[str, Any]:
+        """Get Page statistics for the graph."""
+        page_nodes = [n for n in self.graph.nodes.values() if n.type == NodeType.PAGE]
+        
+        domain_stats = {}
+        for node in page_nodes:
+            biz_domain = node.metadata.additional_data.get('feature', 'Unclassified')
+            domain_stats[biz_domain] = domain_stats.get(biz_domain, 0) + 1
+            
+        if domain:
+            target = domain.lower()
+            page_nodes = [
+                n for n in page_nodes 
+                if n.metadata.additional_data.get('feature', '').lower() == target
+            ]
+
+        return {
+            "total_count": len(page_nodes),
+            "domain_breakdown": domain_stats,
+            "results": [
+                {
+                    "id": n.id,
+                    "name": n.name,
+                    "file_path": n.metadata.file_path,
+                    "business_domain": n.metadata.additional_data.get('feature')
+                }
+                for n in page_nodes
+            ]
+        }

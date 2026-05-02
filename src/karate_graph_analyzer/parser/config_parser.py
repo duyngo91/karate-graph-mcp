@@ -26,6 +26,25 @@ class KarateConfigParser:
         self.project_root = Path(project_root)
         self.config_cache: Dict[str, Dict[str, str]] = {}
         self.global_reverse_mapping: Dict[str, str] = {}  # physical -> logical
+
+    def auto_configure(self) -> "ParserConfig":
+        """Perform full auto-detection and return a ParserConfig object.
+        
+        This centralizes config extraction logic for both CLI and MCP.
+        """
+        from karate_graph_analyzer.models import ParserConfig
+        
+        auto_config = self.get_base_url_mapping()
+        scoped_configs = self.get_scoped_config_mapping()
+        env_mapping = self.get_env_url_mapping()
+        
+        return ParserConfig(
+            base_url_mapping=auto_config,
+            variable_patterns=auto_config,
+            scoped_url_mappings=scoped_configs,
+            global_reverse_mapping=self.global_reverse_mapping,
+            env_url_mapping=env_mapping
+        )
     
     def find_config_files(self) -> List[Path]:
         """Find all karate-config*.js files in the project.
