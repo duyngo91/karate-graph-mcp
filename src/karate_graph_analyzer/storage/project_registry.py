@@ -9,6 +9,7 @@ import glob
 import json
 import os
 import tempfile
+from pathlib import Path
 from dataclasses import asdict
 from typing import List, Optional
 
@@ -161,6 +162,11 @@ class ProjectRegistry(IProjectRepository):
             return
         
         try:
+            # Check if file is empty
+            if os.path.getsize(self.storage_path) == 0:
+                self.projects = {}
+                return
+
             # Read JSON file
             with open(self.storage_path, 'r') as f:
                 registry_data = json.load(f)
@@ -208,7 +214,16 @@ class ProjectRegistry(IProjectRepository):
             full_pattern = os.path.join(project.root_path, pattern)
             # Use glob to find matching files
             matches = glob.glob(full_pattern, recursive=True)
-            feature_files.extend(matches)
+            
+            # Filter out common build and dependency directories
+            filtered_matches = []
+            exclude_dirs = {"target", "build", "node_modules", ".git"}
+            for m in matches:
+                path_parts = [p.lower() for p in Path(m).parts]
+                if not any(ex in path_parts for ex in exclude_dirs):
+                    filtered_matches.append(m)
+            
+            feature_files.extend(filtered_matches)
 
         # Remove duplicates and return
         return list(set(feature_files))
@@ -219,7 +234,7 @@ class ProjectRegistry(IProjectRepository):
         Returns:
             List of all projects
         """
-        return self.list_projects()
+        return self.list()
 
     def remove(self, project_name: str) -> None:
         """Remove a project from the registry (IProjectRepository interface).

@@ -105,6 +105,7 @@ class Node:
     type: NodeType
     name: str
     metadata: NodeMetadata
+    tags: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -145,6 +146,7 @@ class DependencyGraph:
                     type=node.type,
                     name=node.name,
                     metadata=node.metadata,
+                    tags=node.tags
                 )
             node_id_map[node_id] = target_id
             self.nodes[target_id] = node
@@ -384,21 +386,7 @@ class InvertedIndices:
         return self.http_method_index.get(method, [])
 
     def build_from_graph(self, graph: "DependencyGraph") -> None:
-        """Build all inverted indices from a dependency graph.
-        
-        This method populates all indices by scanning the graph:
-        - jira_tag_index: Maps Jira tags to test case node IDs
-        - api_endpoint_index: Maps API endpoints to node IDs
-        - page_object_index: Maps page objects to node IDs
-        - database_op_index: Maps database operations to node IDs
-        - scenario_tag_index: Maps scenario tags to scenario node IDs
-        - action_tag_index: Maps action tags to action node IDs
-        - domain_index: Maps domains to API node IDs
-        - http_method_index: Maps HTTP methods to API node IDs
-        
-        Args:
-            graph: DependencyGraph to build indices from
-        """
+        """Build all inverted indices from a dependency graph."""
         # Clear existing indices
         self.jira_tag_index.clear()
         self.api_endpoint_index.clear()
@@ -417,39 +405,32 @@ class InvertedIndices:
             
             # Index by node type
             if node.type == NodeType.API:
-                # API nodes: index by endpoint identifiers, not just display name.
                 self.add_api_endpoint(node.name, node_id)
                 for key in ("full_url", "path", "path_template"):
                     endpoint = node.metadata.additional_data.get(key)
                     if endpoint:
                         self.add_api_endpoint(endpoint, node_id)
                 
-                # Index by domain
                 domain = node.metadata.additional_data.get('domain')
                 if domain:
                     self.add_domain(domain, node_id)
                 
-                # Index by HTTP method
                 http_method = node.metadata.additional_data.get('http_method')
                 if http_method:
                     self.add_http_method(http_method, node_id)
                     
             elif node.type == NodeType.PAGE:
-                # Page nodes: index by page path (node name)
                 self.add_page_object(node.name, node_id)
                 
             elif node.type == NodeType.DATABASE:
-                # Database nodes: index by operation (node name)
                 self.add_database_op(node.name, node_id)
                 
             elif node.type == NodeType.SCENARIO:
-                # Scenario nodes: index by scenario tag
                 scenario_tag = node.metadata.additional_data.get('scenario_tag')
                 if scenario_tag:
                     self.add_scenario_tag(scenario_tag, node_id)
                     
             elif node.type == NodeType.ACTION:
-                # Action nodes: index by action tag
                 action_tag = node.metadata.additional_data.get('action_tag')
                 if action_tag:
                     self.add_action_tag(action_tag, node_id)

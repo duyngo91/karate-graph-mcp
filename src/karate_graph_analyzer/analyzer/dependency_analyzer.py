@@ -4,7 +4,8 @@ Dependency analyzer implementation.
 Analyzes dependency graphs for impact and reusability.
 """
 
-from typing import Dict, List
+from typing import Dict, List, Any, Optional, Tuple
+from collections import defaultdict
 
 from karate_graph_analyzer.models import (
     AffectedTestCase,
@@ -15,6 +16,8 @@ from karate_graph_analyzer.models import (
     NodeType,
     Project,
     ReusableComponent,
+    ComponentInstance,
+    ParserConfig,
 )
 
 
@@ -233,7 +236,6 @@ class DependencyAnalyzer:
         Returns:
             List of reusable components with usage statistics
         """
-        from collections import defaultdict
         from karate_graph_analyzer.graph.graph_builder import GraphBuilder
         
         # Build graphs for all projects
@@ -247,18 +249,17 @@ class DependencyAnalyzer:
         # Key: (node_type, name) -> List[ComponentInstance]
         component_instances: Dict[tuple, List] = defaultdict(list)
         
-        # Collect all WORKFLOW, API, and PAGE nodes from all projects
+        # Collect all WORKFLOW, API, PAGE and COMMON nodes from all projects
         for project_name, graph in project_graphs.items():
             for node_id, node in graph.nodes.items():
-                # Only consider WORKFLOW, API, and PAGE nodes
-                if node.type not in [NodeType.WORKFLOW, NodeType.API, NodeType.PAGE]:
+                # Only consider WORKFLOW, API, PAGE and COMMON nodes
+                if node.type not in [NodeType.WORKFLOW, NodeType.API, NodeType.PAGE, NodeType.COMMON]:
                     continue
                 
                 # Create component key (type, name)
                 component_key = (node.type, node.name)
                 
                 # Create ComponentInstance
-                from karate_graph_analyzer.models import ComponentInstance
                 instance = ComponentInstance(
                     project_name=project_name,
                     file_path=node.metadata.file_path or "",

@@ -64,18 +64,25 @@ class KarateConfigParser:
             
             variables = {}
             
-            # 1. Extract flat variables from object literals
-            # Pattern: 'varName' : 'value' or "varName" : "value"
-            pattern = r"['\"](\w+)['\"]\s*:\s*['\"]([^'\"]+)['\"]"
-            matches = re.findall(pattern, content)
+            # 1. Extract flat variables from object literals and variable declarations
+            # Patterns: 
+            # - 'varName' : 'value'
+            # - var/let/const varName = 'value'
+            patterns = [
+                r"['\"](\w+)['\"]\s*:\s*['\"]([^'\"]+)['\"]",
+                r"(?:var|let|const)\s+(\w+)\s*=\s*['\"]([^'\"]+)['\"]",
+                r"(\w+)\s*=\s*['\"]([^'\"]+)['\"]"
+            ]
             
-            for var_name, value in matches:
-                # Skip non-URL variables (driver config, etc.)
-                if self._is_url_or_path_variable(var_name, value):
-                    variables[var_name] = value
-                    logger.debug(f"Extracted flat: {var_name} = {value}")
+            for pattern in patterns:
+                matches = re.findall(pattern, content)
+                for var_name, value in matches:
+                    # Nới lỏng filter: Bất kỳ biến nào có giá trị trông giống đường dẫn hoặc URL đều lấy
+                    if self._is_url_or_path_variable(var_name, value):
+                        variables[var_name] = value
+                        logger.debug(f"Extracted: {var_name} = {value}")
             
-            # 2. Extract nested objects (e.g., let services = { 't24': { 'payment': '...' } })
+            # 2. Extract nested objects (e.g., let services = { ... })
             nested_vars = self.parse_nested_objects(content)
             for key, value in nested_vars.items():
                 variables[key] = value
@@ -89,32 +96,34 @@ class KarateConfigParser:
             return {}
     
     def _is_url_or_path_variable(self, var_name: str, value: str) -> bool:
-        """Check if a variable is a URL or path variable.
+        """Check if a variable is a URL or path variable."""
+        # 1. Check value patterns (High priority)
+        # Any value starting with common Karate path prefixes
+        value_patterns = [
+            'http://', 'https://', 'classpath:', 'file:', '/', './', '../'
+        ]
         
-        Args:
-            var_name: Variable name
-            value: Variable value
-        
-        Returns:
-            True if it's a URL/path variable
-        """
-        # Check variable name patterns
+        lower_val = value.lower()
+        if any(pattern in lower_val for pattern in value_patterns):
+            return True
+            
+        # 2. Check extension-like values
+        if any(lower_val.endswith(ext) for ext in ['.json', '.feature', '.yaml', '.yml', '.js', '.csv']):
+            return True
+
+        # 3. Check variable name patterns (Fallback)
         name_patterns = [
             'url', 'path', 'endpoint', 'service', 'api', 
-            'page', 'locator', 'feature', 'data'
+            'page', 'locator', 'feature', 'data', 'base', 'host'
         ]
         
         if any(pattern in var_name.lower() for pattern in name_patterns):
             return True
         
-        # Check value patterns
-        value_patterns = [
-            'http://', 'https://', 'classpath:', 'file:', '/'
-        ]
-        
-        if any(pattern in value.lower() for pattern in value_patterns):
+        # 4. If the variable name is all caps, it's likely a constant/config
+        if var_name.isupper() and len(var_name) > 2:
             return True
-        
+            
         return False
     
     def parse_all_configs(self) -> Dict[str, str]:
@@ -164,10 +173,14 @@ class KarateConfigParser:
         """
         result = {}
         
-        # Remove single-line comments
-        content = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
-        # Remove multi-line comments
+        # Remove multi-line comments first
         content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+        
+        # Remove single-line comments safely (avoiding // inside quotes)
+        # We look for // that is NOT preceded by : (to allow http://)
+        # but a better way is to only match // at start of line or after whitespace
+        content = re.sub(r'(?m)^\s*//.*?$', '', content) # Full line comments
+        content = re.sub(r'\s+//(?![/]).*?$', '', content, flags=re.MULTILINE) # End of line comments with space before
         
         # Pattern to match object declarations: let varName = {
         obj_pattern = r"let\s+(\w+)\s*=\s*\{"

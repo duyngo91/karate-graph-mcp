@@ -179,8 +179,8 @@ class KarateGraphAnalyzerTool:
                         variable_patterns=auto_config
                     )
 
-            # Create project - Default to src/ only to avoid target/ build/ folders
-            patterns = feature_file_patterns or ["src/test/java/**/*.feature", "src/main/resources/**/*.feature"]
+            # Create project - Use broad pattern by default but exclude build artifacts
+            patterns = feature_file_patterns or ["**/*.feature"]
             project = Project(
                 name=request.name,
                 root_path=request.root_path,
@@ -241,14 +241,8 @@ class KarateGraphAnalyzerTool:
             return [self._error_response(6003, "INTERNAL_ERROR", str(e))]
 
     def analyze_project(self, project_name: str) -> Dict[str, Any]:
-        """Build dependency graph for project.
-
-        Args:
-            project_name: Name of the project to analyze
-
-        Returns:
-            Analysis result with graph statistics
-        """
+        """Build dependency graph for project."""
+        print(f"DEBUG: Analyzing project {project_name} - VERSION V11-CLEAN-2")
         try:
             # Validate input
             request = AnalyzeProjectRequest(project_name=project_name)
@@ -292,6 +286,7 @@ class KarateGraphAnalyzerTool:
             return {
                 "success": True,
                 "project_name": project_name,
+                "message": f"Analysis completed for {project_name} [VERSION V11-CLEAN-2]",
                 "statistics": {
                     "total_nodes": len(graph.nodes),
                     "total_edges": len(graph.edges),
@@ -1054,7 +1049,7 @@ class KarateGraphAnalyzerTool:
             logger.error(f"Failed to visualize project '{project_name}': {e}")
             return self._error_response(8001, "VISUALIZATION_ERROR", str(e))
 
-    def _error_response(self, code: int, category: str, message: str) -> Dict[str, Any]:
+    def _error_response(self, code: Any, category: str, message: str) -> Dict[str, Any]:
         """Create structured error response.
 
         Args:
@@ -1068,7 +1063,7 @@ class KarateGraphAnalyzerTool:
         return {
             "success": False,
             "error": {
-                "code": code,
+                "code": str(code),
                 "category": category,
                 "message": message,
                 "timestamp": datetime.now().isoformat(),

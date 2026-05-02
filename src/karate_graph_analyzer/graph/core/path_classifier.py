@@ -59,8 +59,10 @@ class PathClassifier:
                 return f"{scenario.jira_tags[0]} - {scenario.name}"
             return scenario.name
         else:
-            if scenario.tags:
-                return scenario.tags[0]
+            # Filter out ALM2 tags for display name
+            clean_tags = [t for t in scenario.tags if not t.startswith("@ALM2:")]
+            if clean_tags:
+                return clean_tags[0]
             return scenario.name or f"Unnamed at line {scenario.line_number}"
     
     def detect_feature_from_path(self, file_path: str) -> str:

@@ -71,6 +71,7 @@ class FeatureFileParser:
         background_steps = []
         scenarios = []
         
+        feature_tags = []
         current_tags = []
         current_scenario = None
         current_examples = None
@@ -89,15 +90,16 @@ class FeatureFileParser:
                 continue
 
             if token.type == GherkinTokenType.TAG:
-                # Extract tags from the @line
-                tags = re.findall(r"@[\w\-_]+", token.text)
+                # Extract tags from the @line (including colons for ALM2/ID tags)
+                tags = re.findall(r"@[\w\-_:]+", token.text)
                 current_tags.extend(tags)
                 current_examples = None
                 last_step = None
             
             elif token.type == GherkinTokenType.FEATURE:
                 feature_name = token.text
-                current_tags = [] # Reset tags after feature header
+                feature_tags = list(current_tags) # Store feature level tags
+                current_tags = [] # Reset for potential background or first scenario
                 current_examples = None
                 last_step = None
             
@@ -110,11 +112,16 @@ class FeatureFileParser:
                 state = "SCENARIO"
                 current_examples = None
                 last_step = None
-                jira_tags = self._filter_jira_tags(current_tags)
+                
+                # Merge feature tags with scenario tags
+                merged_tags = list(set(feature_tags + current_tags))
+                
+                jira_tags = self._filter_jira_tags(merged_tags)
+                
                 current_scenario = Scenario(
                     name=token.text or f"Unnamed Scenario at {token.line_number}",
                     type=ScenarioType.SCENARIO if token.type == GherkinTokenType.SCENARIO else ScenarioType.SCENARIO_OUTLINE,
-                    tags=current_tags,
+                    tags=merged_tags,
                     jira_tags=jira_tags,
                     file_path=file_path,
                     line_number=token.line_number,

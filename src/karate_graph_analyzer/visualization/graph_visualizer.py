@@ -166,33 +166,49 @@ class GraphVisualizer:
             # Build title (tooltip) with metadata
             title_parts = [
                 f"<b>{node.name}</b>",
-                f"Type: {node.type.value}",
-                f"ID: {node.id}",
+                f"<b>Type:</b> {node.type.value}",
+                f"ID: {node.id}"
             ]
 
             if is_domain:
                 title_parts.append("🌐 DOMAIN (Root)")
 
             if node.metadata.file_path:
-                title_parts.append(f"File: {node.metadata.file_path}")
+                title_parts.append(f"<b>File:</b> {node.metadata.file_path}")
 
             if node.metadata.line_number:
-                title_parts.append(f"Line: {node.metadata.line_number}")
+                title_parts.append(f"<b>Line:</b> {node.metadata.line_number}")
 
             if node.metadata.jira_tags:
-                title_parts.append(f"Jira: {', '.join(node.metadata.jira_tags)}")
+                title_parts.append(f"<b>Jira:</b> {', '.join(node.metadata.jira_tags)}")
+
+            # Filter out @ALM2 and @ignore tags from the tags list
+            clean_tags = [t for t in node.tags if not (t.startswith("@ALM2:") or t == "@ignore")]
+            
+            if clean_tags:
+                title_parts.append(f"<b>Tags:</b> {', '.join(clean_tags)}")
 
             title = "<br>".join(title_parts)
+
+            # Truncate long labels (especially file paths) for better readability
+            display_label = node.name
+            if len(display_label) > 30 and ("/" in display_label or "\\" in display_label):
+                # If it's a path, show only the last two segments
+                parts = display_label.replace("\\", "/").split("/")
+                if len(parts) > 2:
+                    display_label = ".../" + "/".join(parts[-2:])
+                elif len(parts) > 1:
+                    display_label = "/".join(parts[-2:])
 
             # Add node with physics properties
             net.add_node(
                 node.id,
-                label=node.name,
+                label=display_label,
                 title=title,
                 color=color,
                 shape=shape,
                 size=size,
-                mass=mass,  # Heavier nodes act as gravity centers
+                mass=mass,
             )
 
         # Add edges
@@ -244,14 +260,27 @@ class GraphVisualizer:
         import json
         js_node_data = {}
         for node_id, node in self.graph.nodes.items():
+            clean_tags = [t for t in node.tags if not (t.startswith("@ALM2:") or t == "@ignore")]
+            
+            # Clean additional_data
+            clean_additional = {k: v for k, v in node.metadata.additional_data.items() if k != "tags"}
+            if "scenario_tags" in clean_additional and isinstance(clean_additional["scenario_tags"], list):
+                clean_additional["scenario_tags"] = [t for t in clean_additional["scenario_tags"] if not (t.startswith("@ALM2:") or t == "@ignore")]
+                
             js_node_data[node_id] = {
                 "name": node.name,
                 "type": node.type.value,
                 "file_path": node.metadata.file_path,
                 "line_number": node.metadata.line_number,
                 "jira_tags": node.metadata.jira_tags,
-                "additional_data": node.metadata.additional_data
+                "tags": clean_tags,
+                "additional_data": clean_additional
             }
+        
+        # Replace empty h1 tags with a proper title
+        title_html = f"<h1 style='text-align: center; font-family: Segoe UI, Tahoma; margin-top: 20px; color: #333;'>Karate Dependency Graph: {self.graph.project_name}</h1>"
+        html_content = html_content.replace('<h1></h1>', title_html, 1) # Replace first one
+        html_content = html_content.replace('<h1></h1>', '', 1) # Remove second one
         
         # Insert legend and populate data
         legend_html = getattr(net, 'legend_html', "")
