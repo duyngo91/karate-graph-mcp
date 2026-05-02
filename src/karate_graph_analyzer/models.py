@@ -262,11 +262,19 @@ class ParserConfig:
         default_factory=lambda: [r"^@ALM2:", r"^@TC-\d+"]
     )
 
-    def is_metadata_tag(self, tag: str) -> bool:
-        """Check if a tag is a metadata/technical tag that should be filtered out."""
-        if tag in self.metadata_tags:
-            return True
-        return any(re.match(pattern, tag) for pattern in self.metadata_tag_patterns)
+    # Mapping keywords in file paths to Business Domains for visualization grouping
+    domain_mapping: Dict[str, str] = field(
+        default_factory=lambda: {
+            'authentication': 'Authentication', 'auth': 'Authentication', 'login': 'Authentication',
+            'orders': 'Order Management', 'order': 'Order Management',
+            'products': 'Product Catalog', 'product': 'Product Catalog', 'catalog': 'Product Catalog',
+            'users': 'User Management', 'user': 'User Management', 'profile': 'User Management',
+            'payments': 'Payment Processing', 'payment': 'Payment Processing', 'checkout': 'Payment Processing',
+            'cart': 'Shopping Cart', 'shopping': 'Shopping Cart',
+            'search': 'Search', 'notification': 'Notifications', 'notifications': 'Notifications',
+            'admin': 'Administration', 'report': 'Reporting', 'reports': 'Reporting', 'analytics': 'Analytics',
+        }
+    )
 
 
 @dataclass

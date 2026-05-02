@@ -18,6 +18,7 @@ from karate_graph_analyzer.models import (
 from karate_graph_analyzer.parser.lexer import GherkinLexer, GherkinTokenType
 from karate_graph_analyzer.parser.orchestrator import DependencyOrchestrator
 from karate_graph_analyzer.utils.path_resolver import PathResolver
+from karate_graph_analyzer.parser.api_context_tracker import ApiContextTracker
 
 if TYPE_CHECKING:
     from karate_graph_analyzer.interfaces import IDependencyExtractor
@@ -203,99 +204,28 @@ class FeatureFileParser:
         self, scenario: Scenario, background_steps: List[Step], validate_paths: bool = False
     ) -> List[Dependency]:
         """Orchestrate dependency extraction across steps, merging background context."""
-        dependencies: List[Dependency] = []
-        
-        # Track active API context
-        current_base_url_dep = None
-        current_api_paths = []
-        
-        # Resolve the ApiExtractor to access its helper methods
         from karate_graph_analyzer.parser.extractors.api_extractor import ApiExtractor
         api_extractor = self.orchestrator.get_extractor_by_type(ApiExtractor)
-        http_method = api_extractor.extract_http_method(scenario.steps) if api_extractor else "GET"
-        http_method = http_method or "GET"
+        http_method = (api_extractor.extract_http_method(scenario.steps) if api_extractor else "GET") or "GET"
 
-        has_emitted_api = False
-
-        def emit_api_call(line_number, is_final=False):
-            nonlocal has_emitted_api
-            if not current_base_url_dep and not current_api_paths:
-                return
-
-            if current_base_url_dep and current_api_paths:
-                # Combine URL + all Paths
-                combined_path = "".join([p.target for p in current_api_paths])
-                full_url = f"{current_base_url_dep.target}{combined_path}"
-                template, examples = api_extractor.detect_dynamic_params(combined_path) if api_extractor else (combined_path, [])
-                
-                dependencies.append(Dependency(
-                    type=DependencyType.API,
-                    target=full_url,
-                    line_number=line_number,
-                    parameters={
-                        **current_api_paths[-1].parameters,
-                        "base_url": current_base_url_dep.target,
-                        "path": combined_path,
-                        "path_template": template,
-                        "examples": examples,
-                        "combined": True,
-                        "scenario_name": scenario.name,
-                        "scenario_tags": scenario.tags,
-                        "http_method": http_method
-                    }
-                ))
-                has_emitted_api = True
-            elif current_base_url_dep:
-                # URL only - skip if we already emitted a combined one or if it's final and we emitted anything
-                if is_final and has_emitted_api:
-                    return
-                    
-                d = current_base_url_dep
-                d.parameters.update({
-                    "scenario_name": scenario.name,
-                    "scenario_tags": scenario.tags,
-                    "http_method": http_method
-                })
-                dependencies.append(d)
-                has_emitted_api = True
-            elif current_api_paths:
-                # Path only (fallback)
-                for p in current_api_paths:
-                    template, examples = api_extractor.detect_dynamic_params(p.target) if api_extractor else (p.target, [])
-                    p.parameters.update({
-                        "path_template": template,
-                        "examples": examples,
-                        "scenario_name": scenario.name,
-                        "scenario_tags": scenario.tags,
-                        "http_method": http_method
-                    })
-                    dependencies.append(p)
-                has_emitted_api = True
-
-        # 1. Process ALL steps sequentially to maintain context
+        tracker = ApiContextTracker(api_extractor)
+        dependencies: List[Dependency] = []
+        
+        # 1. Process ALL steps sequentially
         all_steps = background_steps + scenario.steps
         for step in all_steps:
             deps = self.orchestrator.extract_from_step(step.text, step.line_number)
             for d in deps:
-                if d.type == DependencyType.API:
-                    if d.target == "METHOD_MARKER":
-                        emit_api_call(d.line_number)
-                        # Reset paths for next call, but keep URL context
-                        current_api_paths = []
-                    elif d.parameters.get("path_only"):
-                        current_api_paths.append(d)
-                    else:
-                        current_base_url_dep = d
-                else:
-                    # Non-API dependency (Call, DB, etc.)
+                if not tracker.process_dependency(d, scenario, http_method):
+                    # Non-API dependency
                     d.parameters.update({
                         "scenario_name": scenario.name,
                         "scenario_tags": scenario.tags
                     })
                     dependencies.append(d)
 
-        # 2. Handle cases where scenario ends without explicit 'method' step or with pending paths
-        emit_api_call(scenario.line_number, is_final=True)
+        # 2. Finalize API dependencies
+        dependencies.extend(tracker.finalize(scenario.line_number, scenario, http_method))
 
         # 4. Final Deduplication
         unique_deps: List[Dependency] = []

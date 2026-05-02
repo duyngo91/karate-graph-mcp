@@ -32,6 +32,7 @@ from karate_graph_analyzer.graph.core.path_classifier import PathClassifier
 from karate_graph_analyzer.graph.core.dependency_linker import DependencyLinker
 from karate_graph_analyzer.graph.core.incremental_updater import IncrementalUpdater
 from karate_graph_analyzer.utils.path_resolver import PathResolver
+from karate_graph_analyzer.core.context import AnalysisContext
 
 if TYPE_CHECKING:
     from karate_graph_analyzer.cache.cache_manager import CacheManager
@@ -45,9 +46,11 @@ class GraphBuilder:
 
     def __init__(self, parser: Optional["FeatureFileParser"] = None, config: Optional[ParserConfig] = None) -> None:
         self.nx_builder = NetworkXBuilder()
+        # Default context if no project yet
+        self.context: Optional[AnalysisContext] = None
         self.config = config or (parser.config if parser else ParserConfig())
         self.path_classifier = PathClassifier()
-        self.dependency_linker = DependencyLinker(self.nx_builder, config=self.config)
+        self.dependency_linker = DependencyLinker(self.nx_builder, path_classifier=self.path_classifier)
         self.incremental_updater = IncrementalUpdater(self.nx_builder, self.path_classifier, self.dependency_linker)
         self._injected_parser = parser
 
@@ -85,11 +88,16 @@ class GraphBuilder:
     def build_from_project(self, project: Project) -> DependencyGraph:
         """Build complete graph for a project using 2-pass strategy."""
         self.nx_builder.graph = nx.DiGraph()
-        parser = self._injected_parser or self._create_default_parser(project)
         
-        # Sync config with components
-        self.config = project.parser_config
-        self.dependency_linker.config = self.config
+        # Initialize Context
+        self.context = AnalysisContext(project)
+        self.config = self.context.config
+        
+        # Inject context into components
+        self.path_classifier.context = self.context
+        self.dependency_linker.context = self.context
+        
+        parser = self._injected_parser or self._create_default_parser(project)
         
         feature_files = self._get_feature_files(project)
         ast_list: List[FeatureAST] = []
@@ -119,9 +127,14 @@ class GraphBuilder:
         """Build a graph from pre-parsed ASTs using the same 2-pass strategy."""
         self.nx_builder.graph = nx.DiGraph()
         
-        # Sync config with components
-        self.config = project.parser_config
-        self.dependency_linker.config = self.config
+        # Initialize Context
+        self.context = AnalysisContext(project)
+        self.config = self.context.config
+        
+        # Inject context into components
+        self.path_classifier.context = self.context
+        self.dependency_linker.context = self.context
+        self.dependency_linker.path_classifier = self.path_classifier
         
         parser = self._injected_parser or self._create_default_parser(project)
 
@@ -167,6 +180,11 @@ class GraphBuilder:
                         self.dependency_linker.get_or_create_dependency_node(d, project.name, node_map, context=context)
                     continue
                 
+                # Add business domain classification
+                if self.path_classifier and scenario.file_path:
+                    feature = self.path_classifier.detect_business_domain(scenario.file_path)
+                    metadata.additional_data['feature'] = feature
+                
                 # Create main node
                 node_id = self._create_typed_node(node_type, scenario, metadata, node_map)
                 
@@ -179,24 +197,54 @@ class GraphBuilder:
         if node_type == NodeType.PAGE:
             return self._handle_page_and_action(scenario, metadata, node_map)
         
-        if node_type == NodeType.WORKFLOW or node_type == NodeType.COMMON:
-            name = self.path_classifier.build_scenario_display_name(scenario, node_type)
-            if node_type == NodeType.WORKFLOW:
-                return self.nx_builder.add_workflow_node(name, metadata)
-            else:
-                return self.nx_builder.add_common_node(name, metadata)
+        # For WORKFLOW and COMMON, we also want to support subnodes if tags are present
+        # to ensure consistency with 'call read' dependencies
+        if node_type in [NodeType.WORKFLOW, NodeType.COMMON]:
+            rel_path = PathResolver.normalize_path(scenario.file_path)
+            # Create/get the file node
+            file_node_id = self.dependency_linker._get_or_create_node(
+                node_type, rel_path, metadata, node_map, 
+                self.nx_builder.add_workflow_node if node_type == NodeType.WORKFLOW else self.nx_builder.add_common_node
+            )
+            
+            # Use primary tag for subnode identity
+            primary_tag = ""
+            if self.context and self.context.tag_manager:
+                primary_tag = self.context.tag_manager.get_primary_tag(scenario.tags)
+            
+            if primary_tag:
+                display_name = self.path_classifier.build_scenario_display_name(scenario, node_type)
+                return self.dependency_linker._handle_tag_subnode(
+                    file_node_id, node_type, rel_path, primary_tag, metadata, node_map, 
+                    DependencyType.WORKFLOW if node_type == NodeType.WORKFLOW else DependencyType.COMMON,
+                    display_name=display_name
+                )
+            
+            # Fallback to file node if no tags
+            return file_node_id
             
         return self.nx_builder.add_test_case(scenario, metadata)
 
-    def _handle_page_and_action(self, scenario, metadata, node_map) -> str:
+    def _handle_page_and_action(self, scenario: Scenario, metadata: NodeMetadata, node_map: Dict) -> str:
         rel_path = PathResolver.normalize_path(scenario.file_path)
         file_node_id = self.dependency_linker._get_or_create_node(
             NodeType.PAGE, rel_path, metadata, node_map, self.nx_builder.add_page_node
         )
         
-        action_tag = self.path_classifier.build_scenario_display_name(scenario, NodeType.PAGE)
+        # Identity tag
+        primary_tag = ""
+        if self.context and self.context.tag_manager:
+            primary_tag = self.context.tag_manager.get_primary_tag(scenario.tags)
+        
+        # Display name
+        display_name = self.path_classifier.build_scenario_display_name(scenario, NodeType.PAGE)
+        
+        # If no primary tag, use the display name as a fallback tag (legacy behavior)
+        tag_to_use = primary_tag or display_name
+        
         return self.dependency_linker._handle_tag_subnode(
-            file_node_id, NodeType.PAGE, rel_path, action_tag, metadata, node_map, DependencyType.PAGE
+            file_node_id, NodeType.PAGE, rel_path, tag_to_use, metadata, node_map, DependencyType.PAGE,
+            display_name=display_name
         )
 
     def _link_dependencies(self, scenario, ast, parser, project, node_id, common_map, node_map, context):

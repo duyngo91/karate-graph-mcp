@@ -115,6 +115,20 @@ class MergeProjectsRequest(BaseModel):
     new_project_name: str = Field(default="Merged_Project", description="Name for the resulting merged project")
 
 
+class GetApiStatsRequest(BaseModel):
+    """Request model for get_api_stats."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project")
+    keyword: Optional[str] = Field(default=None, description="Optional keyword to filter APIs (in domain or path)")
+
+
+class GetPageStatsRequest(BaseModel):
+    """Request model for get_page_stats."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project")
+    domain: Optional[str] = Field(default=None, description="Optional business domain to filter pages (e.g. 'Authentication')")
+
+
 class KarateGraphAnalyzerTool:
     """MCP protocol interface for graph analyzer."""
 
@@ -801,6 +815,127 @@ class KarateGraphAnalyzerTool:
             )
         
         return self.search_tools.search_api(project_name, method, path, domain)
+    
+    def get_api_stats(self, project_name: str, keyword: Optional[str] = None) -> Dict[str, Any]:
+        """Get API statistics for an analyzed project.
+        
+        Args:
+            project_name: Name of the project
+            keyword: Optional keyword to filter APIs (e.g. 't24')
+            
+        Returns:
+            Dictionary with API counts and breakdown
+        """
+        if project_name not in self.graphs:
+            return self._error_response(
+                3003, 
+                "PROJECT_MANAGEMENT", 
+                f"Project '{project_name}' has not been analyzed"
+            )
+        
+        from karate_graph_analyzer.models import NodeType
+        graph = self.graphs[project_name]
+        
+        # Get all API nodes
+        api_nodes = [n for n in graph.nodes.values() if n.type == NodeType.API]
+        
+        # Apply keyword filter if provided
+        if keyword:
+            kw = keyword.lower()
+            filtered = []
+            for node in api_nodes:
+                meta = node.metadata.additional_data
+                domain = str(meta.get('domain', '') or meta.get('base_url', '') or "").lower()
+                path = str(meta.get('path', '') or "").lower()
+                if kw in domain or kw in path:
+                    filtered.append(node)
+            api_nodes = filtered
+
+        # Group by domain
+        domain_stats = {}
+        for node in api_nodes:
+            meta = node.metadata.additional_data
+            domain = str(meta.get('domain', '') or meta.get('base_url', '') or "Unknown")
+            domain_stats[domain] = domain_stats.get(domain, 0) + 1
+            
+        # Sort results
+        sorted_apis = sorted(
+            api_nodes, 
+            key=lambda n: (str(n.metadata.additional_data.get('base_url', '')), str(n.metadata.additional_data.get('path', '')))
+        )
+
+        return {
+            "success": True,
+            "project_name": project_name,
+            "keyword_filter": keyword,
+            "total_apis": len(api_nodes),
+            "domain_breakdown": domain_stats,
+            "apis": [
+                {
+                    "id": n.id,
+                    "method": n.metadata.additional_data.get('http_method'),
+                    "url": n.name,
+                    "path": n.metadata.additional_data.get('path')
+                }
+                for n in sorted_apis
+            ]
+        }
+    
+    def get_page_stats(self, project_name: str, domain: Optional[str] = None) -> Dict[str, Any]:
+        """Get Page statistics for an analyzed project.
+        
+        Args:
+            project_name: Name of the project
+            domain: Optional business domain to filter pages
+            
+        Returns:
+            Dictionary with page counts and breakdown
+        """
+        if project_name not in self.graphs:
+            return self._error_response(
+                3003, 
+                "PROJECT_MANAGEMENT", 
+                f"Project '{project_name}' has not been analyzed"
+            )
+        
+        from karate_graph_analyzer.models import NodeType
+        graph = self.graphs[project_name]
+        
+        # Get all Page nodes
+        page_nodes = [n for n in graph.nodes.values() if n.type == NodeType.PAGE]
+        
+        # Group by Business Domain (feature)
+        domain_stats = {}
+        for node in page_nodes:
+            # Business domain is stored in 'feature' attribute of metadata
+            biz_domain = node.metadata.additional_data.get('feature', 'Unclassified')
+            domain_stats[biz_domain] = domain_stats.get(biz_domain, 0) + 1
+            
+        # Apply domain filter if provided
+        if domain:
+            target = domain.lower()
+            api_nodes = [
+                n for n in page_nodes 
+                if n.metadata.additional_data.get('feature', '').lower() == target
+            ]
+            page_nodes = api_nodes
+
+        return {
+            "success": True,
+            "project_name": project_name,
+            "domain_filter": domain,
+            "total_pages": len(page_nodes),
+            "domain_breakdown": domain_stats,
+            "pages": [
+                {
+                    "id": n.id,
+                    "name": n.name,
+                    "file_path": n.metadata.file_path,
+                    "business_domain": n.metadata.additional_data.get('feature')
+                }
+                for n in page_nodes
+            ]
+        }
     
     def search_workflow(
         self,

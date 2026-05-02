@@ -101,6 +101,34 @@ def search_api(
     return analyzer_tool.search_api(project_name, method, path, domain)
 
 @mcp.tool()
+def get_api_stats(
+    project_name: str,
+    keyword: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Get API statistics for an analyzed project.
+    
+    Args:
+        project_name: Name of the analyzed project.
+        keyword: Optional keyword to filter APIs (e.g. 't24').
+    """
+    return analyzer_tool.get_api_stats(project_name, keyword)
+
+@mcp.tool()
+def get_page_stats(
+    project_name: str,
+    domain: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Get Page statistics for an analyzed project.
+    
+    Args:
+        project_name: Name of the analyzed project.
+        domain: Optional business domain to filter pages (e.g. 'Authentication').
+    """
+    return analyzer_tool.get_page_stats(project_name, domain)
+
+@mcp.tool()
 def search_workflow(
     project_name: str,
     path: Optional[str] = None,

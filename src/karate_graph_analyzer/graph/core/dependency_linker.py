@@ -6,7 +6,7 @@ resolving call read() dependencies and building API hierarchies.
 """
 
 import re
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, TYPE_CHECKING
 from karate_graph_analyzer.models import (
     Dependency,
     DependencyType,
@@ -16,19 +16,25 @@ from karate_graph_analyzer.models import (
 from karate_graph_analyzer.utils.path_resolver import PathResolver
 
 
+if TYPE_CHECKING:
+    from karate_graph_analyzer.core.context import AnalysisContext
+
+
 class DependencyLinker:
     """Handles linking of dependencies and building complex node structures."""
 
-    def __init__(self, nx_builder, config: Optional[ParserConfig] = None, ignored_files: Optional[set] = None) -> None:
+    def __init__(self, nx_builder, context: Optional["AnalysisContext"] = None, path_classifier: Optional[Any] = None, ignored_files: Optional[set] = None) -> None:
         """Initialize with a NetworkXBuilder instance.
 
         Args:
             nx_builder: NetworkXBuilder instance for graph operations
-            config: Optional ParserConfig for filtering and rules
+            context: Optional AnalysisContext for configuration and services
+            path_classifier: Optional PathClassifier for component classification
             ignored_files: Optional set of normalized paths to ignore
         """
         self.nx_builder = nx_builder
-        self.config = config or ParserConfig()
+        self.context = context
+        self.path_classifier = path_classifier
         self.ignored_files = ignored_files or set()
 
     def normalize_path(self, path: str) -> str:
@@ -51,6 +57,16 @@ class DependencyLinker:
         
         node_id = creation_func(identity, metadata, **kwargs)
         node_map[key] = node_id
+        
+        # Add business domain classification for the newly created node
+        if self.path_classifier:
+            # For file nodes, identity is the path
+            feature = self.path_classifier.detect_business_domain(identity)
+            # Access the actual node in graph to update its metadata
+            if node_id in self.nx_builder.graph.nodes:
+                # metadata is stored as a dict in the graph by NetworkXBuilder
+                self.nx_builder.graph.nodes[node_id]['metadata']['additional_data']['feature'] = feature
+                
         return node_id
 
     def get_or_create_dependency_node(
@@ -93,6 +109,11 @@ class DependencyLinker:
             additional_data=dep.parameters,
         )
         
+        # Add business domain classification
+        if self.path_classifier and file_path:
+            feature = self.path_classifier.detect_business_domain(file_path)
+            metadata.additional_data['feature'] = feature
+        
         # API handled separately due to hierarchy
         if dep.type == DependencyType.API:
             return self.create_api_hierarchy(dep.target, metadata, node_map)
@@ -124,28 +145,38 @@ class DependencyLinker:
         }
         return mapping.get(node_type)
 
-    def _handle_tag_subnode(self, parent_id: str, parent_type: NodeType, path: str, tag: str, metadata: NodeMetadata, node_map: Dict, dep_type: DependencyType) -> str:
+    def _handle_tag_subnode(self, parent_id: str, parent_type: NodeType, path: str, tag: str, metadata: NodeMetadata, node_map: Dict, dep_type: DependencyType, display_name: Optional[str] = None) -> str:
         """Handle creation of Scenario/Action nodes attached to parent file nodes."""
         is_page = parent_type == NodeType.PAGE
         sub_type = NodeType.ACTION if is_page else NodeType.SCENARIO
         
-        # Normalize tag
+        # Normalize tag (this is the unique ID tag)
         clean_tag = tag if tag.startswith('@') else f"@{tag}"
         
         # Skip technical/metadata tags for node creation
-        if self.config.is_metadata_tag(clean_tag):
-            return parent_id
+        if self.context and self.context.tag_manager:
+            if self.context.tag_manager.is_metadata_tag(clean_tag):
+                return parent_id
+        elif hasattr(self, 'config') and hasattr(self.config, 'is_metadata_tag'):
+             if self.config.is_metadata_tag(clean_tag):
+                return parent_id
 
+        # IDENTITY is strictly based on the tag
         identity = f"{path}#{clean_tag}"
         
+        # DISPLAY NAME
+        name_to_use = display_name or clean_tag
+        if not display_name and metadata.additional_data.get("scenario_name"):
+            name_to_use = f"{clean_tag} - {metadata.additional_data['scenario_name']}"
+
         key = (sub_type, identity)
         if key in node_map:
             sub_node_id = node_map[key]
         else:
             if is_page:
-                sub_node_id = self.nx_builder.add_action_node(tag, path, metadata)
+                sub_node_id = self.nx_builder.add_action_node(name_to_use, path, metadata)
             else:
-                sub_node_id = self.nx_builder.add_scenario_node(tag, path, metadata)
+                sub_node_id = self.nx_builder.add_scenario_node(name_to_use, path, metadata)
             node_map[key] = sub_node_id
             
         # Link to parent
@@ -215,11 +246,9 @@ class DependencyLinker:
         scenario_name = metadata.additional_data.get("scenario_name", "")
         tags = metadata.additional_data.get("scenario_tags", [])
         
-        # Filter out metadata tags to find a meaningful functional tag
-        functional_tags = [t for t in tags if not self.config.is_metadata_tag(t)]
-        tag_to_use = functional_tags[0] if functional_tags else ""
-        
-        tag_str = (tag_to_use if tag_to_use.startswith("@") else f"@{tag_to_use}") if tag_to_use else ""
+        tag_str = ""
+        if self.context and self.context.tag_manager:
+            tag_str = self.context.tag_manager.get_display_tag(tags)
         
         if scenario_name.strip():
             return f"{tag_str} - {scenario_name}" if tag_str else scenario_name
