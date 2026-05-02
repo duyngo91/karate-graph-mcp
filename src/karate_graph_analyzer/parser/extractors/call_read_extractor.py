@@ -133,9 +133,15 @@ class CallReadExtractor(IDependencyExtractor):
             first_arg = expression.split(",")[0].strip()
             resolved_path = self._resolve_single_variable(first_arg.strip("\"'"))
 
+        # Normalize separators BEFORE stripping prefixes
         resolved_path = resolved_path.replace("\\", "/")
-        if resolved_path.startswith("classpath:"):
+        if resolved_path.startswith("classpath:/"):
+            resolved_path = resolved_path[11:]
+        elif resolved_path.startswith("classpath:"):
             resolved_path = resolved_path[10:]
+        
+        # Strip leading slashes after prefix removal
+        resolved_path = resolved_path.lstrip("/")
 
         return resolved_path, scenario_tag
 

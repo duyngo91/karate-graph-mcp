@@ -176,7 +176,18 @@ class NetworkXBuilder:
     
     def add_api_group_node(self, group_name: str, metadata: NodeMetadata) -> str:
         """Add API group node to graph."""
-        identity = "|".join([metadata.project_name, NodeType.API_GROUP.value, group_name, str(metadata.additional_data.get("level", ""))])
+        # Use the cumulative segment path from additional_data if available,
+        # otherwise fall back to group_name + level. This prevents hash
+        # collisions between same-named segments in different domain trees
+        # (e.g. "api" segment appearing under both t24.com and ecommerce.api.com).
+        cumulative_segment = metadata.additional_data.get("cumulative_segment", group_name)
+        identity = "|".join([
+            metadata.project_name,
+            NodeType.API_GROUP.value,
+            cumulative_segment,
+            str(metadata.additional_data.get("level", "")),
+        ])
+
         node_id = self._generate_stable_node_id(NodeType.API_GROUP, identity)
         node_data = {
             "id": node_id,

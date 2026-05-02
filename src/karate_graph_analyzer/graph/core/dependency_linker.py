@@ -26,7 +26,7 @@ class DependencyLinker:
         self.nx_builder = nx_builder
 
     def normalize_path(self, path: str) -> str:
-        """Normalize feature file path for consistent keys."""
+        """Normalize feature file path for consistent node keys."""
         if not path:
             return ""
         
@@ -34,19 +34,30 @@ class DependencyLinker:
         norm = path.replace("\\", "/")
         
         # 2. Strip prefixes like classpath: or file:
-        for prefix in ["classpath:", "file:"]:
-            if norm.startswith(prefix):
-                norm = norm[len(prefix):].lstrip("/")
+        if norm.startswith("classpath:/"):
+            norm = norm[11:]
+        elif norm.startswith("classpath:"):
+            norm = norm[10:]
+        elif norm.startswith("file:"):
+            norm = norm[5:].lstrip("/")
         
         # 3. Handle absolute paths by looking for common root markers
-        markers = ["src/test/java/", "src/test/resources/", "features/"]
+        markers = [
+            "src/test/java/",
+            "src/test/resources/",
+            "src/main/resources/",
+            "features/",
+        ]
         for marker in markers:
             if marker in norm:
-                norm = norm.split(marker)[-1]
+                norm = norm.split(marker, 1)[-1]
                 break
 
-        # 4. Ensure .feature extension if it's likely a feature file path
-        if "." not in norm.split("/")[-1] and not norm.endswith("/"):
+        # 4. Strip any leading slashes remaining after prefix removal
+        norm = norm.lstrip("/")
+
+        # 5. Ensure .feature extension if it's likely a feature file path
+        if "." not in norm.split("/")[-1] and not norm.endswith("/") and norm:
             norm += ".feature"
         
         return norm
@@ -272,10 +283,17 @@ class DependencyLinker:
                     line_number=None,
                     jira_tags=[],
                     project_name=metadata.project_name,
-                    additional_data={"level": i, "segment": segment, "base_url": base_url if i == 0 else None},
+                    additional_data={
+                        "level": i,
+                        "segment": segment,
+                        "base_url": base_url if i == 0 else None,
+                        # cumulative_segment makes the hash unique across different domain trees
+                        "cumulative_segment": cumulative_path,
+                    },
                 )
                 current_node_id = self.nx_builder.add_api_group_node(group_display_name, group_metadata)
                 node_map[node_key] = current_node_id
+
             
             if parent_node_id:
                 if not self.nx_builder.graph.has_edge(parent_node_id, current_node_id):
@@ -283,6 +301,30 @@ class DependencyLinker:
             
             parent_node_id = current_node_id
         
+        # API node key: use endpoint + http_method for dedup.
+        # DYNAMIC method means we couldn't detect it statically — treat it as
+        # the same node if another entry with the same URL already exists with
+        # a concrete method (POST/GET/etc.), otherwise use DYNAMIC as key so
+        # it can be enriched later.
+        if http_method == "DYNAMIC":
+            # Check if a concrete-method node already exists for this URL
+            existing_key = next(
+                (k for k in node_map if k[0] == NodeType.API and k[1].startswith(f"{endpoint}#") and not k[1].endswith("#DYNAMIC")),
+                None
+            )
+            if existing_key:
+                # Reuse the existing concrete-method node
+                leaf_node_id = node_map[existing_key]
+                if descriptive_name:
+                    self.nx_builder.update_node_metadata(leaf_node_id, {
+                        "descriptive_name": descriptive_name,
+                        "scenario_name": scenario_name,
+                        "scenario_tags": scenario_tags,
+                    })
+                if parent_node_id and not self.nx_builder.graph.has_edge(parent_node_id, leaf_node_id):
+                    self.nx_builder.add_dependency(parent_node_id, leaf_node_id, DependencyType.API)
+                return leaf_node_id
+
         node_key = (NodeType.API, f"{endpoint}#{http_method}")
         if node_key in node_map:
             leaf_node_id = node_map[node_key]
