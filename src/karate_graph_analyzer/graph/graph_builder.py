@@ -21,6 +21,7 @@ from karate_graph_analyzer.models import (
     NodeMetadata,
     NodeType,
     PathContext,
+    ParserConfig,
     Project,
     Scenario,
     FeatureAST,
@@ -42,10 +43,11 @@ logger = logging.getLogger(__name__)
 class GraphBuilder:
     """Facade for constructing dependency graphs."""
 
-    def __init__(self, parser: Optional["FeatureFileParser"] = None) -> None:
+    def __init__(self, parser: Optional["FeatureFileParser"] = None, config: Optional[ParserConfig] = None) -> None:
         self.nx_builder = NetworkXBuilder()
+        self.config = config or (parser.config if parser else ParserConfig())
         self.path_classifier = PathClassifier()
-        self.dependency_linker = DependencyLinker(self.nx_builder)
+        self.dependency_linker = DependencyLinker(self.nx_builder, config=self.config)
         self.incremental_updater = IncrementalUpdater(self.nx_builder, self.path_classifier, self.dependency_linker)
         self._injected_parser = parser
 
@@ -85,6 +87,10 @@ class GraphBuilder:
         self.nx_builder.graph = nx.DiGraph()
         parser = self._injected_parser or self._create_default_parser(project)
         
+        # Sync config with components
+        self.config = project.parser_config
+        self.dependency_linker.config = self.config
+        
         feature_files = self._get_feature_files(project)
         ast_list: List[FeatureAST] = []
         
@@ -112,6 +118,11 @@ class GraphBuilder:
     def build_from_asts(self, project: Project, ast_list: List[FeatureAST]) -> DependencyGraph:
         """Build a graph from pre-parsed ASTs using the same 2-pass strategy."""
         self.nx_builder.graph = nx.DiGraph()
+        
+        # Sync config with components
+        self.config = project.parser_config
+        self.dependency_linker.config = self.config
+        
         parser = self._injected_parser or self._create_default_parser(project)
 
         # Pass 1: Extract API definitions from COMMON components

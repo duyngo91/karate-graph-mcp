@@ -19,14 +19,16 @@ from karate_graph_analyzer.utils.path_resolver import PathResolver
 class DependencyLinker:
     """Handles linking of dependencies and building complex node structures."""
 
-    def __init__(self, nx_builder, ignored_files: Optional[set] = None) -> None:
+    def __init__(self, nx_builder, config: Optional[ParserConfig] = None, ignored_files: Optional[set] = None) -> None:
         """Initialize with a NetworkXBuilder instance.
 
         Args:
             nx_builder: NetworkXBuilder instance for graph operations
+            config: Optional ParserConfig for filtering and rules
             ignored_files: Optional set of normalized paths to ignore
         """
         self.nx_builder = nx_builder
+        self.config = config or ParserConfig()
         self.ignored_files = ignored_files or set()
 
     def normalize_path(self, path: str) -> str:
@@ -129,6 +131,11 @@ class DependencyLinker:
         
         # Normalize tag
         clean_tag = tag if tag.startswith('@') else f"@{tag}"
+        
+        # Skip technical/metadata tags for node creation
+        if self.config.is_metadata_tag(clean_tag):
+            return parent_id
+
         identity = f"{path}#{clean_tag}"
         
         key = (sub_type, identity)
@@ -207,7 +214,12 @@ class DependencyLinker:
     def _build_descriptive_api_name(self, metadata: NodeMetadata) -> str:
         scenario_name = metadata.additional_data.get("scenario_name", "")
         tags = metadata.additional_data.get("scenario_tags", [])
-        tag_str = (tags[0] if tags[0].startswith("@") else f"@{tags[0]}") if tags else ""
+        
+        # Filter out metadata tags to find a meaningful functional tag
+        functional_tags = [t for t in tags if not self.config.is_metadata_tag(t)]
+        tag_to_use = functional_tags[0] if functional_tags else ""
+        
+        tag_str = (tag_to_use if tag_to_use.startswith("@") else f"@{tag_to_use}") if tag_to_use else ""
         
         if scenario_name.strip():
             return f"{tag_str} - {scenario_name}" if tag_str else scenario_name

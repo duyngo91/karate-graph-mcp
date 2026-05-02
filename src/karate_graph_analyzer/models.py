@@ -254,6 +254,20 @@ class ParserConfig:
         }
     )
 
+    # Tags to ignore for node identification and display (regression/technical tags)
+    metadata_tags: List[str] = field(
+        default_factory=lambda: ["@healing", "@smoke", "@regression", "@ignore"]
+    )
+    metadata_tag_patterns: List[str] = field(
+        default_factory=lambda: [r"^@ALM2:", r"^@TC-\d+"]
+    )
+
+    def is_metadata_tag(self, tag: str) -> bool:
+        """Check if a tag is a metadata/technical tag that should be filtered out."""
+        if tag in self.metadata_tags:
+            return True
+        return any(re.match(pattern, tag) for pattern in self.metadata_tag_patterns)
+
 
 @dataclass
 class Project:

@@ -204,8 +204,10 @@ class FeatureFileParser:
     ) -> List[Dependency]:
         """Orchestrate dependency extraction across steps, merging background context."""
         dependencies: List[Dependency] = []
-        base_url_dep = None
-        api_paths = []
+        
+        # Track active API context
+        current_base_url_dep = None
+        current_api_paths = []
         
         # Resolve the ApiExtractor to access its helper methods
         from karate_graph_analyzer.parser.extractors.api_extractor import ApiExtractor
@@ -213,67 +215,87 @@ class FeatureFileParser:
         http_method = api_extractor.extract_http_method(scenario.steps) if api_extractor else "GET"
         http_method = http_method or "GET"
 
-        # 1. Process Background steps (context setting)
-        for step in background_steps:
-            deps = self.orchestrator.extract_from_step(step.text, step.line_number)
-            for d in deps:
-                # Detect potential baseUrl in background
-                if d.type == DependencyType.API and (d.parameters.get("resolved_from") or "${" in d.target):
-                    base_url_dep = d
-                else:
-                    dependencies.append(d)
+        has_emitted_api = False
 
-        # 2. Process Scenario steps
-        for step in scenario.steps:
-            deps = self.orchestrator.extract_from_step(step.text, step.line_number)
-            for d in deps:
-                if d.type == DependencyType.API:
-                    if d.target == "METHOD_MARKER": continue
+        def emit_api_call(line_number, is_final=False):
+            nonlocal has_emitted_api
+            if not current_base_url_dep and not current_api_paths:
+                return
+
+            if current_base_url_dep and current_api_paths:
+                # Combine URL + all Paths
+                combined_path = "".join([p.target for p in current_api_paths])
+                full_url = f"{current_base_url_dep.target}{combined_path}"
+                template, examples = api_extractor.detect_dynamic_params(combined_path) if api_extractor else (combined_path, [])
+                
+                dependencies.append(Dependency(
+                    type=DependencyType.API,
+                    target=full_url,
+                    line_number=line_number,
+                    parameters={
+                        **current_api_paths[-1].parameters,
+                        "base_url": current_base_url_dep.target,
+                        "path": combined_path,
+                        "path_template": template,
+                        "examples": examples,
+                        "combined": True,
+                        "scenario_name": scenario.name,
+                        "scenario_tags": scenario.tags,
+                        "http_method": http_method
+                    }
+                ))
+                has_emitted_api = True
+            elif current_base_url_dep:
+                # URL only - skip if we already emitted a combined one or if it's final and we emitted anything
+                if is_final and has_emitted_api:
+                    return
                     
-                    # Enrich API dependency with scenario metadata
-                    d.parameters.update({
+                d = current_base_url_dep
+                d.parameters.update({
+                    "scenario_name": scenario.name,
+                    "scenario_tags": scenario.tags,
+                    "http_method": http_method
+                })
+                dependencies.append(d)
+                has_emitted_api = True
+            elif current_api_paths:
+                # Path only (fallback)
+                for p in current_api_paths:
+                    template, examples = api_extractor.detect_dynamic_params(p.target) if api_extractor else (p.target, [])
+                    p.parameters.update({
+                        "path_template": template,
+                        "examples": examples,
                         "scenario_name": scenario.name,
                         "scenario_tags": scenario.tags,
                         "http_method": http_method
                     })
-                    
-                    if d.parameters.get("path_only"):
-                        api_paths.append(d)
+                    dependencies.append(p)
+                has_emitted_api = True
+
+        # 1. Process ALL steps sequentially to maintain context
+        all_steps = background_steps + scenario.steps
+        for step in all_steps:
+            deps = self.orchestrator.extract_from_step(step.text, step.line_number)
+            for d in deps:
+                if d.type == DependencyType.API:
+                    if d.target == "METHOD_MARKER":
+                        emit_api_call(d.line_number)
+                        # Reset paths for next call, but keep URL context
+                        current_api_paths = []
+                    elif d.parameters.get("path_only"):
+                        current_api_paths.append(d)
                     else:
-                        dependencies.append(d)
+                        current_base_url_dep = d
                 else:
-                    # Enrich other dependencies (DB, Page, etc.)
+                    # Non-API dependency (Call, DB, etc.)
                     d.parameters.update({
                         "scenario_name": scenario.name,
                         "scenario_tags": scenario.tags
                     })
                     dependencies.append(d)
 
-        # 3. Handle combined URL + Path pattern
-        if base_url_dep and api_paths:
-            for p in api_paths:
-                full_url = f"{base_url_dep.target}{p.target}"
-                template, examples = api_extractor.detect_dynamic_params(p.target) if api_extractor else (p.target, [])
-                dependencies.append(Dependency(
-                    type=DependencyType.API,
-                    target=full_url,
-                    line_number=p.line_number,
-                    parameters={
-                        **p.parameters,
-                        "base_url": base_url_dep.target,
-                        "path": p.target,
-                        "path_template": template,
-                        "examples": examples,
-                        "combined": True
-                    }
-                ))
-        elif api_paths:
-            # Fallback for paths without baseUrl
-            for p in api_paths:
-                template, examples = api_extractor.detect_dynamic_params(p.target) if api_extractor else (p.target, [])
-                p.parameters["path_template"] = template
-                p.parameters["examples"] = examples
-                dependencies.append(p)
+        # 2. Handle cases where scenario ends without explicit 'method' step or with pending paths
+        emit_api_call(scenario.line_number, is_final=True)
 
         # 4. Final Deduplication
         unique_deps: List[Dependency] = []
