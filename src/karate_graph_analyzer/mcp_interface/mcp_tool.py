@@ -811,7 +811,8 @@ class KarateGraphAnalyzerTool:
         self,
         project_name: str,
         path: Optional[str] = None,
-        scenario_tag: Optional[str] = None
+        scenario_tag: Optional[str] = None,
+        keyword: Optional[str] = None
     ) -> Dict[str, Any]:
         """Search for workflows and scenarios.
         
@@ -819,6 +820,7 @@ class KarateGraphAnalyzerTool:
             project_name: Name of the project
             path: Workflow file path pattern
             scenario_tag: Scenario tag (e.g., '@AddPayment')
+            keyword: Full-text search keyword
         
         Returns:
             Dictionary with search results
@@ -830,7 +832,7 @@ class KarateGraphAnalyzerTool:
                 "No projects have been analyzed. Analyze a project first."
             )
         
-        return self.search_tools.search_workflow(project_name, path, scenario_tag)
+        return self.search_tools.search_workflow(project_name, path, scenario_tag, keyword)
     
     def search_page(
         self,

@@ -127,7 +127,8 @@ class SearchTools:
         self,
         project_name: str,
         path: Optional[str] = None,
-        scenario_tag: Optional[str] = None
+        scenario_tag: Optional[str] = None,
+        keyword: Optional[str] = None
     ) -> Dict[str, Any]:
         """Search for workflows and scenarios.
         
@@ -152,8 +153,13 @@ class SearchTools:
             
             results = []
             
+            # Search by keyword
+            if keyword:
+                nodes = query_api.find_workflows_by_keyword(keyword)
+                results = [self._node_to_dict(n, query_api) for n in nodes]
+            
             # Search by scenario tag
-            if scenario_tag:
+            elif scenario_tag:
                 nodes = query_api.find_scenario_by_tag(scenario_tag)
                 results = [self._node_to_dict(n, query_api) for n in nodes]
             

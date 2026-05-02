@@ -6,6 +6,7 @@ Supports Dependency Injection for parser (testability).
 Refactored using Facade, Builder and Strategy patterns.
 """
 
+import json
 import logging
 import os
 import glob
@@ -133,7 +134,7 @@ class GraphBuilder:
         dependency_node_map: Dict[Tuple, str] = {}
         self._build_nodes_and_edges(file_asts, parser, project, common_api_deps_map, dependency_node_map)
 
-        return self._create_final_graph(project.name)
+        return self._create_final_graph(project.name, project.root_path)
 
     def build_from_asts(self, project: Project, file_asts: List) -> DependencyGraph:
         """Build a graph from pre-parsed ASTs using the same 2-pass strategy."""
@@ -159,7 +160,7 @@ class GraphBuilder:
 
         dependency_node_map: Dict[Tuple, str] = {}
         self._build_nodes_and_edges(file_asts, parser, project, common_api_deps_map, dependency_node_map)
-        return self._create_final_graph(project.name)
+        return self._create_final_graph(project.name, project.root_path)
 
     def _create_default_parser(self, project: Project):
         from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
@@ -271,14 +272,36 @@ class GraphBuilder:
                 dep_id = self.dependency_linker.get_or_create_dependency_node(dep, project.name, node_map)
                 self.nx_builder.add_dependency(node_id, dep_id, dep.type, line_number=dep.line_number)
 
-    def _create_final_graph(self, project_name: str) -> DependencyGraph:
+    def _create_final_graph(self, project_name: str, project_root: str = None) -> DependencyGraph:
         cycles = self.nx_builder.detect_cycles()
-        nodes_dict = {
-            nid: Node(id=nd["id"], type=nd["type"], name=nd["name"],
-                     metadata=NodeMetadata(**{k: v for k, v in nd["metadata"].items() if k != "project_name"}, 
-                                        project_name=nd["metadata"].get("project_name", project_name)))
-            for nid, nd in self.nx_builder.graph.nodes(data=True)
-        }
+        nodes_dict = {}
+        for nid, nd in self.nx_builder.graph.nodes(data=True):
+            meta = NodeMetadata(**{k: v for k, v in nd["metadata"].items() if k != "project_name"}, 
+                                project_name=nd["metadata"].get("project_name", project_name))
+            
+            # Feature 1: Locator Content Indexing
+            if nd["type"] == NodeType.LOCATOR.value and project_root and meta.file_path:
+                try:
+                    locator_path = os.path.join(project_root, meta.file_path)
+                    
+                    # Try common Karate prefixes if direct path doesn't exist
+                    if not os.path.exists(locator_path):
+                        for prefix in ['src/test/java', 'src/test/resources', 'src/main/resources']:
+                            candidate = os.path.join(project_root, prefix, meta.file_path)
+                            if os.path.exists(candidate):
+                                locator_path = candidate
+                                break
+                                
+                    if os.path.exists(locator_path) and locator_path.endswith('.json'):
+                        with open(locator_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            if isinstance(data, dict):
+                                meta.additional_data['selectors'] = list(data.keys())
+                except Exception as e:
+                    logger.warning(f"Failed to parse locator file {meta.file_path}: {e}")
+
+            nodes_dict[nid] = Node(id=nd["id"], type=nd["type"], name=nd["name"], metadata=meta)
+            
         edges_dict = {
             ed["id"]: Edge(
                 id=ed["id"], 

@@ -104,7 +104,8 @@ def search_api(
 def search_workflow(
     project_name: str,
     path: Optional[str] = None,
-    scenario_tag: Optional[str] = None
+    scenario_tag: Optional[str] = None,
+    keyword: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Search for workflows or specific scenarios.
@@ -113,8 +114,9 @@ def search_workflow(
         project_name: Name of the analyzed project.
         path: Workflow file path pattern.
         scenario_tag: Scenario tag (e.g., '@AddPayment').
+        keyword: Keyword for full-text search.
     """
-    return analyzer_tool.search_workflow(project_name, path, scenario_tag)
+    return analyzer_tool.search_workflow(project_name, path, scenario_tag, keyword)
 
 @mcp.tool()
 def search_test_case(

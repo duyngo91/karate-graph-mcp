@@ -119,6 +119,30 @@ class GraphQuery:
                 return node
         return None
 
+    def find_workflows_by_keyword(self, keyword: str) -> List[Node]:
+        """Search workflows and scenarios by keyword in name, tags, or description."""
+        keyword_lower = keyword.lower()
+        results = []
+        for node in self.graph.nodes.values():
+            if node.type in (NodeType.WORKFLOW, NodeType.SCENARIO):
+                # Search in name
+                if keyword_lower in node.name.lower():
+                    results.append(node)
+                    continue
+                
+                # Search in metadata
+                data = node.metadata.additional_data
+                if 'scenario_tag' in data and keyword_lower in data['scenario_tag'].lower():
+                    results.append(node)
+                    continue
+                if 'tags' in data and any(keyword_lower in tag.lower() for tag in data['tags']):
+                    results.append(node)
+                    continue
+                if 'steps' in data and any(keyword_lower in step.lower() for step in data['steps']):
+                    results.append(node)
+                    continue
+        return results
+
     def find_scenario_by_tag(self, tag: str) -> List[Node]:
         if not tag.startswith("@"):
             tag = f"@{tag}"
