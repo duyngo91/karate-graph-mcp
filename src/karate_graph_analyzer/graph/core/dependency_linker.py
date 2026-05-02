@@ -260,37 +260,44 @@ class DependencyLinker:
         if path: segments.extend([p for p in path.split('/') if p])
         return segments
 
-    def create_api_hierarchy(self, endpoint: str, metadata: NodeMetadata, node_map: Dict[Tuple, str]) -> str:
-        """Create hierarchical API structure and return leaf node ID."""
+    def create_api_hierarchy(self, endpoint: str, metadata: NodeMetadata, node_map: Dict) -> str:
+        """Create hierarchical API nodes from a target URL."""
+        base_url = metadata.additional_data.get("base_url") or ""
         http_method = metadata.additional_data.get("http_method", "GET")
-        path_template = metadata.additional_data.get("path_template", "")
-        base_url = metadata.additional_data.get("base_url", "")
+        path_template = metadata.additional_data.get("path_template")
         
-        target_url = f"{base_url}{path_template}" if (path_template and base_url) else endpoint
+        target_url = endpoint
+        if not endpoint.startswith("http") and base_url:
+            target_url = f"{base_url}/{endpoint.lstrip('/')}"
+            
         segments = self.parse_api_hierarchy(target_url)
         
         if not segments:
             return self.create_single_api_node(endpoint, metadata, node_map)
             
-        # Filter out dynamic path params like {id} or {orderId}, but KEEP ${varName} Karate variables
-        # - Dynamic params: {xxx}   → remove (they vary per request)
-        # - Karate vars:   ${xxx}   → keep (they represent logical environments/domains)
-        static_segments = [seg for seg in segments if not re.search(r'(?<!\$)\{[^}]+\}', seg)]
+        static_segments = self._get_static_segments(segments)
         descriptive_name = self._build_descriptive_api_name(metadata)
         
-        # Display name for leaf node
-        display_name = endpoint
-        if path_template and "{" in path_template:
-            match = re.search(r'\{([^}]+)\}', path_template)
-            if match: display_name = f"{endpoint} {{{match.group(1)}}}"
+        display_name = self._get_api_display_name(endpoint, path_template)
         
         if descriptive_name:
             metadata.additional_data["descriptive_name"] = descriptive_name
         
         parent_node_id = self._build_api_group_chain(static_segments, base_url, metadata, node_map)
         
-        # Handle Dynamic methods and leaf node creation
         return self._get_or_create_leaf_api_node(endpoint, http_method, display_name, metadata, parent_node_id, node_map)
+
+    def _get_static_segments(self, segments: List[str]) -> List[str]:
+        """Filter out dynamic path params but keep Karate variables."""
+        return [seg for seg in segments if not re.search(r'(?<!\$)\{[^}]+\}', seg)]
+
+    def _get_api_display_name(self, endpoint: str, path_template: Optional[str]) -> str:
+        """Derive display name for an API node."""
+        if path_template and "{" in path_template:
+            match = re.search(r'\{([^}]+)\}', path_template)
+            if match:
+                return f"{endpoint} {{{match.group(1)}}}"
+        return endpoint
 
     def _build_descriptive_api_name(self, metadata: NodeMetadata) -> str:
         scenario_name = metadata.additional_data.get("scenario_name", "")
@@ -307,45 +314,45 @@ class DependencyLinker:
     def _build_api_group_chain(self, segments: List[str], base_url: str, metadata: NodeMetadata, node_map: Dict) -> Optional[str]:
         parent_id = None
         for i, segment in enumerate(segments):
-            # cumulative_path must include ALL segments from root to current
-            # to avoid key collision between domain-prefixed and path-only hierarchies
             cumulative_path = '/'.join(segments[:i+1])
             node_key = (NodeType.API_GROUP, cumulative_path)
             
             if node_key in node_map:
                 current_id = node_map[node_key]
             else:
-                # Display name: always use the segment (e.g. "${t24Url}", "api", "v2")
-                # base_url is only stored as metadata for reference, not as the node label
-                display_name = segment
-                additional_data = {
-                    "level": i,
-                    "segment": segment,
-                    "base_url": base_url if i == 0 else None,
-                    "cumulative_segment": cumulative_path
-                }
+                current_id = self._create_api_group_node(segment, cumulative_path, i, base_url, metadata, node_map)
                 
-                # Check for environment-specific URLs for domain nodes
-                if i == 0 and self.context and self.context.project and self.context.project.parser_config:
-                    var_name = segment.replace("${", "").replace("}", "")
-                    env_map = self.context.project.parser_config.env_url_mapping.get(var_name)
-                    if not env_map: # Try with original segment just in case
-                        env_map = self.context.project.parser_config.env_url_mapping.get(segment)
-                        
-                    if env_map:
-                        additional_data["environments"] = env_map
-
-                group_meta = NodeMetadata(
-                    file_path=None, line_number=None, jira_tags=[], project_name=metadata.project_name,
-                    additional_data=additional_data
-                )
-                current_id = self.nx_builder.add_api_group_node(display_name, group_meta)
-                node_map[node_key] = current_id
-
-            if parent_id and not self.nx_builder.graph.has_edge(parent_id, current_id):
+            if parent_id:
                 self.nx_builder.add_dependency(parent_id, current_id, DependencyType.API)
             parent_id = current_id
         return parent_id
+
+    def _create_api_group_node(self, segment, cumulative_path, level, base_url, metadata, node_map) -> str:
+        """Create a single API_GROUP node with appropriate metadata."""
+        additional_data = {
+            "level": level,
+            "segment": segment,
+            "base_url": base_url if level == 0 else None,
+            "cumulative_segment": cumulative_path
+        }
+        
+        # Domain node environment mapping
+        if level == 0 and self.context and self.context.project and self.context.project.parser_config:
+            var_name = segment.replace("${", "").replace("}", "")
+            env_map = self.context.project.parser_config.env_url_mapping.get(var_name)
+            if not env_map:
+                env_map = self.context.project.parser_config.env_url_mapping.get(segment)
+            if env_map:
+                additional_data["environments"] = env_map
+
+        group_meta = NodeMetadata(
+            file_path=None, line_number=None, jira_tags=[], project_name=metadata.project_name,
+            additional_data=additional_data
+        )
+        
+        node_id = self.nx_builder.add_api_group_node(segment, group_meta)
+        node_map[(NodeType.API_GROUP, cumulative_path)] = node_id
+        return node_id
 
 
     def _get_or_create_leaf_api_node(self, endpoint: str, method: str, display: str, metadata: NodeMetadata, parent_id: str, node_map: Dict) -> str:

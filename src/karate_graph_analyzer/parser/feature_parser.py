@@ -1,7 +1,8 @@
 import logging
 import os
 import re
-from typing import List, Optional, TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import List, Optional, TYPE_CHECKING, Dict
 
 from karate_graph_analyzer.models import (
     Dependency,
@@ -24,6 +25,21 @@ if TYPE_CHECKING:
     from karate_graph_analyzer.interfaces import IDependencyExtractor
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ParsingContext:
+    """Internal state for FeatureFileParser."""
+    file_path: str
+    feature_name: Optional[str] = None
+    background_steps: List[Step] = field(default_factory=list)
+    scenarios: List[Scenario] = field(default_factory=list)
+    feature_tags: List[str] = field(default_factory=list)
+    current_tags: List[str] = field(default_factory=list)
+    current_scenario: Optional[Scenario] = None
+    current_examples: Optional[Examples] = None
+    last_step: Optional[Step] = None
+    state: str = "INIT"
 
 
 class FeatureFileParser:
@@ -68,105 +84,118 @@ class FeatureFileParser:
 
         tokens = list(self.lexer.tokenize(lines))
         
-        feature_name = None
-        background_steps = []
-        scenarios = []
-        
-        feature_tags = []
-        current_tags = []
-        current_scenario = None
-        current_examples = None
-        last_step = None
-        state = "INIT" # INIT, BACKGROUND, SCENARIO
+        ctx = ParsingContext(file_path=file_path)
 
         for token in tokens:
-            if (
-                token.type not in [GherkinTokenType.STEP, GherkinTokenType.TABLE_ROW]
-                and last_step is not None
-                and self._has_unclosed_parentheses(last_step.text)
-            ):
-                last_step.text = f"{last_step.text}\n{token.text}"
-                if not self._has_unclosed_parentheses(last_step.text):
-                    last_step = None
+            if self._handle_multiline_step(token, ctx):
                 continue
+            
+            self._process_token(token, ctx)
 
-            if token.type == GherkinTokenType.TAG:
-                # Extract tags from the @line (including colons for ALM2/ID tags)
-                tags = re.findall(r"@[\w\-_:]+", token.text)
-                current_tags.extend(tags)
-                current_examples = None
-                last_step = None
-            
-            elif token.type == GherkinTokenType.FEATURE:
-                feature_name = token.text
-                feature_tags = list(current_tags) # Store feature level tags
-                current_tags = [] # Reset for potential background or first scenario
-                current_examples = None
-                last_step = None
-            
-            elif token.type == GherkinTokenType.BACKGROUND:
-                state = "BACKGROUND"
-                current_examples = None
-                last_step = None
-            
-            elif token.type in [GherkinTokenType.SCENARIO, GherkinTokenType.SCENARIO_OUTLINE]:
-                state = "SCENARIO"
-                current_examples = None
-                last_step = None
-                
-                # Merge feature tags with scenario tags
-                merged_tags = list(set(feature_tags + current_tags))
-                
-                jira_tags = self._filter_jira_tags(merged_tags)
-                
-                # Check for @setup linkage
-                setup_name = None
-                setup_line = None
-                if token.type == GherkinTokenType.SCENARIO_OUTLINE and scenarios:
-                    last_s = scenarios[-1]
-                    if "@setup" in last_s.tags:
-                        setup_name = last_s.name
-                        setup_line = last_s.line_number
+        self._log_parse_warnings(ctx.scenarios)
+        return FeatureAST(file_path, ctx.feature_name, ctx.scenarios, ctx.background_steps)
 
-                current_scenario = Scenario(
-                    name=token.text or f"Unnamed Scenario at {token.line_number}",
-                    type=ScenarioType.SCENARIO if token.type == GherkinTokenType.SCENARIO else ScenarioType.SCENARIO_OUTLINE,
-                    tags=merged_tags,
-                    jira_tags=jira_tags,
-                    file_path=file_path,
-                    line_number=token.line_number,
-                    steps=[],
-                    examples=None,
-                    setup_scenario=setup_name,
-                    setup_line_number=setup_line
-                )
-                scenarios.append(current_scenario)
-                current_tags = [] # Reset for next scenario
-            
-            elif token.type == GherkinTokenType.STEP:
-                step = Step(keyword=token.keyword, text=token.text, line_number=token.line_number)
-                if state == "BACKGROUND":
-                    background_steps.append(step)
-                    last_step = step
-                elif state == "SCENARIO" and current_scenario:
-                    current_scenario.steps.append(step)
-                    last_step = step
-                current_examples = None
-            
-            elif token.type == GherkinTokenType.EXAMPLES and current_scenario:
-                current_examples = Examples(headers=[], rows=[], line_number=token.line_number)
-                current_scenario.examples = current_examples
-                last_step = None
+    def _handle_multiline_step(self, token, ctx) -> bool:
+        """Handle steps that span multiple lines due to unclosed parentheses."""
+        if (
+            token.type not in [GherkinTokenType.STEP, GherkinTokenType.TABLE_ROW]
+            and ctx.last_step is not None
+            and self._has_unclosed_parentheses(ctx.last_step.text)
+        ):
+            ctx.last_step.text = f"{ctx.last_step.text}\n{token.text}"
+            if not self._has_unclosed_parentheses(ctx.last_step.text):
+                ctx.last_step = None
+            return True
+        return False
 
-            elif token.type == GherkinTokenType.TABLE_ROW and current_examples:
-                cells = self._parse_table_row(token.text)
-                if not current_examples.headers:
-                    current_examples.headers = cells
-                else:
-                    current_examples.rows.append(cells)
+    def _process_token(self, token, ctx):
+        """Dispatch token processing to specific handlers."""
+        handlers = {
+            GherkinTokenType.TAG: self._handle_tag,
+            GherkinTokenType.FEATURE: self._handle_feature,
+            GherkinTokenType.BACKGROUND: self._handle_background,
+            GherkinTokenType.SCENARIO: self._handle_scenario,
+            GherkinTokenType.SCENARIO_OUTLINE: self._handle_scenario,
+            GherkinTokenType.STEP: self._handle_step,
+            GherkinTokenType.EXAMPLES: self._handle_examples,
+            GherkinTokenType.TABLE_ROW: self._handle_table_row
+        }
+        handler = handlers.get(token.type)
+        if handler:
+            handler(token, ctx)
 
-        self._log_parse_warnings(scenarios)
-        return FeatureAST(file_path, feature_name, scenarios, background_steps)
+    def _handle_tag(self, token, ctx):
+        tags = re.findall(r"@[\w\-_:]+", token.text)
+        ctx.current_tags.extend(tags)
+        ctx.current_examples = None
+        ctx.last_step = None
+
+    def _handle_feature(self, token, ctx):
+        ctx.feature_name = token.text
+        ctx.feature_tags = list(ctx.current_tags)
+        ctx.current_tags = []
+        ctx.current_examples = None
+        ctx.last_step = None
+
+    def _handle_background(self, token, ctx):
+        ctx.state = "BACKGROUND"
+        ctx.current_examples = None
+        ctx.last_step = None
+
+    def _handle_scenario(self, token, ctx):
+        ctx.state = "SCENARIO"
+        ctx.current_examples = None
+        ctx.last_step = None
+        
+        merged_tags = list(set(ctx.feature_tags + ctx.current_tags))
+        jira_tags = self._filter_jira_tags(merged_tags)
+        
+        setup_name = None
+        setup_line = None
+        if token.type == GherkinTokenType.SCENARIO_OUTLINE and ctx.scenarios:
+            last_s = ctx.scenarios[-1]
+            if "@setup" in last_s.tags:
+                setup_name = last_s.name
+                setup_line = last_s.line_number
+
+        ctx.current_scenario = Scenario(
+            name=token.text or f"Unnamed Scenario at {token.line_number}",
+            type=ScenarioType.SCENARIO if token.type == GherkinTokenType.SCENARIO else ScenarioType.SCENARIO_OUTLINE,
+            tags=merged_tags,
+            jira_tags=jira_tags,
+            file_path=ctx.file_path,
+            line_number=token.line_number,
+            steps=[],
+            examples=None,
+            setup_scenario=setup_name,
+            setup_line_number=setup_line
+        )
+        ctx.scenarios.append(ctx.current_scenario)
+        ctx.current_tags = []
+
+    def _handle_step(self, token, ctx):
+        step = Step(keyword=token.keyword, text=token.text, line_number=token.line_number)
+        if ctx.state == "BACKGROUND":
+            ctx.background_steps.append(step)
+            ctx.last_step = step
+        elif ctx.state == "SCENARIO" and ctx.current_scenario:
+            ctx.current_scenario.steps.append(step)
+            ctx.last_step = step
+        ctx.current_examples = None
+
+    def _handle_examples(self, token, ctx):
+        if ctx.current_scenario:
+            ctx.current_examples = Examples(table=GherkinTable(headers=[], rows=[]), line_number=token.line_number)
+            ctx.current_scenario.examples = ctx.current_examples
+            ctx.last_step = None
+
+    def _handle_table_row(self, token, ctx):
+        if ctx.current_examples:
+            cells = self._parse_table_row(token.text)
+            if not ctx.current_examples.table.headers:
+                ctx.current_examples.table.headers = cells
+            else:
+                ctx.current_examples.table.rows.append(cells)
 
     def extract_scenarios(self, ast: FeatureAST) -> List[Scenario]:
         """Return scenarios from a parsed AST for backward compatibility."""
@@ -196,13 +225,13 @@ class FeatureFileParser:
                 logger.warning(
                     "Scenario Outline '%s' has no Examples block", scenario.name
                 )
-            if scenario.examples is not None and not scenario.examples.headers:
+            if scenario.examples is not None and not scenario.examples.table.headers:
                 logger.warning(
                     "Examples block for scenario '%s' has no table data", scenario.name
                 )
-            if scenario.examples is not None and scenario.examples.headers:
-                expected_cols = len(scenario.examples.headers)
-                for row in scenario.examples.rows:
+            if scenario.examples is not None and scenario.examples.table.headers:
+                expected_cols = len(scenario.examples.table.headers)
+                for row in scenario.examples.table.rows:
                     if len(row) != expected_cols:
                         logger.warning(
                             "Examples row in scenario '%s' has %d columns, expected %d",

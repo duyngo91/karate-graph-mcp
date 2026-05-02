@@ -85,20 +85,22 @@ class GraphBuilder:
     def detect_cycles(self) -> List[List[str]]:
         return self.nx_builder.detect_cycles()
 
-    def build_from_project(self, project: Project) -> DependencyGraph:
-        """Build complete graph for a project using 2-pass strategy."""
+    def _initialize_context(self, project: Project):
+        """Shared initialization logic for building graphs."""
         self.nx_builder.graph = nx.DiGraph()
-        
-        # Initialize Context
         self.context = AnalysisContext(project)
         self.config = self.context.config
         
-        # Inject context into components
+        # Inject context into dependent components
         self.path_classifier.context = self.context
         self.dependency_linker.context = self.context
+        self.dependency_linker.path_classifier = self.path_classifier
         
-        parser = self._injected_parser or self._create_default_parser(project)
-        
+        return self._injected_parser or self._create_default_parser(project)
+
+    def build_from_project(self, project: Project) -> DependencyGraph:
+        """Build complete graph for a project using 2-pass strategy."""
+        parser = self._initialize_context(project)
         feature_files = self._get_feature_files(project)
         ast_list: List[FeatureAST] = []
         
@@ -117,7 +119,7 @@ class GraphBuilder:
                 logger.error(f"Failed to parse {path}: {str(e)}")
                 ignored_files.add(PathResolver.normalize_path(path))
 
-        # Store ignored files in a way build_from_asts can access
+        # Store ignored files
         self._ignored_files = ignored_files
         self.dependency_linker.ignored_files = ignored_files
 
@@ -125,18 +127,7 @@ class GraphBuilder:
 
     def build_from_asts(self, project: Project, ast_list: List[FeatureAST]) -> DependencyGraph:
         """Build a graph from pre-parsed ASTs using the same 2-pass strategy."""
-        self.nx_builder.graph = nx.DiGraph()
-        
-        # Initialize Context
-        self.context = AnalysisContext(project)
-        self.config = self.context.config
-        
-        # Inject context into components
-        self.path_classifier.context = self.context
-        self.dependency_linker.context = self.context
-        self.dependency_linker.path_classifier = self.path_classifier
-        
-        parser = self._injected_parser or self._create_default_parser(project)
+        parser = self._initialize_context(project)
 
         # Pass 1: Extract API definitions from COMMON components
         common_api_map: Dict[Tuple[str, str], List] = {}
