@@ -24,8 +24,11 @@ from karate_graph_analyzer.models import (
     ParserConfig,
     Project,
     ReusableComponent,
+    VisualizationMode,
 )
 from karate_graph_analyzer.visualization.graph_visualizer import GraphVisualizer
+from karate_graph_analyzer.parser.execution_parser import ExecutionReportParser
+from karate_graph_analyzer.analyzer.graph_diff import GraphComparator
 from karate_graph_analyzer.storage.project_registry import ProjectRegistry
 from karate_graph_analyzer.utils.source_snippet import get_source_snippet
 
@@ -113,6 +116,22 @@ class MergeProjectsRequest(BaseModel):
 
     project_names: List[str] = Field(..., min_length=1, description="List of project names to merge")
     new_project_name: str = Field(default="Merged_Project", description="Name for the resulting merged project")
+
+
+class RenderExecutionReportRequest(BaseModel):
+    """Request model for render_execution_report."""
+
+    project_name: str = Field(..., description="Name of the analyzed project")
+    report_path: str = Field(..., description="Path to the Karate execution report (JSON format)")
+    output_path: Optional[str] = Field(default=None, description="Optional custom path to save the HTML file")
+
+
+class CompareProjectsRequest(BaseModel):
+    """Request model for compare_projects."""
+
+    base_project_name: str = Field(..., description="Name of the base (old) project")
+    new_project_name: str = Field(..., description="Name of the new project to compare")
+    output_path: Optional[str] = Field(default=None, description="Optional custom path to save the HTML file")
 
 
 class GetApiStatsRequest(BaseModel):
@@ -694,6 +713,102 @@ class KarateGraphAnalyzerTool:
         except Exception as e:
             logger.error(f"Failed to export graph for '{project_name}': {e}")
             return self._error_response(5004, "EXPORT_ERROR", str(e))
+
+    def render_execution_report(self, project_name: str, report_path: str, output_path: Optional[str] = None) -> Dict[str, Any]:
+        """Generate an execution report visualization (Living Graph).
+        
+        Args:
+            project_name: Name of the analyzed project
+            report_path: Path to the Karate execution report (JSON)
+            output_path: Optional custom output path
+        """
+        try:
+            # Validate input
+            request = RenderExecutionReportRequest(
+                project_name=project_name, 
+                report_path=report_path, 
+                output_path=output_path
+            )
+
+            if request.project_name not in self.graphs:
+                return self._error_response(3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' not found or not analyzed")
+
+            graph = self.graphs[request.project_name]
+            
+            # 1. Parse report and apply to graph
+            parser = ExecutionReportParser(graph)
+            applied_count = parser.apply_reports([request.report_path])
+            
+            # 2. Render in EXECUTION mode
+            if not request.output_path:
+                # Default output path
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                request.output_path = str(Path("output") / f"execution_report_{request.project_name}_{timestamp}.html")
+            
+            visualizer = GraphVisualizer(graph, mode=VisualizationMode.EXECUTION)
+            visualizer.render(request.output_path)
+            
+            logger.info(f"Generated execution report for '{project_name}' at {request.output_path}")
+            
+            return {
+                "success": True,
+                "message": f"Execution report generated successfully ({applied_count} results applied)",
+                "output_path": request.output_path,
+                "applied_results": applied_count
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to render execution report: {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def compare_projects(self, base_project_name: str, new_project_name: str, output_path: Optional[str] = None) -> Dict[str, Any]:
+        """Compare two projects and generate a diff visualization report.
+        
+        Args:
+            base_project_name: Name of the base project
+            new_project_name: Name of the new project
+            output_path: Optional custom output path
+        """
+        try:
+            # Validate input
+            request = CompareProjectsRequest(
+                base_project_name=base_project_name,
+                new_project_name=new_project_name,
+                output_path=output_path
+            )
+            
+            if request.base_project_name not in self.graphs:
+                return self._error_response(3003, "PROJECT_MANAGEMENT", f"Base project '{base_project_name}' not found or not analyzed")
+            
+            if request.new_project_name not in self.graphs:
+                return self._error_response(3003, "PROJECT_MANAGEMENT", f"New project '{new_project_name}' not found or not analyzed")
+            
+            base_graph = self.graphs[request.base_project_name]
+            new_graph = self.graphs[request.new_project_name]
+            
+            # 1. Compare graphs
+            comparator = GraphComparator()
+            diff_graph = comparator.compare(base_graph, new_graph)
+            
+            # 2. Render in DIFF mode
+            if not request.output_path:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                request.output_path = str(Path("output") / f"diff_report_{request.base_project_name}_vs_{request.new_project_name}_{timestamp}.html")
+                
+            visualizer = GraphVisualizer(diff_graph, mode=VisualizationMode.DIFF)
+            visualizer.render(request.output_path)
+            
+            logger.info(f"Generated diff report for '{base_project_name}' vs '{new_project_name}' at {request.output_path}")
+            
+            return {
+                "success": True,
+                "message": "Project comparison report generated successfully",
+                "output_path": request.output_path
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to compare projects: {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def import_graph(self, data: str, format: str, project_name: str) -> Dict[str, Any]:
         """Import graph from JSON or GraphML.

@@ -97,6 +97,23 @@ class NodeMetadata:
     additional_data: Dict[str, Any] = field(default_factory=dict)
 
 
+class VisualizationMode(str, Enum):
+    """Rendering modes for the graph visualizer."""
+
+    DEFAULT = "DEFAULT"
+    EXECUTION = "EXECUTION"
+    DIFF = "DIFF"
+
+
+class DiffStatus(str, Enum):
+    """Status of a node/edge in a differential analysis."""
+
+    ADDED = "ADDED"
+    REMOVED = "REMOVED"
+    MODIFIED = "MODIFIED"
+    UNCHANGED = "UNCHANGED"
+
+
 @dataclass
 class Node:
     """Graph node representing a test component."""
@@ -106,6 +123,13 @@ class Node:
     name: str
     metadata: NodeMetadata
     tags: List[str] = field(default_factory=list)
+    
+    # Execution status (Idea #1)
+    execution_status: Optional[str] = None  # PASSED, FAILED, SKIPPED
+    execution_details: Dict[str, Any] = field(default_factory=dict)
+    
+    # Diff status (Idea #2)
+    diff_status: DiffStatus = DiffStatus.UNCHANGED
 
 
 @dataclass
@@ -117,6 +141,7 @@ class Edge:
     to_node: str
     type: DependencyType
     line_number: Optional[int] = None
+    diff_status: DiffStatus = DiffStatus.UNCHANGED
 
 
 @dataclass

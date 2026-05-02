@@ -3,51 +3,70 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-from karate_graph_analyzer.models import DependencyGraph, NodeType
-from .templates import FULL_LEGEND_TEMPLATE
+from karate_graph_analyzer.models import (
+    DependencyGraph, 
+    NodeType, 
+    Edge, 
+    VisualizationMode, 
+    DiffStatus
+)
+from karate_graph_analyzer.visualization.templates import (
+    FULL_LEGEND_TEMPLATE
+)
 
 logger = logging.getLogger(__name__)
 
 
 class GraphVisualizer:
-    """Interactive graph visualizer using pyvis."""
+    """Renders DependencyGraph to an interactive HTML using pyvis."""
 
-    # Color scheme for different node types
+    # Standard colors for Default mode
     NODE_COLORS = {
-        NodeType.TEST_CASE: "#4CAF50",      # Green
-        NodeType.WORKFLOW: "#2196F3",       # Blue
-        NodeType.COMMON: "#2196F3",         # Blue
-        NodeType.API: "#FF9800",            # Orange
-        NodeType.API_GROUP: "#FFB74D",      # Light Orange
-        NodeType.PAGE: "#9C27B0",           # Purple
-        NodeType.DATABASE: "#F44336",       # Red
-        NodeType.SCENARIO: "#9C27B0",       # Purple
-        NodeType.ACTION: "#E91E63",         # Pink
-        NodeType.LOCATOR: "#607D8B",        # Blue Grey
+        NodeType.TEST_CASE: "#4CAF50",    # Green
+        NodeType.WORKFLOW: "#2196F3",     # Blue
+        NodeType.COMMON: "#2196F3",       # Blue
+        NodeType.SCENARIO: "#9C27B0",     # Purple
+        NodeType.API: "#FF9800",          # Orange (Method)
+        NodeType.API_GROUP: "#FF5722",    # Deep Orange (Domain/Path)
+        NodeType.PAGE: "#9C27B0",         # Purple
+        NodeType.ACTION: "#E91E63",       # Pink
+        NodeType.DATABASE: "#F44336",     # Red
+        NodeType.LOCATOR: "#9E9E9E",      # Grey
     }
 
-    # Shape scheme for different node types
+    # Status colors for Execution/Diff modes
+    STATUS_COLORS = {
+        "PASSED": "#4CAF50",
+        "FAILED": "#F44336",
+        "ADDED": "#4CAF50",
+        "REMOVED": "#F44336",
+        "MODIFIED": "#FF9800",
+        "NEUTRAL": "#9E9E9E", # Gray for unchanged
+    }
+
     NODE_SHAPES = {
-        NodeType.TEST_CASE: "box",
-        NodeType.WORKFLOW: "ellipse",
-        NodeType.COMMON: "ellipse",
-        NodeType.API: "diamond",
-        NodeType.API_GROUP: "dot",
-        NodeType.PAGE: "triangle",
-        NodeType.DATABASE: "database",
+        NodeType.TEST_CASE: "dot",
+        NodeType.WORKFLOW: "dot",
+        NodeType.COMMON: "dot",
         NodeType.SCENARIO: "diamond",
+        NodeType.API: "diamond",
+        NodeType.API_GROUP: "hexagon",
+        NodeType.PAGE: "triangle",
         NodeType.ACTION: "diamond",
-        NodeType.LOCATOR: "hexagon",
+        NodeType.DATABASE: "square",
+        NodeType.LOCATOR: "dot",
     }
 
-    def __init__(self, graph: DependencyGraph):
+    def __init__(self, graph: DependencyGraph, mode: VisualizationMode = VisualizationMode.DEFAULT):
         """Initialize visualizer with dependency graph.
 
         Args:
             graph: Dependency graph to visualize
+            mode: Visualization mode (DEFAULT, EXECUTION, or DIFF)
         """
         self.graph = graph
-        logger.info(f"Initialized GraphVisualizer for project '{graph.project_name}'")
+        self.mode = mode
+        logger.info(f"Initialized GraphVisualizer for project '{graph.project_name}' in {mode} mode")
 
     def render(
         self,
@@ -101,22 +120,101 @@ class GraphVisualizer:
         net.set_options(json.dumps(options))
 
     def _add_graph_elements(self, net: Any):
-        """Add nodes and edges from the dependency graph."""
+        """Add nodes and edges from the dependency graph using mode-specific coloring."""
+        # 1. Add Nodes
         for node in self.graph.nodes.values():
             mass = 5 if node.type == NodeType.API_GROUP and node.metadata.additional_data.get("level") == 0 else 1
+            
+            # Initialize with default type-based styles
+            color = self.NODE_COLORS.get(node.type, "#808080")
+            border_width = 1
+            border_color = "#2c3e50"
+            node_name = node.name
+            
+            # OVERRIDE based on mode and status
+            if self.mode == VisualizationMode.EXECUTION:
+                if node.execution_status == "PASSED":
+                    color = self.STATUS_COLORS["PASSED"]
+                    border_width = 3
+                    border_color = color
+                elif node.execution_status == "FAILED":
+                    color = self.STATUS_COLORS["FAILED"]
+                    border_width = 3
+                    border_color = color
+                else:
+                    # Keep type color but maybe fade it? 
+                    # For now, let's use NEUTRAL gray to emphasize run nodes
+                    color = self.STATUS_COLORS["NEUTRAL"]
+                    border_width = 1
+            
+            elif self.mode == VisualizationMode.DIFF:
+                if node.diff_status == DiffStatus.ADDED:
+                    color = self.STATUS_COLORS["ADDED"]
+                    border_width = 3
+                    border_color = color
+                elif node.diff_status == DiffStatus.REMOVED:
+                    color = self.STATUS_COLORS["REMOVED"]
+                    border_width = 3
+                    border_color = color
+                    node_name = f"[REMOVED] {node.name}"
+                elif node.diff_status == DiffStatus.MODIFIED:
+                    color = self.STATUS_COLORS["MODIFIED"]
+                    border_width = 3
+                    border_color = color
+                else:
+                    # Unchanged nodes in Diff mode
+                    color = self.STATUS_COLORS["NEUTRAL"] # Brown
+                    border_width = 1
+            
             net.add_node(
                 node.id,
-                label=self._get_display_label(node.name),
+                label=self._get_display_label(node_name),
                 title=self._build_tooltip(node),
-                color=self.NODE_COLORS.get(node.type, "#808080"),
+                color={"background": color, "border": border_color},
+                borderWidth=border_width,
                 shape=self.NODE_SHAPES.get(node.type, "dot"),
                 size=40 if mass > 1 else 25,
                 mass=mass
             )
 
-        edge_colors = {"WORKFLOW": "#2196F3", "API": "#FF9800", "PAGE": "#9C27B0", "DATABASE": "#F44336"}
+        # 2. Add Edges with Sync Colors (Idea #1 & #2 "Full Path")
         for edge in self.graph.edges.values():
-            net.add_edge(edge.from_node, edge.to_node, color=edge_colors.get(edge.type.value, "#808080"), arrows="to")
+            to_node = self.graph.nodes.get(edge.to_node)
+            from_node = self.graph.nodes.get(edge.from_node)
+            
+            color = "#808080" # Default grey line
+            width = 1
+            dashes = False
+            
+            if self.mode == VisualizationMode.EXECUTION:
+                # Line color follows the result of the source/target context
+                if to_node and to_node.execution_status == "FAILED":
+                    color = self.STATUS_COLORS["FAILED"]
+                    width = 4 # Significantly thicker
+                elif to_node and to_node.execution_status == "PASSED":
+                    color = self.STATUS_COLORS["PASSED"]
+                    width = 3 # Thicker than default
+                else:
+                    color = self.STATUS_COLORS["NEUTRAL"]
+                    width = 1
+            
+            elif self.mode == VisualizationMode.DIFF:
+                if edge.diff_status == DiffStatus.ADDED:
+                    color = self.STATUS_COLORS["ADDED"]
+                    width = 3
+                elif edge.diff_status == DiffStatus.REMOVED:
+                    color = self.STATUS_COLORS["REMOVED"]
+                    width = 3
+                    dashes = True
+                else:
+                    color = self.STATUS_COLORS["NEUTRAL"]
+                    width = 1
+            
+            else: # DEFAULT Mode
+                edge_type_colors = {"WORKFLOW": "#2196F3", "API": "#FF9800", "PAGE": "#9C27B0", "DATABASE": "#F44336"}
+                color = edge_type_colors.get(edge.type.value, "#808080")
+
+            net.add_edge(edge.from_node, edge.to_node, color=color, width=width, arrows="to", dashes=dashes)
 
         for cycle in self.graph.cycles:
             for i in range(len(cycle)):
@@ -151,6 +249,10 @@ class GraphVisualizer:
                 "file_path": node.metadata.file_path, "line_number": node.metadata.line_number,
                 "jira_tags": node.metadata.jira_tags,
                 "tags": [t for t in node.tags if not (t.startswith("@ALM2:") or t == "@ignore")],
+                "execution_status": node.execution_status,
+                "execution_details": node.execution_details,
+                "diff_status": node.diff_status.value if hasattr(node.diff_status, 'value') else node.diff_status,
+                "visualization_mode": self.mode.value if hasattr(self.mode, 'value') else self.mode,
                 "additional_data": {k: v for k, v in node.metadata.additional_data.items() if k != "tags"}
             }
 

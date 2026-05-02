@@ -66,6 +66,44 @@ function focusOnNode(nodeId) {
     showDetails(nodeId);
 }
 
+function applyLegendFilter() {
+    // Filter legend based on mode
+    var mode = null;
+    for (var id in nodeData) {
+        mode = nodeData[id].visualization_mode;
+        if (mode) break;
+    }
+    
+    if (mode) {
+        var legendDiv = document.getElementById('legend');
+        var groups = legendDiv.querySelectorAll('h3');
+        groups.forEach(function(g) {
+            var text = g.innerText;
+            var parent = g; // In the new template, h3 and its following items are siblings or inside groups. 
+            // Actually, let's just hide the H3 and the next legend-items until the next H3 or HR
+            var toHide = [g];
+            var next = g.nextElementSibling;
+            while (next && next.tagName !== 'H3' && next.tagName !== 'HR') {
+                toHide.push(next);
+                next = next.nextElementSibling;
+            }
+
+            var shouldHide = false;
+            if (mode === "EXECUTION") {
+                if (text.includes("Comparison") || text.includes("Components")) shouldHide = true;
+            } else if (mode === "DIFF") {
+                if (text.includes("Execution") || text.includes("Components")) shouldHide = true;
+            } else {
+                if (text.includes("Execution") || text.includes("Comparison")) shouldHide = true;
+            }
+
+            if (shouldHide) {
+                toHide.forEach(el => el.style.display = "none");
+            }
+        });
+    }
+}
+
 // Keyboard shortcut Ctrl+K to search
 document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -78,7 +116,23 @@ function showDetails(nodeId) {
     var detailsDiv = document.getElementById('node-details');
     var data = nodeData[nodeId];
     if (data) {
-        var html = '<div class="detail-header">' + data.name + '</div>';
+        let diffClass = "";
+        if (data.diff_status === "ADDED") diffClass = "diff-added";
+        else if (data.diff_status === "REMOVED") diffClass = "diff-removed";
+        else if (data.diff_status === "MODIFIED") diffClass = "diff-modified";
+
+        var html = `<div class="detail-header ${diffClass}">` + data.name + '</div>';
+        
+        // Execution Status Section
+        if (data.execution_status) {
+            let statusClass = data.execution_status === "PASSED" ? "status-passed" : "status-failed";
+            html += `<div class="detail-row"><span class="detail-label">Result:</span><span class="${statusClass}">${data.execution_status}</span></div>`;
+            
+            if (data.execution_details && data.execution_details.error) {
+                html += `<div class="error-message"><strong>Error at ${data.execution_details.failed_step || 'unknown step'}:</strong>\n${data.execution_details.error}</div>`;
+            }
+        }
+
         html += '<div class="detail-row"><span class="detail-label">Type:</span><span class="detail-value">' + data.type + '</span></div>';
         
         if (data.file_path) {
@@ -209,10 +263,9 @@ function resetFocus() {
     });
     nodes.update(updates);
     isFocused = false;
-    
-    // Don't re-enable physics automatically as it might cause jumps
-    // Just fit the view
     network.fit({ animation: true });
 }
 
+// Global Startup
+applyLegendFilter();
 initEvents();

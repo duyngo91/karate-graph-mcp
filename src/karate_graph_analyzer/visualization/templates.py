@@ -37,6 +37,17 @@ LEGEND_HTML_BODY = """
         <div class="legend-item"><span class="legend-color" style="background: #9C27B0; clip-path: polygon(50% 0%, 0% 100%, 100% 100%);"></span><strong>Page Object</strong></div>
         <div class="legend-item"><span class="legend-color" style="background: #E91E63; transform: rotate(45deg);"></span><strong>Action (@tag)</strong></div>
         <div class="legend-item"><span class="legend-color" style="background: #F44336; border-radius: 4px;"></span><strong>Database</strong></div>
+        
+        <h3 style="margin: 15px 0 10px 0; font-size: 14px; color: #111;">🚥 Execution</h3>
+        <div class="legend-item"><span class="legend-color" style="background: #4CAF50; border-radius: 50%;"></span><strong>Passed</strong></div>
+        <div class="legend-item"><span class="legend-color" style="background: #F44336; border-radius: 50%;"></span><strong>Failed</strong></div>
+
+        <h3 style="margin: 15px 0 10px 0; font-size: 14px; color: #111;">⚖️ Comparison (Diff)</h3>
+        <div class="legend-item"><span class="legend-color" style="background: #4CAF50; border-radius: 4px;"></span><strong>Added</strong></div>
+        <div class="legend-item"><span class="legend-color" style="background: #F44336; border-radius: 4px;"></span><strong>Removed</strong></div>
+        <div class="legend-item"><span class="legend-color" style="background: #FF9800; border-radius: 4px;"></span><strong>Modified</strong></div>
+        <div class="legend-item"><span class="legend-color" style="background: #9E9E9E; border-radius: 4px;"></span><strong>Unchanged</strong></div>
+
         <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;">
         <div style="font-size: 11px; color: #888; line-height: 1.5;">
             💡 <b>Double-click</b> to focus chain<br>

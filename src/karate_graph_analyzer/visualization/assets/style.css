@@ -132,6 +132,28 @@ body {
     flex-shrink: 0;
 }
 
+/* Execution Status Colors */
+.status-passed { color: #4CAF50; font-weight: bold; }
+.status-failed { color: #F44336; font-weight: bold; }
+.status-not-run { color: #9E9E9E; }
+
+/* Diff Status Highlighting (for sidebar/details) */
+.diff-added { border-left: 4px solid #4CAF50; padding-left: 8px; }
+.diff-removed { border-left: 4px solid #F44336; padding-left: 8px; text-decoration: line-through; opacity: 0.7; }
+.diff-modified { border-left: 4px solid #FF9800; padding-left: 8px; }
+
+.error-message {
+    background: #FFEBEE;
+    color: #C62828;
+    padding: 10px;
+    border-radius: 6px;
+    font-family: monospace;
+    font-size: 12px;
+    margin-top: 10px;
+    white-space: pre-wrap;
+    border: 1px solid #FFCDD2;
+}
+
 #node-details {
     position: absolute;
     bottom: 25px;

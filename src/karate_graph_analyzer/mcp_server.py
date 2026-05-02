@@ -205,6 +205,38 @@ def export_graph(project_name: str, format: str = "json") -> Dict[str, Any]:
     """
     return analyzer_tool.export_graph(project_name, format)
 
+@mcp.tool()
+def render_execution_report(
+    project_name: str, 
+    report_path: str, 
+    output_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Generate an execution report visualization (Living Graph) with Pass/Fail/Not Run status.
+    
+    Args:
+        project_name: Name of the analyzed project.
+        report_path: Path to the Karate execution report (JSON format).
+        output_path: Optional custom path to save the HTML file.
+    """
+    return analyzer_tool.render_execution_report(project_name, report_path, output_path)
+
+@mcp.tool()
+def compare_projects(
+    base_project_name: str, 
+    new_project_name: str, 
+    output_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Compare two projects and generate a diff visualization report (Added/Removed/Modified).
+    
+    Args:
+        base_project_name: Name of the base (old) project.
+        new_project_name: Name of the new project to compare.
+        output_path: Optional custom path to save the HTML file.
+    """
+    return analyzer_tool.compare_projects(base_project_name, new_project_name, output_path)
+
 if __name__ == "__main__":
     # Start the server using stdio
     mcp.run()
