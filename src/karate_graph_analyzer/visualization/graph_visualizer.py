@@ -101,15 +101,20 @@ class GraphVisualizer:
                 "physics": {
                     "enabled": true,
                     "forceAtlas2Based": {
-                        "gravitationalConstant": -50,
-                        "centralGravity": 0.01,
-                        "springLength": 200,
-                        "springConstant": 0.08
+                        "gravitationalConstant": -150,
+                        "centralGravity": 0.005,
+                        "springLength": 250,
+                        "springConstant": 0.05,
+                        "avoidOverlap": 0.2
                     },
-                    "maxVelocity": 50,
+                    "maxVelocity": 45,
                     "solver": "forceAtlas2Based",
                     "timestep": 0.35,
-                    "stabilization": {"iterations": 150}
+                    "stabilization": {
+                        "enabled": true,
+                        "iterations": 200,
+                        "updateInterval": 25
+                    }
                 },
                 "interaction": {
                     "dragNodes": true,
@@ -298,126 +303,212 @@ class GraphVisualizer:
         """Add collapsible legend and node details sidebar to visualization."""
         legend_html = """
         <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+            body {
+                background-color: #f8f9fa;
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+            }
+
             #legend-container {
                 position: absolute;
                 top: 20px;
                 right: 20px;
                 z-index: 1000;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
             }
-            /* Force hide Vis.js navigation buttons */
-            .vis-navigation {
-                display: none !important;
+
+            .glass-panel {
+                background: rgba(255, 255, 255, 0.85);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                border: 1px solid rgba(255, 255, 255, 0.3);
+                border-radius: 12px;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+                padding: 15px;
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            }
+
+            #search-container {
+                width: 300px;
+            }
+
+            .search-input-wrapper {
+                position: relative;
+                display: flex;
+                align-items: center;
+            }
+
+            #node-search {
+                width: 100%;
+                padding: 10px 15px;
+                padding-right: 35px;
+                border-radius: 8px;
+                border: 1px solid #ddd;
+                font-size: 14px;
+                outline: none;
+                transition: border-color 0.2s;
+            }
+
+            #node-search:focus {
+                border-color: #2196F3;
+                box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.1);
+            }
+
+            .search-icon {
+                position: absolute;
+                right: 10px;
+                color: #888;
+                pointer-events: none;
+            }
+
+            #search-results {
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
+                background: white;
+                border-radius: 0 0 8px 8px;
+                border: 1px solid #ddd;
+                border-top: none;
+                max-height: 200px;
+                overflow-y: auto;
+                display: none;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                margin-top: -1px;
+            }
+
+            .search-result-item {
+                padding: 8px 15px;
+                cursor: pointer;
+                font-size: 13px;
+                border-bottom: 1px solid #f0f0f0;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+
+            .search-result-item:hover {
+                background-color: #f5f5f5;
+            }
+
+            .search-result-type {
+                font-size: 10px;
+                text-transform: uppercase;
+                background: #eee;
+                padding: 2px 5px;
+                border-radius: 4px;
+                color: #666;
             }
 
             #legend {
-                background: rgba(255, 255, 255, 0.95);
-                border: 1px solid #ddd;
-                border-radius: 8px;
-                padding: 15px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                max-width: 300px;
-                transition: all 0.3s ease;
+                width: 300px;
             }
-            #legend.minimized {
-                display: none;
-            }
+
             #legend-toggle {
-                position: absolute;
-                top: 0;
-                right: 0;
+                align-self: flex-end;
                 background: #333;
                 color: white;
                 border: none;
-                border-radius: 4px;
-                padding: 5px 10px;
+                border-radius: 8px;
+                padding: 8px 15px;
                 cursor: pointer;
                 font-size: 12px;
-                z-index: 1001;
+                font-weight: 600;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             }
+
             .legend-item {
-                margin-bottom: 8px;
+                margin-bottom: 10px;
                 display: flex;
                 align-items: center;
                 font-size: 13px;
+                font-weight: 500;
+                color: #444;
             }
+
             .legend-color {
-                width: 16px;
-                height: 16px;
-                margin-right: 10px;
-                border: 1px solid #666;
+                width: 14px;
+                height: 14px;
+                margin-right: 12px;
+                border: 1.5px solid rgba(0,0,0,0.1);
                 flex-shrink: 0;
             }
+
             #node-details {
                 position: absolute;
-                bottom: 20px;
-                left: 20px;
-                background: rgba(255, 255, 255, 0.95);
-                border: 1px solid #ddd;
-                border-radius: 8px;
-                padding: 20px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                width: 350px;
-                max-height: 400px;
+                bottom: 25px;
+                left: 25px;
+                background: rgba(255, 255, 255, 0.9);
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255, 255, 255, 0.3);
+                border-radius: 12px;
+                padding: 25px;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+                width: 380px;
+                max-height: 450px;
                 overflow-y: auto;
                 display: none;
                 z-index: 1000;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             }
+
             .detail-header {
-                font-weight: bold;
-                font-size: 18px;
-                border-bottom: 2px solid #4CAF50;
-                margin-bottom: 15px;
-                padding-bottom: 5px;
-                color: #333;
+                font-weight: 700;
+                font-size: 20px;
+                border-bottom: 3px solid #2196F3;
+                margin-bottom: 18px;
+                padding-bottom: 8px;
+                color: #1a1a1a;
             }
+
             .detail-row {
-                margin-bottom: 10px;
+                margin-bottom: 12px;
                 font-size: 14px;
-                display: flex;
-                align-items: flex-start;
+                line-height: 1.4;
             }
+
             .detail-label {
-                font-weight: bold;
-                color: #666;
-                width: 140px;
+                font-weight: 600;
+                color: #777;
+                width: 120px;
                 display: inline-block;
-                margin-right: 10px;
-                flex-shrink: 0;
             }
+
             .detail-value {
-                color: #111;
-                word-break: break-word;
-                flex: 1;
-            }
-            .jira-tag {
-                display: inline-block;
-                background: #E3F2FD;
-                color: #1976D2;
-                padding: 2px 6px;
-                border-radius: 4px;
-                margin-right: 5px;
-                font-size: 12px;
-                font-weight: bold;
+                color: #222;
+                word-break: break-all;
             }
         </style>
 
         <div id="legend-container">
+            <div id="search-container" class="glass-panel">
+                <div class="search-input-wrapper">
+                    <input type="text" id="node-search" placeholder="Search nodes (Ctrl+K)..." oninput="handleSearch(this.value)">
+                    <span class="search-icon">🔍</span>
+                </div>
+                <div id="search-results"></div>
+            </div>
+
             <button id="legend-toggle" onclick="toggleLegend()">Legend ☰</button>
-            <div id="legend">
-                <h3 style="margin: 0 0 12px 0; font-size: 16px;">📊 Graph Legend</h3>
-                <div class="legend-item"><span class="legend-color" style="background: #4CAF50;"></span><strong>Test Case</strong></div>
-                <div class="legend-item"><span class="legend-color" style="background: #2196F3; border-radius: 50%;"></span><strong>Common</strong></div>
+            <div id="legend" class="glass-panel">
+                <h3 style="margin: 0 0 15px 0; font-size: 16px; color: #111;">📊 Graph Components</h3>
+                <div class="legend-item"><span class="legend-color" style="background: #4CAF50; border-radius: 4px;"></span><strong>Test Case</strong></div>
+                <div class="legend-item"><span class="legend-color" style="background: #2196F3; border-radius: 50%;"></span><strong>Workflow / Common</strong></div>
                 <div class="legend-item"><span class="legend-color" style="background: #9C27B0; transform: rotate(45deg);"></span><strong>Scenario (@tag)</strong></div>
                 <div class="legend-item"><span class="legend-color" style="background: #FF9800; transform: rotate(45deg);"></span><strong>API Method</strong></div>
                 <div class="legend-item"><span class="legend-color" style="background: #FF5722; clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);"></span><strong>Domain (Root)</strong></div>
                 <div class="legend-item"><span class="legend-color" style="background: #FFB74D; border-radius: 50%;"></span><strong>API Path</strong></div>
                 <div class="legend-item"><span class="legend-color" style="background: #9C27B0; clip-path: polygon(50% 0%, 0% 100%, 100% 100%);"></span><strong>Page Object</strong></div>
                 <div class="legend-item"><span class="legend-color" style="background: #E91E63; transform: rotate(45deg);"></span><strong>Action (@tag)</strong></div>
-                <div class="legend-item"><span class="legend-color" style="background: #F44336;"></span><strong>Database</strong></div>
-                <hr>
-                <div style="font-size: 11px; color: #777;">Click a node to see details</div>
+                <div class="legend-item"><span class="legend-color" style="background: #F44336; border-radius: 4px;"></span><strong>Database</strong></div>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;">
+                <div style="font-size: 11px; color: #888; line-height: 1.5;">
+                    💡 <b>Double-click</b> to focus chain<br>
+                    💡 <b>Click</b> background to reset<br>
+                    💡 <b>Scroll</b> to zoom
+                </div>
             </div>
         </div>
 
@@ -438,9 +529,82 @@ class GraphVisualizer:
                 }
             }
 
-            // This data will be populated by Python
             var nodeData = DATA_PLACEHOLDER;
             var isFocused = false;
+
+            // Search functionality
+            function handleSearch(query) {
+                const resultsDiv = document.getElementById('search-results');
+                if (!query || query.length < 2) {
+                    resultsDiv.style.display = 'none';
+                    return;
+                }
+
+                const searchTerms = query.toLowerCase().split(' ');
+                const matches = [];
+                
+                for (const id in nodeData) {
+                    const node = nodeData[id];
+                    const searchableText = (node.name + ' ' + node.type + ' ' + (node.file_path || '')).toLowerCase();
+                    
+                    if (searchTerms.every(term => searchableText.includes(term))) {
+                        matches.push({ id, ...node });
+                    }
+                    if (matches.length >= 10) break;
+                }
+
+                if (matches.length > 0) {
+                    resultsDiv.innerHTML = matches.map(m => `
+                        <div class="search-result-item" onclick="focusOnNode('${m.id}')">
+                            <span>${m.name.length > 35 ? '...' + m.name.slice(-32) : m.name}</span>
+                            <span class="search-result-type">${m.type}</span>
+                        </div>
+                    `).join('');
+                    resultsDiv.style.display = 'block';
+                } else {
+                    resultsDiv.style.display = 'none';
+                }
+            }
+
+            function focusOnNode(nodeId) {
+                document.getElementById('search-results').style.display = 'none';
+                document.getElementById('node-search').value = nodeData[nodeId].name;
+                
+                // Show all nodes first if we were focused
+                if (isFocused) {
+                    resetFocus();
+                }
+
+                network.focus(nodeId, {
+                    scale: 1.2,
+                    animation: {
+                        duration: 1000,
+                        easingFunction: 'easeInOutQuad'
+                    }
+                });
+                
+                // Trigger click to show details
+                network.selectNodes([nodeId]);
+                showDetails(nodeId);
+            }
+
+            function resetFocus() {
+                var allNodeIds = nodes.getIds();
+                var updates = allNodeIds.map(function(id) {
+                    return { id: id, hidden: false };
+                });
+                nodes.update(updates);
+                isFocused = false;
+                network.fit({ animation: true });
+            }
+
+            // Keyboard shortcut Ctrl+K to search
+            document.addEventListener('keydown', function(e) {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                    e.preventDefault();
+                    document.getElementById('node-search').focus();
+                }
+            });
 
             // Handle double click to focus on a node and its full recursive dependency chain
             network.on("doubleClick", function(params) {
@@ -513,20 +677,19 @@ class GraphVisualizer:
                 // If clicked on background, reset focus
                 if (params.nodes.length === 0) {
                     if (isFocused) {
-                        var allNodeIds = nodes.getIds();
-                        var updates = allNodeIds.map(function(id) {
-                            return { id: id, hidden: false };
-                        });
-                        nodes.update(updates);
-                        isFocused = false;
-                        network.fit({ animation: true });
+                        resetFocus();
                     }
                     detailsDiv.style.display = 'none';
+                    document.getElementById('search-results').style.display = 'none';
                     return;
                 }
 
                 // Show details for single clicked node
-                var nodeId = params.nodes[0];
+                showDetails(params.nodes[0]);
+            });
+
+            function showDetails(nodeId) {
+                var detailsDiv = document.getElementById('node-details');
                 var data = nodeData[nodeId];
                 if (data) {
                     var html = '<div class="detail-header">' + data.name + '</div>';
@@ -560,7 +723,113 @@ class GraphVisualizer:
                     document.getElementById('details-content').innerHTML = html;
                     detailsDiv.style.display = 'block';
                 }
-            });
+            }
+
+            // Safe initialization for custom events
+            function initEvents() {
+                if (typeof network !== 'undefined') {
+                    // Disable physics after initial stabilization to keep UI responsive
+                    network.on("stabilizationIterationsDone", function() {
+                        console.log("Karate Graph: Stabilization complete, disabling physics for performance.");
+                        network.setOptions({ physics: { enabled: false } });
+                    });
+
+                    // Handle double click to focus on a node and its full recursive dependency chain
+                    network.on("doubleClick", function(params) {
+                        if (params.nodes.length > 0) {
+                            // Disable physics during focus to prevent lag
+                            network.setOptions({ physics: { enabled: false } });
+                            
+                            var targetId = params.nodes[0];
+                            var nodesToKeep = new Set();
+                            nodesToKeep.add(targetId);
+
+                            function findDescendants(nodeId) {
+                                var children = network.getConnectedNodes(nodeId, 'to');
+                                children.forEach(function(childId) {
+                                    if (!nodesToKeep.has(childId)) {
+                                        nodesToKeep.add(childId);
+                                        findDescendants(childId);
+                                    }
+                                });
+                            }
+
+                            function findAncestors(nodeId) {
+                                var parents = network.getConnectedNodes(nodeId, 'from');
+                                parents.forEach(function(parentId) {
+                                    if (!nodesToKeep.has(parentId)) {
+                                        nodesToKeep.add(parentId);
+                                        findAncestors(parentId);
+                                    }
+                                });
+                            }
+
+                            findDescendants(targetId);
+                            findAncestors(targetId);
+
+                            var contextNodes = new Set();
+                            nodesToKeep.forEach(function(nodeId) {
+                                var neighbors = network.getConnectedNodes(nodeId);
+                                neighbors.forEach(function(neighborId) {
+                                    contextNodes.add(neighborId);
+                                });
+                            });
+                            
+                            contextNodes.forEach(id => nodesToKeep.add(id));
+
+                            var allNodeIds = nodes.getIds();
+                            var updates = allNodeIds.map(function(id) {
+                                return { id: id, hidden: !nodesToKeep.has(id) };
+                            });
+                            nodes.update(updates);
+                            isFocused = true;
+                            
+                            setTimeout(function() {
+                                network.fit({
+                                    nodes: Array.from(nodesToKeep),
+                                    animation: {
+                                        duration: 800,
+                                        easingFunction: 'easeInOutQuad'
+                                    }
+                                });
+                            }, 50);
+                        }
+                    });
+
+                    // Handle single click to show details or reset focus
+                    network.on("click", function(params) {
+                        var detailsDiv = document.getElementById('node-details');
+                        if (params.nodes.length === 0) {
+                            if (isFocused) {
+                                resetFocus();
+                            }
+                            detailsDiv.style.display = 'none';
+                            document.getElementById('search-results').style.display = 'none';
+                            return;
+                        }
+                        showDetails(params.nodes[0]);
+                    });
+
+                    console.log("Karate Graph: Custom events initialized successfully.");
+                } else {
+                    setTimeout(initEvents, 100);
+                }
+            }
+
+            function resetFocus() {
+                var allNodeIds = nodes.getIds();
+                var updates = allNodeIds.map(function(id) {
+                    return { id: id, hidden: false };
+                });
+                nodes.update(updates);
+                isFocused = false;
+                
+                // Don't re-enable physics automatically as it might cause jumps
+                // Just fit the view
+                network.fit({ animation: true });
+            }
+
+            initEvents();
         </script>
         """
         net.legend_html = legend_html
