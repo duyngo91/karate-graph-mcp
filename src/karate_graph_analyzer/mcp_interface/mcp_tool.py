@@ -167,6 +167,10 @@ class KarateGraphAnalyzerTool:
         self.graphs: Dict[str, DependencyGraph] = {}  # project_name -> graph
         self.analyzers: Dict[str, DependencyAnalyzer] = {}  # project_name -> analyzer
         self.search_tools: Optional[SearchTools] = None  # Initialized after first graph is loaded
+        
+        # Ensure storage directory for graphs exists
+        self.storage_dir = Path(".karate_cache") / "graphs"
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
 
         # Load existing projects from storage
         try:
@@ -366,9 +370,15 @@ class KarateGraphAnalyzerTool:
                     f"Project '{project_name}' not found in registry",
                 )
 
-            # Build graph
-            builder = GraphBuilder()
-            graph = builder.build_from_project(project)
+            # Check if a cached graph exists first
+            graph = self._load_graph_state(project_name)
+            
+            if not graph:
+                # Build graph if no cache
+                builder = GraphBuilder()
+                graph = builder.build_from_project(project)
+                # Initial save
+                self._save_graph_state(project_name, graph)
 
             # Store graph and create analyzer
             self.graphs[project_name] = graph
@@ -396,7 +406,7 @@ class KarateGraphAnalyzerTool:
             return {
                 "success": True,
                 "project_name": project_name,
-                "message": f"Analysis completed for {project_name} [VERSION V12-ENV-FIX]",
+                "message": f"Analysis completed for {project_name} (Persistent State Loaded)",
                 "statistics": {
                     "total_nodes": len(graph.nodes),
                     "total_edges": len(graph.edges),
@@ -827,7 +837,10 @@ class KarateGraphAnalyzerTool:
             visualizer = GraphVisualizer(graph, mode=VisualizationMode.EXECUTION)
             visualizer.render(request.output_path)
             
-            logger.info(f"Generated execution report for '{project_name}' at {request.output_path}")
+            # 3. Persist updated graph state (with results and history)
+            self._save_graph_state(project_name, graph)
+            
+            logger.info(f"Generated execution report and saved state for '{project_name}' at {request.output_path}")
             
             return {
                 "success": True,
@@ -1267,6 +1280,81 @@ class KarateGraphAnalyzerTool:
             "count": len(results)
         }
 
+    def get_failure_hotspots(self, project_name: str) -> Dict[str, Any]:
+        """Identify components that contribute most to test failures.
+        
+        Args:
+            project_name: Name of the project
+            
+        Returns:
+            Dictionary with sorted failure hotspots
+        """
+        if project_name not in self.analyzers:
+            return self._error_response(7001, "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
+        
+        analyzer = self.analyzers[project_name]
+        hotspots = analyzer.find_failure_hotspots()
+        
+        return {
+            "success": True,
+            "project_name": project_name,
+            "hotspots": hotspots,
+            "count": len(hotspots)
+        }
+
+    def record_fix(self, project_name: str, node_id: str, error_message: str, solution: str, description: str) -> Dict[str, Any]:
+        """Record a successful fix for a component.
+        
+        Args:
+            project_name: Name of the project
+            node_id: ID of the component fixed
+            error_message: The error message that was fixed
+            solution: The solution (diff or steps)
+            description: Explanation of the fix
+            
+        Returns:
+            Success status
+        """
+        if project_name not in self.analyzers:
+            return self._error_response(7001, "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
+        
+        analyzer = self.analyzers[project_name]
+        node = analyzer.graph.nodes.get(node_id)
+        name = node.name if node else node_id
+        file_path = node.metadata.file_path if node else None
+        
+        analyzer.fix_expert.record_fix(node_id, name, error_message, solution, description, file_path)
+        
+        return {
+            "success": True,
+            "message": f"Recorded fix for {name}"
+        }
+
+    def get_fix_suggestions(self, project_name: str, node_id: str, error_message: str) -> Dict[str, Any]:
+        """Get historical fix suggestions for a component and error.
+        
+        Args:
+            project_name: Name of the project
+            node_id: ID of the failing component
+            error_message: Current error message
+            
+        Returns:
+            List of suggestions
+        """
+        if project_name not in self.analyzers:
+            return self._error_response(7001, "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
+        
+        analyzer = self.analyzers[project_name]
+        suggestions = analyzer.fix_expert.suggest_fixes(node_id, error_message)
+        
+        return {
+            "success": True,
+            "project_name": project_name,
+            "node_id": node_id,
+            "suggestions": suggestions,
+            "count": len(suggestions)
+        }
+
     def visualize_project(self, project_name: str, output_path: Optional[str] = None) -> Dict[str, Any]:
         """Generate interactive HTML visualization for a project.
         
@@ -1294,7 +1382,12 @@ class KarateGraphAnalyzerTool:
                 output_path = f"{project_name}_graph.html"
         
         try:
-            visualizer = GraphVisualizer(graph)
+            # Determine mode: if any node has execution status, use EXECUTION mode
+            mode = VisualizationMode.DEFAULT
+            if any(node.execution_status for node in graph.nodes.values()):
+                mode = VisualizationMode.EXECUTION
+                
+            visualizer = GraphVisualizer(graph, mode=mode)
             final_path = visualizer.render(output_path=output_path)
             
             return {
@@ -1306,6 +1399,38 @@ class KarateGraphAnalyzerTool:
         except Exception as e:
             logger.error(f"Failed to visualize project '{project_name}': {e}")
             return self._error_response(8001, "VISUALIZATION_ERROR", str(e))
+
+    def _save_graph_state(self, project_name: str, graph: DependencyGraph) -> bool:
+        """Persist graph state to disk."""
+        try:
+            path = self.storage_dir / f"{project_name}.json"
+            from karate_graph_analyzer.exporters.json_exporter import JsonExporter
+            exporter = JsonExporter()
+            json_data = exporter.export(graph)
+            
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(json_data)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save graph state for {project_name}: {e}")
+            return False
+
+    def _load_graph_state(self, project_name: str) -> Optional[DependencyGraph]:
+        """Load graph state from disk if exists."""
+        try:
+            path = self.storage_dir / f"{project_name}.json"
+            if not path.exists():
+                return None
+                
+            with open(path, 'r', encoding='utf-8') as f:
+                json_data = f.read()
+                
+            from karate_graph_analyzer.exporters.json_exporter import JsonExporter
+            exporter = JsonExporter()
+            return exporter.import_graph(json_data, project_name)
+        except Exception as e:
+            logger.error(f"Failed to load graph state for {project_name}: {e}")
+            return None
 
     def _error_response(self, code: Any, category: str, message: str) -> Dict[str, Any]:
         """Create structured error response.

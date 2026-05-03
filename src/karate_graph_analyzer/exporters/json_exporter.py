@@ -39,12 +39,15 @@ class JsonExporter(IGraphExporter):
                     "id": node.id,
                     "type": node.type.value,
                     "name": node.name,
+                    "execution_status": node.execution_status,
+                    "execution_details": node.execution_details,
                     "metadata": {
                         "file_path": node.metadata.file_path,
                         "line_number": node.metadata.line_number,
                         "jira_tags": node.metadata.jira_tags,
                         "project_name": node.metadata.project_name,
                         "additional_data": node.metadata.additional_data,
+                        "execution_history": getattr(node.metadata, "execution_history", []),
                     },
                 }
             )
@@ -100,6 +103,7 @@ class JsonExporter(IGraphExporter):
                 jira_tags=node_data["metadata"].get("jira_tags", []),
                 project_name=node_data["metadata"].get("project_name", project_name),
                 additional_data=node_data["metadata"].get("additional_data", {}),
+                execution_history=node_data["metadata"].get("execution_history", []),
             )
 
             node = Node(
@@ -107,6 +111,8 @@ class JsonExporter(IGraphExporter):
                 type=NodeType(node_data["type"]),
                 name=node_data["name"],
                 metadata=metadata,
+                execution_status=node_data.get("execution_status"),
+                execution_details=node_data.get("execution_details", {}),
             )
             nodes[node.id] = node
 

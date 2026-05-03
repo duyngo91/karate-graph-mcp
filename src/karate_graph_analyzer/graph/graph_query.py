@@ -230,7 +230,12 @@ class GraphQuery:
             "node_name": node.name,
             "usage_count": len(used_by),
             "used_by_test_cases": [
-                {"id": n.id, "name": n.name, "jira_tags": n.metadata.jira_tags}
+                {
+                    "id": n.id, 
+                    "name": n.name, 
+                    "jira_tags": n.metadata.jira_tags,
+                    "test_case_id": n.metadata.jira_tags[0].lstrip('@') if n.metadata.jira_tags else None
+                }
                 for n in used_by
             ],
             "direct_dependencies": direct_dependencies,

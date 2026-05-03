@@ -525,10 +525,16 @@ class SearchTools:
         """
         usage_count = query_api.get_usage_stats(node)["usage_count"]
         
+        # Determine test case ID (first Jira tag)
+        test_case_id = None
+        if node.type.value == "TEST_CASE" and node.metadata.jira_tags:
+            test_case_id = node.metadata.jira_tags[0].lstrip('@')
+            
         return {
             "id": node.id,
             "type": node.type.value,
             "name": node.name,
+            "test_case_id": test_case_id,
             "file_path": node.metadata.file_path,
             "line_number": node.metadata.line_number,
             "jira_tags": node.metadata.jira_tags,

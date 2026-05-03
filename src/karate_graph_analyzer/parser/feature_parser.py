@@ -9,6 +9,7 @@ from karate_graph_analyzer.models import (
     DependencyType,
     Examples,
     FeatureAST,
+    GherkinTable,
     ParseError,
     ParserConfig,
     PathContext,
@@ -125,6 +126,8 @@ class FeatureFileParser:
             handler(token, ctx)
 
     def _handle_tag(self, token, ctx):
+        if token.line_number == 1:
+            return
         tags = re.findall(r"@[\w\-_:]+", token.text)
         ctx.current_tags.extend(tags)
         ctx.current_examples = None

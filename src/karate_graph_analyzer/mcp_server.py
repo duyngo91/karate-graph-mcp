@@ -191,6 +191,44 @@ def get_project_health(project_name: str) -> Dict[str, Any]:
     return analyzer_tool.get_project_health(project_name)
 
 @mcp.tool()
+def get_failure_hotspots(project_name: str) -> Dict[str, Any]:
+    """
+    Identify components (APIs, Workflows) that contribute most to test failures.
+    Returns a sorted list of hotspots based on failure impact score.
+    
+    Args:
+        project_name: Name of the analyzed project.
+    """
+    return analyzer_tool.get_failure_hotspots(project_name)
+
+@mcp.tool()
+def record_fix(project_name: str, node_id: str, error_message: str, solution: str, description: str) -> Dict[str, Any]:
+    """
+    Record a successful fix for a component and error pattern.
+    This helps the AI 'learn' how to fix similar issues in the future.
+    
+    Args:
+        project_name: Name of the analyzed project.
+        node_id: ID of the component that was fixed.
+        error_message: The error message that occurred.
+        solution: The code change or steps taken to fix it.
+        description: Brief explanation of the fix.
+    """
+    return analyzer_tool.record_fix(project_name, node_id, error_message, solution, description)
+
+@mcp.tool()
+def get_fix_suggestions(project_name: str, node_id: str, error_message: str) -> Dict[str, Any]:
+    """
+    Get historical fix suggestions for a component and error pattern.
+    
+    Args:
+        project_name: Name of the analyzed project.
+        node_id: ID of the failing component.
+        error_message: Current error message.
+    """
+    return analyzer_tool.get_fix_suggestions(project_name, node_id, error_message)
+
+@mcp.tool()
 def visualize_project(project_name: str, output_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Generate an interactive HTML visualization for a project.

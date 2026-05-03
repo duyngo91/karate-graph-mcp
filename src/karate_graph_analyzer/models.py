@@ -140,6 +140,7 @@ class NodeMetadata:
     category: ComponentCategory = ComponentCategory.UNKNOWN
     environment_variants: List[str] = field(default_factory=list)  # Physical paths/URLs for this logical node
     additional_data: Dict[str, Any] = field(default_factory=dict)
+    execution_history: List[str] = field(default_factory=list) # List of "PASSED", "FAILED"
 
 
 class VisualizationMode(str, Enum):
@@ -251,12 +252,8 @@ class ParserConfig:
 
     jira_tag_patterns: List[str] = field(
         default_factory=lambda: [
-            r"@[A-Z]+-\d+",      # @PROJ-123 (uppercase with hyphen)
-            r"@[a-z]+-\d+",      # @proj-123 (lowercase with hyphen)
-            r"@[A-Za-z]+-\d+",   # @Proj-123 (mixed case with hyphen)
-            r"@[A-Z]+_\d+",      # @PROJ_123 (uppercase with underscore)
-            r"@[a-z]+_\d+",      # @proj_123 (lowercase with underscore)
-            r"@[A-Za-z]+_\d+",   # @Proj_123 (mixed case with underscore)
+            r"@[A-Za-z]+-\d+",      # @PROJ-123 (mixed case with hyphen)
+            r"@[A-Za-z]+_\d+",      # @PROJ_123 (mixed case with underscore)
         ]
     )
     workflow_directories: List[str] = field(default_factory=lambda: ["workflow", "workflows"])
@@ -313,6 +310,9 @@ class ParserConfig:
             'admin': 'Administration', 'report': 'Reporting', 'reports': 'Reporting', 'analytics': 'Analytics',
         }
     )
+
+    # Jira base URL for clickable links
+    jira_base_url: Optional[str] = None # e.g. "https://jira.example.com/browse/"
 
     def get_config_for_path(self, file_path: str) -> Dict[str, str]:
         """Get the most specific variable mapping for a given file path."""
@@ -539,3 +539,14 @@ class ParseError(Exception):
         if self.line_number is not None:
             location += f":{self.line_number}"
         return f"[{self.error_code}] {location}: {self.message}"
+@dataclass
+class FixEntry:
+    """Represents a historical fix for a component and error pattern."""
+    node_id: str
+    name: str
+    error_pattern: str
+    solution: str
+    description: str
+    timestamp: str
+    success_count: int = 1
+    file_path: Optional[str] = None

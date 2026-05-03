@@ -15,65 +15,121 @@ def get_asset_content(filename):
 GRAPH_STYLE = get_asset_content("style.css")
 GRAPH_JS_SCRIPT = get_asset_content("script.js")
 
-LEGEND_HTML_BODY = """
-<div id="legend-container">
-    <div id="search-container" class="glass-panel">
-        <div class="search-input-wrapper">
-            <input type="text" id="node-search" placeholder="Search nodes (Ctrl+K)..." oninput="handleSearch(this.value)">
-            <span class="search-icon">🔍</span>
+LAYOUT_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Karate Graph Command Center</title>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        {style}
+    </style>
+</head>
+<body>
+    <div id="app-container">
+        <!-- SIDEBAR -->
+        <div id="sidebar">
+            <div class="sidebar-header">
+                <i class="fas fa-project-diagram"></i> COMMAND CENTER
+            </div>
+            
+            <div class="sidebar-tabs">
+                <div class="tab active" onclick="switchTab('hotspots')"><i class="fas fa-fire"></i> Hotspots</div>
+                <div class="tab" onclick="switchTab('timeline')"><i class="fas fa-history"></i> Timeline</div>
+                <div class="tab" onclick="switchTab('legend')">📖 Legend</div>
+            </div>
+
+            <!-- Tab Contents -->
+            <div id="hotspots-content" class="tab-content">
+                <div id="hotspot-list">
+                    <!-- Dynamic hotspots here -->
+                </div>
+            </div>
+            
+            <div id="timeline-content" class="tab-content" style="display: none;">
+                <div style="padding: 20px; color: #666; font-size: 13px;">
+                    <i class="fas fa-info-circle"></i> Select a node to see its detailed execution history.
+                </div>
+            </div>
+
+            <div id="legend-content" class="tab-content" style="display: none;">
+                <!-- Legend rendered via JS -->
+            </div>
+            
+            <div style="padding: 15px; border-top: 1px solid var(--border);">
+                <div style="position: relative;">
+                    <input type="text" id="node-search" placeholder="🔍 Search components (Ctrl+K)..." 
+                           style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ddd; outline: none;"
+                           onkeyup="handleSearch(this.value)">
+                    <div id="search-results" class="hud-card" style="position: absolute; bottom: 50px; left: 0; right: 0; display: none; max-height: 300px; overflow-y: auto;"></div>
+                </div>
+            </div>
         </div>
-        <div id="search-results"></div>
+
+        <!-- MAIN CANVAS AREA -->
+        <div id="main-view">
+            <!-- TOP HUD (Managerial View) -->
+            <div id="top-hud">
+                <div id="status-summary" class="hud-card" style="display:none; width: 420px; pointer-events: auto;">
+                    <!-- Executive status info -->
+                </div>
+                
+            </div>
+
+            <div id="graph-canvas" style="width: 100%; height: 100%;"></div>
+
+            <!-- NODE DETAILS (Floating Right) -->
+            <div id="node-details-side" class="hud-card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid var(--primary); padding-bottom: 10px;">
+                    <h3 id="detail-title" style="margin: 0; font-size: 18px; color: var(--primary);">Node Insights</h3>
+                    <button onclick="hideDetails()" style="border: none; background: none; font-size: 24px; cursor: pointer; color: #999;">&times;</button>
+                </div>
+                <div id="details-content"></div>
+            </div>
+
+            <!-- LEGEND OVERLAY -->
+            <div id="legend-overlay" class="hud-card" style="display:none; width: 280px;">
+                <h3 style="margin: 0 0 15px 0; font-size: 14px;">Color Guide</h3>
+                <div id="legend-list"></div>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;">
+                <div style="font-size: 11px; color: #999;">
+                    <style>
+                    .badge-type {{ background: #e3f2fd; color: #1976d2; }}
+                    .badge-utility {{ background: #607d8b; color: #ffffff; padding: 2px 8px; border-radius: 4px; font-weight: bold; }}
+                    .badge-passed {{ background: #e8f5e9; color: #2e7d32; }}
+                    </style>
+                    💡 Double-click to focus chain<br>
+                    💡 Click background to reset
+                </div>
+            </div>
+        </div>
     </div>
 
-    <button id="legend-toggle" onclick="toggleLegend()">Legend ☰</button>
-    <div id="legend" class="glass-panel">
-        <h3 style="margin: 0 0 15px 0; font-size: 16px; color: #111;">📊 Graph Components</h3>
-        <div class="legend-item"><span class="legend-color" style="background: #4CAF50; border-radius: 4px;"></span><strong>Test Case</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #2196F3; border-radius: 50%;"></span><strong>Workflow / Common</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #9C27B0; transform: rotate(45deg);"></span><strong>Scenario (@tag)</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #FF9800; transform: rotate(45deg);"></span><strong>API Method</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #FF5722; clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);"></span><strong>Domain (Root)</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #FFB74D; border-radius: 50%;"></span><strong>API Path</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #795548; border-radius: 4px;"></span><strong>Data (JSON/CSV)</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #9C27B0; clip-path: polygon(50% 0%, 0% 100%, 100% 100%);"></span><strong>Page Object</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #E91E63; transform: rotate(45deg);"></span><strong>Action (@tag)</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #F44336; border-radius: 4px;"></span><strong>Database</strong></div>
+    <script type="text/javascript">
+        // Data injected by Python
+        var graphNodes = {graph_nodes_json};
+        var graphEdges = {graph_edges_json};
+        var nodeMetadata = {metadata_json};
+        var hotspotData = {hotspots_json};
+        var activeMode = "{mode}";
+        var jiraBaseUrl = "{jira_url}";
         
-        <h3 style="margin: 15px 0 10px 0; font-size: 14px; color: #111;">🚥 Execution</h3>
-        <div class="legend-item"><span class="legend-color" style="background: #4CAF50; border-radius: 50%;"></span><strong>Passed</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #F44336; border-radius: 50%;"></span><strong>Failed</strong></div>
-
-        <h3 style="margin: 15px 0 10px 0; font-size: 14px; color: #111;">⚖️ Comparison (Diff)</h3>
-        <div class="legend-item"><span class="legend-color" style="background: #4CAF50; border-radius: 4px;"></span><strong>Added</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #F44336; border-radius: 4px;"></span><strong>Removed</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #FF9800; border-radius: 4px;"></span><strong>Modified</strong></div>
-        <div class="legend-item"><span class="legend-color" style="background: #9E9E9E; border-radius: 4px;"></span><strong>Unchanged</strong></div>
-
-        <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;">
-        <div style="font-size: 11px; color: #888; line-height: 1.5;">
-            💡 <b>Double-click</b> to focus chain<br>
-            💡 <b>Click</b> background to reset<br>
-            💡 <b>Scroll</b> to zoom
-        </div>
-    </div>
-</div>
-
-<div id="node-details">
-    <div id="details-content">
-        <div class="detail-header">Node Details</div>
-        <p>Select a node to see full information.</p>
-    </div>
-</div>
+        // Initialize Vis.js DataSets
+        var nodes = new vis.DataSet(graphNodes);
+        var edges = new vis.DataSet(graphEdges);
+        
+        var container = document.getElementById('graph-canvas');
+        var data = {{ nodes: nodes, edges: edges }};
+        var options = {options_json};
+        var network = new vis.Network(container, data, options);
+        
+        {script}
+    </script>
+</body>
+</html>
 """
 
-FULL_LEGEND_TEMPLATE = f"""
-<style>
-{GRAPH_STYLE}
-</style>
-
-{LEGEND_HTML_BODY}
-
-<script>
-{GRAPH_JS_SCRIPT}
-</script>
-"""
+# Maintain compatibility with existing calls
+FULL_PAGE_TEMPLATE = LAYOUT_TEMPLATE

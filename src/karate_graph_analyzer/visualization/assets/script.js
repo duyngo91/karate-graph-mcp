@@ -1,16 +1,19 @@
-function toggleLegend() {
-    var legend = document.getElementById('legend');
-    if (legend.style.display === 'none') {
-        legend.style.display = 'block';
-    } else {
-        legend.style.display = 'none';
-    }
+// KARATE COMMAND CENTER - CORE LOGIC
+
+var isFocused = false;
+var currentTab = 'HOTSPOTS';
+
+// --- SIDEBAR & TABS ---
+function switchTab(tabId) {
+    currentTab = tabId;
+    document.getElementById('tab-hotspots').classList.toggle('active', tabId === 'HOTSPOTS');
+    document.getElementById('tab-timeline').classList.toggle('active', tabId === 'TIMELINE');
+    
+    document.getElementById('pane-hotspots').style.display = tabId === 'HOTSPOTS' ? 'block' : 'none';
+    document.getElementById('pane-timeline').style.display = tabId === 'TIMELINE' ? 'block' : 'none';
 }
 
-var nodeData = DATA_PLACEHOLDER;
-var isFocused = false;
-
-// Search functionality
+// --- SEARCH ---
 function handleSearch(query) {
     const resultsDiv = document.getElementById('search-results');
     if (!query || query.length < 2) {
@@ -18,24 +21,23 @@ function handleSearch(query) {
         return;
     }
 
-    const searchTerms = query.toLowerCase().split(' ');
     const matches = [];
+    const searchTerms = query.toLowerCase().split(' ');
     
-    for (const id in nodeData) {
-        const node = nodeData[id];
-        const searchableText = (node.name + ' ' + node.type + ' ' + (node.file_path || '')).toLowerCase();
-        
-        if (searchTerms.every(term => searchableText.includes(term))) {
+    for (const id in nodeMetadata) {
+        const node = nodeMetadata[id];
+        const text = (node.name + ' ' + (node.type || '')).toLowerCase();
+        if (searchTerms.every(t => text.includes(t))) {
             matches.push({ id, ...node });
         }
-        if (matches.length >= 10) break;
+        if (matches.length >= 15) break;
     }
 
     if (matches.length > 0) {
         resultsDiv.innerHTML = matches.map(m => `
-            <div class="search-result-item" onclick="focusOnNode('${m.id}')">
-                <span>${m.name.length > 35 ? '...' + m.name.slice(-32) : m.name}</span>
-                <span class="search-result-type">${m.type}</span>
+            <div class="search-result-item" onclick="focusOnNode('${m.id}')" style="padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; justify-content: space-between;">
+                <span style="font-size: 13px;">${m.name}</span>
+                <span style="font-size: 10px; background: #eee; padding: 2px 4px; border-radius: 4px;">${m.type}</span>
             </div>
         `).join('');
         resultsDiv.style.display = 'block';
@@ -44,15 +46,356 @@ function handleSearch(query) {
     }
 }
 
+// --- NODE INTERACTION (X-RAY MODE) ---
 function focusOnNode(nodeId) {
     document.getElementById('search-results').style.display = 'none';
-    document.getElementById('node-search').value = nodeData[nodeId].name;
+    const node = nodeMetadata[nodeId];
     
-    // Show all nodes first if we were focused
-    if (isFocused) {
-        resetFocus();
+    // Find impact path if hotspot
+    const affectedIds = new Set([nodeId]);
+    if (hotspotData) {
+        const hs = hotspotData.find(h => h.node_id === nodeId);
+        if (hs) hs.affected_failed_test_cases.forEach(tc => affectedIds.add(tc.id));
     }
 
+    // Ghost out others
+    const allIds = nodes.getIds();
+    nodes.update(allIds.map(id => ({
+        id: id,
+        opacity: affectedIds.has(id) ? 1.0 : 0.1,
+        font: { color: affectedIds.has(id) ? '#000' : 'rgba(0,0,0,0.1)' }
+    })));
+    
+    isFocused = true;
+    network.focus(nodeId, { scale: 1.0, animation: { duration: 800 } });
+    network.selectNodes([nodeId]);
+    showDetails(nodeId);
+}
+
+function resetFocus() {
+    if (!isFocused) return;
+    const allIds = nodes.getIds();
+    nodes.update(allIds.map(id => ({ id, opacity: 1.0, font: { color: '#000' } })));
+    isFocused = false;
+    hideDetails();
+}
+
+function hideDetails() {
+    document.getElementById('node-details-side').style.display = 'none';
+}
+
+function showDetails(nodeId) {
+    const data = nodeMetadata[nodeId];
+    if (!data) return;
+
+    const sidePanel = document.getElementById('node-details-side');
+    const content = document.getElementById('details-content');
+    
+    let html = `
+        <div class="detail-section">
+            <div class="detail-label">Component Name</div>
+            <div class="detail-value" style="font-size: 16px; font-weight: 700;">${data.name}</div>
+        </div>
+        
+        <div class="detail-section">
+            <div class="detail-label">Type & Status</div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span class="impact-badge badge-type">
+                    ${data.metadata?.additional_data?.reg_key || data.type}
+                </span>
+                ${data.execution_status ? `
+                    <span class="impact-badge ${data.execution_status === 'PASSED' ? 'badge-passed' : 'badge-failed'}" 
+                          style="background: ${data.execution_status === 'PASSED' ? '#e8f5e9' : '#ffebee'}; color: ${data.execution_status === 'PASSED' ? '#2e7d32' : '#c62828'};">
+                        ${data.execution_status}
+                    </span>
+                ` : ''}
+            </div>
+        </div>
+    `;
+
+    // History Timeline
+    if (data.execution_history && data.execution_history.length > 0) {
+        html += `
+            <div class="detail-section">
+                <div class="detail-label">Execution History (Last 10)</div>
+                <div class="history-timeline">
+                    ${data.execution_history.slice(-10).map(s => `
+                        <div class="dot ${s === 'PASSED' ? 'pass' : 'fail'}" title="${s}"></div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    // Failure Details & Deep Links to Children
+    if (data.execution_status !== 'PASSED' && data.id) {
+        // Find children that are failing
+        const failedChildren = [];
+        edges.get().forEach(edge => {
+            if (edge.from === data.id) {
+                const child = nodeMetadata[edge.to];
+                if (child && (child.execution_status === 'FAILED' || child.execution_status === 'PARTIAL_FAIL')) {
+                    failedChildren.push(child);
+                }
+            }
+        });
+
+        if (failedChildren.length > 0) {
+            html += `
+                <div class="detail-section">
+                    <div class="detail-label" style="color: #d32f2f;"><i class="fas fa-search-location"></i> Failing Components Inside</div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                        ${failedChildren.map(child => `
+                            <div class="error-box" style="border-left: 4px solid #f44336; cursor: pointer; transition: 0.2s;" 
+                                 onclick="jumpToNode('${child.id}')" onmouseover="this.style.background='#ffebee'" onmouseout="this.style.background='#fff5f5'">
+                                <div style="font-weight: 700; font-size: 11px; color: #b71c1c;">${child.name}</div>
+                                <div style="font-size: 10px; color: #666; margin-top: 4px;">${child.execution_details?.error || 'Click to investigate failure'}</div>
+                                <div style="font-size: 9px; color: #1976d2; margin-top: 4px; font-weight: 800;">🔍 CLICK TO FOCUS ON MAP</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        } else if (data.execution_details && data.execution_details.error) {
+            // Direct error on the node itself
+            html += `
+                <div class="detail-section">
+                    <div class="detail-label">Error Details</div>
+                    <div class="error-box">${data.execution_details.error}</div>
+                </div>
+            `;
+        }
+    }
+
+    // AI Expert Analysis (Notes from AI Assistant via MCP)
+    if (data.expert_notes && data.expert_notes.length > 0) {
+        html += `
+            <div class="detail-section">
+                <div class="detail-label" style="color: #1976D2;"><i class="fas fa-robot"></i> Expert Analysis</div>
+                ${data.expert_notes.map(note => `
+                    <div style="background: #E3F2FD; padding: 10px; border-radius: 8px; border: 1px solid #BBDEFB; margin-top: 10px; font-size: 11px;">
+                        <div style="color: #0D47A1; font-weight: 700; margin-bottom: 3px;">Note from AI Assistant (${note.timestamp}):</div>
+                        <div>${note.note}</div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    // AI Suggestions
+    if (data.suggestions && data.suggestions.length > 0) {
+        html += `
+            <div class="detail-section">
+                <div class="detail-label">💡 AI Fix Intelligence</div>
+                ${data.suggestions.map(s => `
+                    <div style="background: #fffde7; padding: 10px; border-radius: 8px; border: 1px solid #fff59d; margin-top: 10px;">
+                        <div style="font-weight: 700; color: #827717; font-size: 12px;">${s.description}</div>
+                        <div style="font-family: monospace; font-size: 11px; margin-top: 5px; background: #fff; padding: 5px;">${s.solution}</div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    content.innerHTML = html;
+    sidePanel.style.display = 'block';
+}
+
+// --- DASHBOARD RENDERING ---
+function renderDashboard() {
+    // 1. Hotspots in Sidebar
+    const hotspotList = document.getElementById('hotspot-list');
+    
+    // Calculate total project failures first for contribution ratio
+    let totalProjectFailures = 0;
+    for (const id in nodeMetadata) {
+        const node = nodeMetadata[id];
+        // Ensure we count all terminal failure points (Test Cases or Scenarios)
+        if ((node.type === 'TEST_CASE' || node.type === 'SCENARIO') && node.execution_status === 'FAILED') {
+            totalProjectFailures++;
+        }
+    }
+
+    if (hotspotData && hotspotData.length > 0) {
+        hotspotList.innerHTML = hotspotData.map(hs => {
+            const failedCount = hs.failed_test_cases || 0;
+            const totalCount = hs.total_test_cases || 1;
+            
+            // Safe calculation for contribution
+            const contribution = totalProjectFailures > 0 
+                ? Math.round((failedCount / totalProjectFailures) * 100) 
+                : 0;
+            
+            const isRootCause = contribution >= 50; // If responsible for half of failures
+            
+            return `
+                <div class="hotspot-item ${isRootCause ? 'pulse-fail' : ''}" onclick="focusOnNode('${hs.node_id}')" 
+                     style="border-left: 4px solid ${isRootCause ? '#d32f2f' : '#ffa000'};">
+                    <div class="hotspot-header">
+                        <div style="font-weight: 800; font-size: 13px; color: #1a237e;">${hs.name}</div>
+                        <span class="impact-badge" style="background: ${isRootCause ? '#d32f2f' : '#ff9800'}; font-size: 10px;">
+                            ${contribution}% OF TOTAL FAILURES
+                        </span>
+                    </div>
+                    <div style="margin-top: 8px; font-size: 11px; color: #444;">
+                        <i class="fas fa-exclamation-triangle" style="color: #f44336;"></i> 
+                        <b>${hs.failed_test_cases} / ${hs.total_test_cases}</b> tests failed in this path
+                    </div>
+                    ${isRootCause ? '<div style="margin-top: 5px; font-size: 9px; font-weight: 900; color: #d32f2f; text-transform: uppercase;">🚩 CRITICAL ROOT CAUSE</div>' : ''}
+                </div>
+            `;
+        }).join('');
+    }
+
+    // 2. Summary HUD
+    let total = 0, passed = 0, failed = 0;
+    for (const id in nodeMetadata) {
+        const node = nodeMetadata[id];
+        if (node.type === 'TEST_CASE') {
+            total++;
+            if (node.execution_status === 'PASSED') passed++;
+            else if (node.execution_status === 'FAILED') failed++;
+        }
+    }
+
+    if (total > 0 && activeMode === 'EXECUTION') {
+        const rate = Math.round((passed / total) * 100);
+        const summary = document.getElementById('status-summary');
+        summary.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div onclick="filterNodes('all')" style="cursor: pointer;">
+                    <div style="font-size: 10px; color: #999; font-weight: 800;">SUCCESS RATE</div>
+                    <div style="font-size: 32px; font-weight: 900; color: ${rate >= 90 ? '#4caf50' : '#f44336'};">${rate}%</div>
+                </div>
+                <div style="display: flex; gap: 20px; text-align: right;">
+                    <div onclick="filterNodes('passed')" style="cursor: pointer;">
+                        <div style="font-size: 10px; color: #4caf50; font-weight: 800;">PASS</div>
+                        <div style="font-size: 18px; font-weight: 800; color: #2e7d32;">${passed}</div>
+                    </div>
+                    <div onclick="filterNodes('failed')" style="cursor: pointer;">
+                        <div style="font-size: 10px; color: #f44336; font-weight: 800;">FAIL</div>
+                        <div style="font-size: 18px; font-weight: 800; color: #c62828;">${failed}</div>
+                    </div>
+                    <div onclick="filterNodes('all')" style="cursor: pointer;">
+                        <div style="font-size: 10px; color: #999; font-weight: 800;">TOTAL</div>
+                        <div style="font-size: 18px; font-weight: 800; color: #444;">${total}</div>
+                    </div>
+                    <div onclick="switchTab('legend')" style="cursor: pointer; border-left: 1px solid #ddd; padding-left: 15px; margin-left: 5px;">
+                        <div style="font-size: 10px; color: #1976d2; font-weight: 800;">LEGEND</div>
+                        <div style="font-size: 18px; font-weight: 800; color: #1976d2;">📖</div>
+                    </div>
+                </div>
+            </div>
+        `;
+        summary.style.display = 'block';
+    }
+}
+
+// --- FILTERING & TABS ---
+function filterNodes(status) {
+    const allNodes = nodes.get();
+    const updates = allNodes.map(node => {
+        const metadata = nodeMetadata[node.id];
+        let hidden = false;
+        
+        if (status === 'failed') {
+            hidden = (metadata.execution_status !== 'FAILED');
+        } else if (status === 'passed') {
+            hidden = (metadata.execution_status !== 'PASSED');
+        }
+        
+        return { id: node.id, hidden: hidden };
+    });
+    
+    nodes.update(updates);
+}
+
+function switchTab(tabId) {
+    // Update tab styles
+    document.querySelectorAll('.sidebar-tabs .tab').forEach(t => {
+        t.classList.remove('active');
+        if (t.innerText.toLowerCase().includes(tabId)) t.classList.add('active');
+    });
+    
+    // Switch content
+    document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+    const content = document.getElementById(tabId + '-content');
+    if (content) {
+        content.style.display = 'block';
+        if (tabId === 'legend') renderLegend();
+    }
+}
+
+function renderLegend() {
+    const content = document.getElementById('legend-content');
+    content.innerHTML = `
+        <div style="padding: 10px;">
+            <!-- 1. INFRASTRUCTURE -->
+            <div style="font-weight: 700; color: #666; margin-bottom: 10px; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">🏗️ Infrastructure</div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 18px; height: 18px; background: #3f51b5; clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%); margin-right: 10px;"></div>
+                <span><b>Domain / API Group</b></span>
+            </div>
+
+            <!-- 2. LIBRARY -->
+            <div style="font-weight: 700; color: #666; margin: 15px 0 10px 0; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">📚 Library & Utilities</div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 18px; height: 18px; background: #607d8b; margin-right: 10px;"></div>
+                <span><b>Common File (Square)</b></span>
+            </div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 14px; height: 14px; background: #607d8b; transform: rotate(45deg); margin: 0 12px 0 2px;"></div>
+                <span><b>Common Utility (Diamond)</b></span>
+            </div>
+
+            <!-- 3. EXECUTION -->
+            <div style="font-weight: 700; color: #666; margin: 15px 0 10px 0; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">🚀 Execution & Tests</div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 18px; height: 18px; background: #5c6bc0; transform: rotate(45deg); margin-right: 10px;"></div>
+                <span><b>API Endpoint</b></span>
+            </div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 18px; height: 18px; background: #03a9f4; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); margin-right: 10px;"></div>
+                <span><b>Test Case / Scenario</b></span>
+            </div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 0; height: 0; border-left: 9px solid transparent; border-right: 9px solid transparent; border-bottom: 18px solid #009688; margin-right: 10px;"></div>
+                <span><b>Action / Step</b></span>
+            </div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 18px; height: 18px; background: #795548; border-radius: 9px / 4px; border-bottom: 3px solid #5d4037; margin-right: 10px;"></div>
+                <span><b>Database / Storage</b></span>
+            </div>
+
+            <div style="font-weight: 700; color: #666; margin: 20px 0 15px 0; font-size: 11px; text-transform: uppercase;">Status Colors</div>
+            <div style="display: flex; align-items: center; margin-bottom: 8px; font-size: 12px;">
+                <div style="width: 12px; height: 12px; background: #4caf50; border-radius: 2px; margin-right: 10px;"></div>
+                <span>Passed</span>
+            </div>
+            <div style="display: flex; align-items: center; margin-bottom: 8px; font-size: 12px;">
+                <div style="width: 12px; height: 12px; background: #f44336; border-radius: 2px; margin-right: 10px;"></div>
+                <span>Failed (100% Impact)</span>
+            </div>
+            <div style="display: flex; align-items: center; margin-bottom: 8px; font-size: 12px;">
+                <div style="width: 12px; height: 12px; background: #ff9800; border-radius: 2px; margin-right: 10px;"></div>
+                <span>Partial Failure / Impacted Path</span>
+            </div>
+        </div>
+    `;
+}
+
+// --- EVENTS ---
+network.on("click", function(params) {
+    if (params.nodes.length === 0) resetFocus();
+    else showDetails(params.nodes[0]);
+});
+
+network.on("doubleClick", function(params) {
+    if (params.nodes.length > 0) focusOnNode(params.nodes[0]);
+});
+
+function jumpToNode(nodeId) {
+    network.selectNodes([nodeId]);
     network.focus(nodeId, {
         scale: 1.2,
         animation: {
@@ -60,220 +403,19 @@ function focusOnNode(nodeId) {
             easingFunction: 'easeInOutQuad'
         }
     });
-    
-    // Trigger click to show details
-    network.selectNodes([nodeId]);
     showDetails(nodeId);
 }
 
-function applyLegendFilter() {
-    // Filter legend based on mode
-    var mode = null;
-    for (var id in nodeData) {
-        mode = nodeData[id].visualization_mode;
-        if (mode) break;
-    }
+// Initialization
+window.onload = function() {
+    renderDashboard();
+    switchTab('hotspots'); // Default tab
     
-    if (mode) {
-        var legendDiv = document.getElementById('legend');
-        var groups = legendDiv.querySelectorAll('h3');
-        groups.forEach(function(g) {
-            var text = g.innerText;
-            var parent = g; // In the new template, h3 and its following items are siblings or inside groups. 
-            // Actually, let's just hide the H3 and the next legend-items until the next H3 or HR
-            var toHide = [g];
-            var next = g.nextElementSibling;
-            while (next && next.tagName !== 'H3' && next.tagName !== 'HR') {
-                toHide.push(next);
-                next = next.nextElementSibling;
-            }
-
-            var shouldHide = false;
-            if (mode === "EXECUTION") {
-                if (text.includes("Comparison") || text.includes("Components")) shouldHide = true;
-            } else if (mode === "DIFF") {
-                if (text.includes("Execution") || text.includes("Components")) shouldHide = true;
-            } else {
-                if (text.includes("Execution") || text.includes("Comparison")) shouldHide = true;
-            }
-
-            if (shouldHide) {
-                toHide.forEach(el => el.style.display = "none");
-            }
-        });
-    }
-}
-
-// Keyboard shortcut Ctrl+K to search
-document.addEventListener('keydown', function(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        document.getElementById('node-search').focus();
-    }
-});
-
-function showDetails(nodeId) {
-    var detailsDiv = document.getElementById('node-details');
-    var data = nodeData[nodeId];
-    if (data) {
-        let diffClass = "";
-        if (data.diff_status === "ADDED") diffClass = "diff-added";
-        else if (data.diff_status === "REMOVED") diffClass = "diff-removed";
-        else if (data.diff_status === "MODIFIED") diffClass = "diff-modified";
-
-        var html = `<div class="detail-header ${diffClass}">` + data.name + '</div>';
-        
-        // Execution Status Section
-        if (data.execution_status) {
-            let statusClass = data.execution_status === "PASSED" ? "status-passed" : "status-failed";
-            html += `<div class="detail-row"><span class="detail-label">Result:</span><span class="${statusClass}">${data.execution_status}</span></div>`;
-            
-            if (data.execution_details && data.execution_details.error) {
-                html += `<div class="error-message"><strong>Error at ${data.execution_details.failed_step || 'unknown step'}:</strong>\n${data.execution_details.error}</div>`;
-            }
+    // Ctrl+K to search
+    document.addEventListener('keydown', e => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            document.getElementById('node-search').focus();
         }
-
-        html += '<div class="detail-row"><span class="detail-label">Type:</span><span class="detail-value">' + data.type + '</span></div>';
-        
-        if (data.file_path) {
-            html += '<div class="detail-row"><span class="detail-label">File:</span><span class="detail-value">' + data.file_path + '</span></div>';
-        }
-        if (data.line_number) {
-            html += '<div class="detail-row"><span class="detail-label">Line:</span><span class="detail-value">' + data.line_number + '</span></div>';
-        }
-        
-        if (data.jira_tags && data.jira_tags.length > 0) {
-            html += '<div class="detail-row"><span class="detail-label">Jira:</span>';
-            data.jira_tags.forEach(function(tag) {
-                html += '<span class="jira-tag">' + tag + '</span>';
-            });
-            html += '</div>';
-        }
-
-        if (data.additional_data) {
-            html += '<hr><div style="font-weight:bold; margin-bottom:5px;">Metadata:</div>';
-            for (var key in data.additional_data) {
-                var val = data.additional_data[key];
-                if (val !== null && val !== undefined) {
-                    if (typeof val === 'object') {
-                        html += '<div class="detail-row" style="font-size:12px; align-items:flex-start;"><span class="detail-label" style="margin-top:2px;">' + key + ':</span><div style="display:flex; flex-direction:column; gap:2px;">';
-                        for (var subKey in val) {
-                            html += '<div><span style="color:#666; font-weight:600; text-transform:uppercase;">[' + subKey + ']</span> <span style="word-break:break-all;">' + val[subKey] + '</span></div>';
-                        }
-                        html += '</div></div>';
-                    } else {
-                        html += '<div class="detail-row" style="font-size:12px;"><span class="detail-label">' + key + ':</span><span class="detail-value">' + val + '</span></div>';
-                    }
-                }
-            }
-        }
-
-        document.getElementById('details-content').innerHTML = html;
-        detailsDiv.style.display = 'block';
-    }
-}
-
-// Safe initialization for custom events
-function initEvents() {
-    if (typeof network !== 'undefined') {
-        // Disable physics after initial stabilization to keep UI responsive
-        network.on("stabilizationIterationsDone", function() {
-            console.log("Karate Graph: Stabilization complete, disabling physics for performance.");
-            network.setOptions({ physics: { enabled: false } });
-        });
-
-        // Handle double click to focus on a node and its full recursive dependency chain
-        network.on("doubleClick", function(params) {
-            if (params.nodes.length > 0) {
-                // Disable physics during focus to prevent lag
-                network.setOptions({ physics: { enabled: false } });
-                
-                var targetId = params.nodes[0];
-                var nodesToKeep = new Set();
-                nodesToKeep.add(targetId);
-
-                function findDescendants(nodeId) {
-                    var children = network.getConnectedNodes(nodeId, 'to');
-                    children.forEach(function(childId) {
-                        if (!nodesToKeep.has(childId)) {
-                            nodesToKeep.add(childId);
-                            findDescendants(childId);
-                        }
-                    });
-                }
-
-                function findAncestors(nodeId) {
-                    var parents = network.getConnectedNodes(nodeId, 'from');
-                    parents.forEach(function(parentId) {
-                        if (!nodesToKeep.has(parentId)) {
-                            nodesToKeep.add(parentId);
-                            findAncestors(parentId);
-                        }
-                    });
-                }
-
-                findDescendants(targetId);
-                findAncestors(targetId);
-
-                var contextNodes = new Set();
-                nodesToKeep.forEach(function(nodeId) {
-                    var neighbors = network.getConnectedNodes(nodeId);
-                    neighbors.forEach(function(neighborId) {
-                        contextNodes.add(neighborId);
-                    });
-                });
-                
-                contextNodes.forEach(id => nodesToKeep.add(id));
-
-                var allNodeIds = nodes.getIds();
-                var updates = allNodeIds.map(function(id) {
-                    return { id: id, hidden: !nodesToKeep.has(id) };
-                });
-                nodes.update(updates);
-                isFocused = true;
-                
-                setTimeout(function() {
-                    network.fit({
-                        nodes: Array.from(nodesToKeep),
-                        animation: {
-                            duration: 800,
-                            easingFunction: 'easeInOutQuad'
-                        }
-                    });
-                }, 50);
-            }
-        });
-
-        // Handle single click to show details or reset focus
-        network.on("click", function(params) {
-            var detailsDiv = document.getElementById('node-details');
-            if (params.nodes.length === 0) {
-                if (isFocused) {
-                    resetFocus();
-                }
-                detailsDiv.style.display = 'none';
-                document.getElementById('search-results').style.display = 'none';
-                return;
-            }
-            showDetails(params.nodes[0]);
-        });
-
-        console.log("Karate Graph: Custom events initialized successfully.");
-    } else {
-        setTimeout(initEvents, 100);
-    }
-}
-
-function resetFocus() {
-    var allNodeIds = nodes.getIds();
-    var updates = allNodeIds.map(function(id) {
-        return { id: id, hidden: false };
     });
-    nodes.update(updates);
-    isFocused = false;
-    network.fit({ animation: true });
-}
-
-// Global Startup
-applyLegendFilter();
-initEvents();
+};

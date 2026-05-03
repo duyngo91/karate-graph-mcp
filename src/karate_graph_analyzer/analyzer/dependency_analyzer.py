@@ -58,6 +58,10 @@ class DependencyAnalyzer:
         # Initialize expert analyzer
         from karate_graph_analyzer.analyzer.analysis_expert import AnalysisExpert
         self.expert = AnalysisExpert(self.graph, self._nx_graph)
+        
+        # Initialize fix expert
+        from karate_graph_analyzer.analyzer.fix_expert import FixExpert
+        self.fix_expert = FixExpert()
 
     def impact_analysis(self, component_id: str) -> ImpactResult:
         """Find all test cases affected by component change.
@@ -94,14 +98,14 @@ class DependencyAnalyzer:
                 total_count=0,
             )
         
-        # Filter to only include TEST_CASE nodes
+        # Filter to include TEST_CASE and SCENARIO nodes
         affected_test_cases = []
         for ancestor_id in ancestor_ids:
             if ancestor_id not in self.graph.nodes:
                 continue
             
             node = self.graph.nodes[ancestor_id]
-            if node.type != NodeType.TEST_CASE:
+            if node.type not in [NodeType.TEST_CASE, NodeType.SCENARIO]:
                 continue
             
             # Calculate all paths from this test case to the changed component
@@ -315,3 +319,67 @@ class DependencyAnalyzer:
                 result_nodes.append(self.graph.nodes[node_id])
         
         return result_nodes
+    def find_failure_hotspots(self, min_impact: int = 1):
+        """
+        Identify components causing high-volume test failures.
+        Uses Impact Analysis (Dependents) to calculate score.
+        """
+        from collections import defaultdict
+        
+        # 1. Get all terminal nodes (Test Cases / Scenarios)
+        terminal_nodes = [
+            (nid, n) for nid, n in self.graph.nodes.items()
+            if n.type in [NodeType.TEST_CASE, NodeType.SCENARIO]
+        ]
+        
+        if not terminal_nodes:
+            return []
+
+        # 2. For each non-terminal node, calculate its blast radius
+        hotspot_stats = {} # nid -> {failed: X, total: Y}
+        
+        for node_id, node in self.graph.nodes.items():
+            if node.type in [NodeType.TEST_CASE, NodeType.SCENARIO]:
+                continue # Terminals aren't hotspots
+            
+            # Use impact_analysis to find all nodes that rely on this node
+            impact_result = self.impact_analysis(node_id)
+            affected_items = impact_result.affected_test_cases
+            
+            if not affected_items:
+                continue
+                
+            total_affected = len(affected_items)
+            failed_affected = 0
+            
+            for item in affected_items:
+                # Retrieve original node to check status
+                original_node = self.graph.nodes.get(item.node_id)
+                if original_node and original_node.execution_status == "FAILED":
+                    failed_affected += 1
+            
+            if failed_affected >= min_impact:
+                hotspot_stats[node_id] = {
+                    "failed": failed_affected,
+                    "total": total_affected,
+                    "name": node.name,
+                    "type": node.type.value
+                }
+
+        # 3. Build results
+        results = []
+        for node_id, stats in hotspot_stats.items():
+            fail_percent = round((stats["failed"] / stats["total"]) * 100) if stats["total"] > 0 else 0
+            
+            results.append({
+                "node_id": node_id,
+                "name": stats["name"],
+                "failure_impact_score": stats["failed"],
+                "total_test_cases": stats["total"],
+                "failed_test_cases": stats["failed"],
+                "failure_percentage": fail_percent,
+                "type": stats["type"]
+            })
+            
+        results.sort(key=lambda x: (x["failure_impact_score"], x["failure_percentage"]), reverse=True)
+        return results
