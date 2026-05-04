@@ -51,6 +51,7 @@ class JsonExporter(IGraphExporter):
                         "category": node.metadata.category.value if hasattr(node.metadata.category, 'value') else node.metadata.category,
                         "flow": node.metadata.flow.value if hasattr(node.metadata.flow, 'value') else node.metadata.flow,
                         "additional_data": node.metadata.additional_data,
+                        "environment_variants": getattr(node.metadata, "environment_variants", {}),
                         "execution_history": getattr(node.metadata, "execution_history", []),
                     },
                 }
@@ -109,6 +110,7 @@ class JsonExporter(IGraphExporter):
                 category=ComponentCategory(node_data["metadata"].get("category", "UNKNOWN")),
                 flow=FlowType(node_data["metadata"].get("flow", "UNKNOWN")),
                 additional_data=node_data["metadata"].get("additional_data", {}),
+                environment_variants=node_data["metadata"].get("environment_variants", {}),
                 execution_history=node_data["metadata"].get("execution_history", []),
             )
 

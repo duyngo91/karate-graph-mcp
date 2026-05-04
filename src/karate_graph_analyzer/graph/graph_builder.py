@@ -331,7 +331,13 @@ class GraphBuilder:
             ed["id"]: Edge(id=ed["id"], from_node=ed["from_node"], to_node=ed["to_node"], type=ed["type"], line_number=ed.get("line_number"))
             for _, _, ed in self.nx_builder.graph.edges(data=True)
         }
-        return DependencyGraph(project_name=project_name, nodes=nodes_dict, edges=edges_dict, cycles=cycles)
+        return DependencyGraph(
+            project_name=project_name, 
+            nodes=nodes_dict, 
+            edges=edges_dict, 
+            cycles=cycles,
+            config=self.config
+        )
 
     def _enrich_locator_metadata(self, meta: NodeMetadata, project_root: str):
         try:

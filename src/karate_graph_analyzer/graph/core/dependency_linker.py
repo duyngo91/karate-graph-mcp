@@ -127,6 +127,11 @@ class DependencyLinker:
             category = self.path_classifier.classify_component_category(file_path)
             flow = self.path_classifier.resolve_flow(node_type)
 
+        # Resolve environment variants if it's a variable
+        env_variants = {}
+        if context and ('${' in dep.target or any(v in dep.target for v in context.parser_config.variable_patterns.keys())):
+            env_variants = PathResolver.get_env_variants(dep.target, context)
+
         metadata = NodeMetadata(
             file_path=file_path,
             line_number=dep.line_number,
@@ -134,7 +139,7 @@ class DependencyLinker:
             project_name=project_name,
             category=category,
             flow=flow,
-            environment_variants=[dep.parameters.get("physical_url")] if dep.parameters.get("physical_url") else [],
+            environment_variants=env_variants,
             additional_data=dep.parameters,
         )
         
@@ -396,12 +401,15 @@ class DependencyLinker:
 
     def _enrich_api_metadata(self, node_id: str, metadata: NodeMetadata):
         desc = metadata.additional_data.get("descriptive_name")
+        updates = {
+            "scenario_name": metadata.additional_data.get("scenario_name"),
+            "scenario_tags": metadata.additional_data.get("scenario_tags"),
+            "environment_variants": metadata.environment_variants
+        }
         if desc:
-            self.nx_builder.update_node_metadata(node_id, {
-                "descriptive_name": desc,
-                "scenario_name": metadata.additional_data.get("scenario_name"),
-                "scenario_tags": metadata.additional_data.get("scenario_tags")
-            })
+            updates["descriptive_name"] = desc
+            
+        self.nx_builder.update_node_metadata(node_id, updates)
 
     def _link_to_parent(self, parent_id: str, child_id: str):
         if parent_id and not self.nx_builder.graph.has_edge(parent_id, child_id):

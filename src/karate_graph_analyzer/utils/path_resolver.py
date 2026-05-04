@@ -112,3 +112,64 @@ class PathResolver:
             norm += ".feature"
         
         return norm
+    @staticmethod
+    def get_env_variants(path: str, context: PathContext) -> Dict[str, str]:
+        """Get all environment-specific values for a path containing variables."""
+        if not path or not context or not context.parser_config:
+            return {}
+            
+        variants = {}
+        env_mapping = context.parser_config.env_url_mapping or {} # var_name -> {env: value}
+        
+        # Collect all unique environments
+        all_envs = set()
+        for env_dict in env_mapping.values():
+            all_envs.update(env_dict.keys())
+            
+        for env in all_envs:
+            resolved = path
+            replaced = False
+            
+            # Sort variables by length descending to avoid partial matches (e.g. 'url' vs 'baseUrl')
+            sorted_vars = sorted(env_mapping.keys(), key=len, reverse=True)
+            
+            for var_name in sorted_vars:
+                env_values = env_mapping[var_name]
+                val = env_values.get(env)
+                if not val:
+                    continue
+                
+                # 1. Try to replace ${var_name} pattern
+                pattern_braced = f"${{{var_name}}}"
+                if pattern_braced in resolved:
+                    resolved = resolved.replace(pattern_braced, val)
+                    replaced = True
+                
+                # 2. Try to replace $var_name pattern (if applicable)
+                pattern_simple = f"${var_name}"
+                if pattern_simple in resolved:
+                    resolved = resolved.replace(pattern_simple, val)
+                    replaced = True
+                    
+                # 3. Only replace bare var_name if it looks like a variable placeholder 
+                # (e.g. in some cases users might just use the var name)
+                # But we should be careful. Let's use regex for whole word if it's not a braced pattern.
+                # Heuristic: if the path starts with the var_name or it's preceded by / or .
+                if not replaced:
+                    # Use regex for whole word match to avoid replacing parts of other words (like 'payment' in 'PaymentServices')
+                    import re
+                    # Match var_name as a whole word, but allow it to be at start/end or surrounded by non-alphanumeric
+                    regex_pattern = r'(?P<prefix>^|[^a-zA-Z0-9_\.])' + re.escape(var_name) + r'(?P<suffix>$|[^a-zA-Z0-9_\.])'
+                    
+                    def replace_func(match):
+                        return match.group('prefix') + val + match.group('suffix')
+                    
+                    new_resolved = re.sub(regex_pattern, replace_func, resolved)
+                    if new_resolved != resolved:
+                        resolved = new_resolved
+                        replaced = True
+            
+            if replaced:
+                variants[env] = resolved
+                
+        return variants

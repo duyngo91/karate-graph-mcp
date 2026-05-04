@@ -151,7 +151,7 @@ class NodeMetadata:
     project_name: str
     category: ComponentCategory = ComponentCategory.UNKNOWN
     flow: FlowType = FlowType.UNKNOWN
-    environment_variants: List[str] = field(default_factory=list)  # Physical paths/URLs for this logical node
+    environment_variants: Dict[str, str] = field(default_factory=dict)  # env -> Physical path/URL
     additional_data: Dict[str, Any] = field(default_factory=dict)
     execution_history: List[str] = field(default_factory=list) # List of "PASSED", "FAILED"
     expert_notes: List[Dict[str, Any]] = field(default_factory=list)
@@ -213,6 +213,7 @@ class DependencyGraph:
     nodes: Dict[str, Node]
     edges: Dict[str, Edge]
     cycles: List[List[str]] = field(default_factory=list)
+    config: Optional["ParserConfig"] = None
 
     def merge(self, other: "DependencyGraph", new_project_name: Optional[str] = None) -> "DependencyGraph":
         """Merge another graph into this one."""

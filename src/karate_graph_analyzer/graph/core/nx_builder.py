@@ -66,8 +66,9 @@ class NetworkXBuilder:
             
             # 2. Merge environment variants
             if hasattr(metadata, "environment_variants") and metadata.environment_variants:
-                current_variants = node["metadata"].get("environment_variants", [])
-                node["metadata"]["environment_variants"] = list(dict.fromkeys(current_variants + metadata.environment_variants))
+                current_variants = node["metadata"].get("environment_variants", {})
+                current_variants.update(metadata.environment_variants)
+                node["metadata"]["environment_variants"] = current_variants
             
             # 3. Merge additional data
             if metadata.additional_data:
@@ -229,16 +230,31 @@ class NetworkXBuilder:
         })
         return self._add_node_internal(node_id, NodeType.ACTION, display_name, metadata)
 
-    def update_node_metadata(self, node_id: str, additional_data: Dict[str, Any]) -> None:
-        """Update existing node's additional_data metadata."""
+    def update_node_metadata(self, node_id: str, updates: Dict[str, Any]) -> None:
+        """Update existing node's metadata (additional_data, variants, etc.)."""
         if node_id in self.graph:
             node = self.graph.nodes[node_id]
-            if "metadata" in node and "additional_data" in node["metadata"]:
-                node["metadata"]["additional_data"].update(additional_data)
+            if "metadata" not in node:
+                return
+                
+            # 1. Update additional_data
+            if "additional_data" in updates:
+                node["metadata"]["additional_data"].update(updates["additional_data"])
+            elif any(k in updates for k in ["descriptive_name", "scenario_name", "scenario_tags"]):
+                # Legacy support for direct key updates
+                node["metadata"]["additional_data"].update({
+                    k: v for k, v in updates.items() if k in ["descriptive_name", "scenario_name", "scenario_tags"]
+                })
             
-            # If tags are being updated via additional_data, sync them to the top level
-            if "tags" in additional_data:
-                node["tags"] = list(set(node.get("tags", []) + additional_data["tags"]))
+            # 2. Update environment_variants
+            if "environment_variants" in updates and updates["environment_variants"]:
+                current_variants = node["metadata"].get("environment_variants", {})
+                current_variants.update(updates["environment_variants"])
+                node["metadata"]["environment_variants"] = current_variants
+            
+            # 3. Sync tags if present
+            if "tags" in updates:
+                node["tags"] = list(set(node.get("tags", []) + updates["tags"]))
 
     def add_dependency(self, from_node: str, to_node: str, dep_type: DependencyType, line_number: int = None) -> str:
         """Add a directed edge representing a dependency."""

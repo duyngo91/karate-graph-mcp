@@ -7,17 +7,18 @@ var currentTab = 'HOTSPOTS';
 function switchTab(tabId) {
     currentTab = tabId;
     
-    // Toggle tab active class
-    const tabs = document.querySelectorAll('.tab');
+    const tabs = ['hotspots', 'variables', 'timeline', 'legend'];
     tabs.forEach(t => {
-        const isMatch = t.getAttribute('onclick').includes(`'${tabId}'`);
-        t.classList.toggle('active', isMatch);
+        const el = document.querySelector(`.tab[onclick="switchTab('${t}')"]`);
+        if (el) el.classList.toggle('active', t === tabId);
+        
+        const content = document.getElementById(`${t}-content`);
+        if (content) content.style.display = t === tabId ? 'block' : 'none';
     });
-    
-    // Toggle content visibility
-    document.getElementById('hotspots-content').style.display = tabId === 'hotspots' ? 'block' : 'none';
-    document.getElementById('timeline-content').style.display = tabId === 'timeline' ? 'block' : 'none';
-    document.getElementById('legend-content').style.display = tabId === 'legend' ? 'block' : 'none';
+
+    if (tabId === 'hotspots') renderDashboard();
+    if (tabId === 'variables') renderVariables();
+    if (tabId === 'legend') renderLegend();
 }
 
 function jumpToNode(nodeId) {
@@ -158,12 +159,16 @@ function showDetails(nodeId) {
             'http_method': 'HTTP Method',
             'endpoint': 'Endpoint',
             'physical_url': 'Physical URL',
+            'resolved_from': 'Resolved From',
+            'variable': 'Variable Name',
             'database': 'Database',
             'table': 'Table',
             'operation': 'DB Operation',
             'host': 'Host',
             'scenario_tag': 'Scenario Tag',
-            'workflow_path': 'Workflow File'
+            'workflow_path': 'Workflow File',
+            'key': 'Key',
+            'value': 'Value'
         };
 
         const detailsRows = Object.entries(relevantKeys)
@@ -185,6 +190,23 @@ function showDetails(nodeId) {
                 </div>
             `;
         }
+    }
+
+    // Environment Variants (Cross-environment resolution)
+    if (node.environment_variants && Object.keys(node.environment_variants).length > 0) {
+        html += `
+            <div class="detail-section" style="border: 1px solid #e3f2fd; background: #f9fcff;">
+                <div class="detail-label" style="color: #1976d2;"><i class="fas fa-globe"></i> Environment Variants</div>
+                <div style="margin-top: 10px;">
+                    ${Object.entries(node.environment_variants).map(([env, value]) => `
+                        <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #eee;">
+                            <div style="font-size: 9px; font-weight: 700; color: #1976d2; text-transform: uppercase;">${env}</div>
+                            <div style="font-size: 11px; color: #555; word-break: break-all; font-family: monospace;">${value}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
     }
 
     // Jira Links
@@ -393,6 +415,37 @@ function switchTab(tabId) {
         content.style.display = 'block';
         if (tabId === 'legend') renderLegend();
     }
+}
+
+function renderVariables() {
+    const content = document.getElementById('env-var-list');
+    if (!content) return;
+
+    const envVars = {{ENV_VARS}};
+    if (Object.keys(envVars).length === 0) {
+        content.innerHTML = '<div style="color: #999; padding: 20px;">No environment variables detected.</div>';
+        return;
+    }
+
+    content.innerHTML = `
+        <div style="font-weight: 700; color: #444; margin-bottom: 15px; font-size: 13px;">Global Configuration</div>
+        <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr style="border-bottom: 2px solid #eee; text-align: left; font-size: 10px; color: #888;">
+                    <th style="padding: 8px 0;">VARIABLE</th>
+                    <th style="padding: 8px 0;">RESOLVED VALUE</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${Object.entries(envVars).sort().map(([key, val]) => `
+                    <tr style="border-bottom: 1px solid #f5f5f5;">
+                        <td style="padding: 8px 0; font-weight: 600; color: #1976d2;">${key}</td>
+                        <td style="padding: 8px 0; color: #666; font-family: monospace; word-break: break-all;">${val}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    `;
 }
 
 function renderLegend() {

@@ -206,6 +206,10 @@ class GraphVisualizer:
             ecosystem = config["eco"]
             
             # Prepare UI Display Data (The "One Layer Decides" payload)
+            # Create a clean copy of additional_data to avoid circular references
+            details_copy = node.metadata.additional_data.copy()
+            details_copy.pop("display_data", None)
+            
             display_data = {
                 "id": node.id,
                 "name": node.name,
@@ -219,7 +223,7 @@ class GraphVisualizer:
                 "expert_notes": node.metadata.expert_notes,
                 "suggestions": node.metadata.suggestions,
                 "execution_history": node.metadata.execution_history,
-                "details": node.metadata.additional_data # Pass raw metadata for UI rendering
+                "details": details_copy
             }
             
             domain = node.metadata.additional_data.get('domain')
@@ -392,7 +396,8 @@ class GraphVisualizer:
                 "type": node.type.value if hasattr(node.type, 'value') else str(node.type),
                 "execution_status": node.execution_status,
                 "execution_details": node.execution_details,
-                "additional_data": node.metadata.additional_data
+                "additional_data": node.metadata.additional_data,
+                "environment_variants": node.metadata.environment_variants
             }
 
         # 2. Extract Pyvis data from the generated file
@@ -410,8 +415,15 @@ class GraphVisualizer:
 
         # 3. Get configuration
         jira_url = ""
+        global_vars = {}
         if hasattr(self.graph, 'config') and self.graph.config:
             jira_url = self.graph.config.jira_base_url or ""
+            global_vars = self.graph.config.base_url_mapping or {}
+            # Merge with env-specific mapping if available
+            if self.graph.config.env_url_mapping:
+                for env, mapping in self.graph.config.env_url_mapping.items():
+                    for k, v in mapping.items():
+                        global_vars[f"{env}:{k}"] = v
 
         # 4. Assemble the final Command Center (Direct injection to avoid formatting issues)
         final_html = LAYOUT_TEMPLATE.replace("{{STYLE_INJECTION}}", GRAPH_STYLE)
@@ -420,6 +432,7 @@ class GraphVisualizer:
         final_html = final_html.replace("{{GRAPH_EDGES}}", edges_json)
         final_html = final_html.replace("{{METADATA}}", json.dumps(js_data))
         final_html = final_html.replace("{{HOTSPOTS}}", json.dumps(getattr(self, 'hotspots', [])))
+        final_html = final_html.replace("{{ENV_VARS}}", json.dumps(global_vars))
         final_html = final_html.replace("{{MODE}}", self.mode.value)
         final_html = final_html.replace("{{JIRA_URL}}", jira_url)
         final_html = final_html.replace("{{OPTIONS}}", options_json)
