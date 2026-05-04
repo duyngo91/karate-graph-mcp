@@ -218,7 +218,8 @@ class GraphVisualizer:
                 "jira_tags": node.metadata.jira_tags,
                 "expert_notes": node.metadata.expert_notes,
                 "suggestions": node.metadata.suggestions,
-                "execution_history": node.metadata.execution_history
+                "execution_history": node.metadata.execution_history,
+                "details": node.metadata.additional_data # Pass raw metadata for UI rendering
             }
             
             domain = node.metadata.additional_data.get('domain')

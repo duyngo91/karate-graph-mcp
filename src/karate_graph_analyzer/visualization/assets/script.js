@@ -151,6 +151,42 @@ function showDetails(nodeId) {
         `;
     }
 
+    // Component Specific Details (API, DB, etc.)
+    if (data.details) {
+        const details = data.details;
+        const relevantKeys = {
+            'http_method': 'HTTP Method',
+            'endpoint': 'Endpoint',
+            'physical_url': 'Physical URL',
+            'database': 'Database',
+            'table': 'Table',
+            'operation': 'DB Operation',
+            'host': 'Host',
+            'scenario_tag': 'Scenario Tag',
+            'workflow_path': 'Workflow File'
+        };
+
+        const detailsRows = Object.entries(relevantKeys)
+            .filter(([key]) => details[key])
+            .map(([key, label]) => `
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 12px;">
+                    <span style="color: #666;">${label}:</span>
+                    <span style="font-weight: 600; color: #333; text-align: right; max-width: 200px; word-break: break-all;">${details[key]}</span>
+                </div>
+            `).join('');
+
+        if (detailsRows) {
+            html += `
+                <div class="detail-section" style="background: rgba(0,0,0,0.02); margin: 10px -15px; padding: 15px;">
+                    <div class="detail-label">Technical Details</div>
+                    <div style="margin-top: 10px;">
+                        ${detailsRows}
+                    </div>
+                </div>
+            `;
+        }
+    }
+
     // Jira Links
     if (data.jira_tags && data.jira_tags.length > 0) {
         html += `
