@@ -25,6 +25,8 @@ from karate_graph_analyzer.models import (
     Project,
     Scenario,
     FeatureAST,
+    ComponentCategory,
+    FlowType
 )
 
 from karate_graph_analyzer.graph.core.nx_builder import NetworkXBuilder
@@ -107,6 +109,7 @@ class GraphBuilder:
         # Pass 1: Parse and Filter ignored components
         ignored_files = set()
         for path in feature_files:
+            logger.info(f"PROCESSING FILE: {path}")
             try:
                 ast = parser.parse_file(path)
                 if not ast.scenarios:
@@ -157,10 +160,15 @@ class GraphBuilder:
                 
                 context = PathContext(scenario.file_path, project.root_path, project.parser_config)
                 
+                # Resolve category and flow
+                category = self.path_classifier.classify_component_category(scenario.file_path)
+                flow = self.path_classifier.resolve_flow(node_type)
+
                 metadata = NodeMetadata(
                     file_path=scenario.file_path, line_number=scenario.line_number,
                     jira_tags=scenario.jira_tags, project_name=project.name,
-                    category=self.path_classifier.classify_component_category(scenario.file_path),
+                    category=category,
+                    flow=flow,
                     additional_data={"scenario_type": scenario.type.value, "tags": scenario.tags},
                 )
 
@@ -189,14 +197,23 @@ class GraphBuilder:
         if node_type == NodeType.PAGE:
             return self._handle_page_and_action(scenario, metadata, node_map)
         
-        # For WORKFLOW and COMMON, we also want to support subnodes if tags are present
+        # For WORKFLOW, COMMON, DATABASE, and DATA, we also want to support subnodes if tags are present
         # to ensure consistency with 'call read' dependencies
-        if node_type in [NodeType.WORKFLOW, NodeType.COMMON]:
+        if node_type in [NodeType.WORKFLOW, NodeType.COMMON, NodeType.DATABASE, NodeType.DATA]:
             rel_path = PathResolver.normalize_path(scenario.file_path)
+            
+            # Map node type to builder method
+            builder_methods = {
+                NodeType.WORKFLOW: self.nx_builder.add_workflow_node,
+                NodeType.COMMON: self.nx_builder.add_common_node,
+                NodeType.DATABASE: self.nx_builder.add_database_node,
+                NodeType.DATA: self.nx_builder.add_data_node,
+            }
+            create_func = builder_methods.get(node_type, self.nx_builder.add_test_case)
+
             # Create/get the file node
             file_node_id = self.dependency_linker._get_or_create_node(
-                node_type, rel_path, metadata, node_map, 
-                self.nx_builder.add_workflow_node if node_type == NodeType.WORKFLOW else self.nx_builder.add_common_node
+                node_type, rel_path, metadata, node_map, create_func
             )
             
             # Use primary tag for subnode identity
@@ -206,10 +223,14 @@ class GraphBuilder:
             
             if primary_tag:
                 display_name = self.path_classifier.build_scenario_display_name(scenario, node_type)
+                dep_type = DependencyType.WORKFLOW
+                if node_type == NodeType.COMMON: dep_type = DependencyType.COMMON
+                elif node_type == NodeType.DATABASE: dep_type = DependencyType.DATABASE
+                elif node_type == NodeType.DATA: dep_type = DependencyType.DATA
+                
                 return self.dependency_linker._handle_tag_subnode(
                     file_node_id, node_type, rel_path, primary_tag, metadata, node_map, 
-                    DependencyType.WORKFLOW if node_type == NodeType.WORKFLOW else DependencyType.COMMON,
-                    display_name=display_name
+                    dep_type, display_name=display_name
                 )
             
             # Fallback to file node if no tags
@@ -286,8 +307,20 @@ class GraphBuilder:
         cycles = self.nx_builder.detect_cycles()
         nodes_dict = {}
         for nid, nd in self.nx_builder.graph.nodes(data=True):
-            meta = NodeMetadata(**{k: v for k, v in nd["metadata"].items() if k != "project_name"}, 
-                                project_name=nd["metadata"].get("project_name", project_name))
+            # Extract metadata and preserve category/flow
+            metadata_dict = nd["metadata"].copy()
+            p_name = metadata_dict.pop("project_name", project_name)
+            
+            # Ensure category and flow are preserved during reconstruction
+            category = metadata_dict.pop("category", ComponentCategory.UNKNOWN)
+            flow = metadata_dict.pop("flow", FlowType.UNKNOWN)
+            
+            meta = NodeMetadata(
+                **{k: v for k, v in metadata_dict.items() if k in NodeMetadata.__dataclass_fields__},
+                project_name=p_name,
+                category=category,
+                flow=flow
+            )
             
             if nd["type"] == NodeType.LOCATOR.value and project_root and meta.file_path:
                 self._enrich_locator_metadata(meta, project_root)

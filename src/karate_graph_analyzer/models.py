@@ -78,6 +78,18 @@ class NodeType(str, Enum):
     DATA = "DATA"
 
 
+class FlowType(str, Enum):
+    """Broad architectural flow category."""
+
+    API = "API"
+    UI = "UI"
+    DATABASE = "DATABASE"
+    TEST = "TEST"
+    DATA = "DATA"
+    INFRASTRUCTURE = "INFRASTRUCTURE"
+    UNKNOWN = "UNKNOWN"
+
+
 class ComponentCategory(str, Enum):
     """Broad category for component classification."""
 
@@ -138,9 +150,12 @@ class NodeMetadata:
     jira_tags: List[str]
     project_name: str
     category: ComponentCategory = ComponentCategory.UNKNOWN
+    flow: FlowType = FlowType.UNKNOWN
     environment_variants: List[str] = field(default_factory=list)  # Physical paths/URLs for this logical node
     additional_data: Dict[str, Any] = field(default_factory=dict)
     execution_history: List[str] = field(default_factory=list) # List of "PASSED", "FAILED"
+    expert_notes: List[Dict[str, Any]] = field(default_factory=list)
+    suggestions: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class VisualizationMode(str, Enum):
@@ -294,7 +309,7 @@ class ParserConfig:
         default_factory=lambda: ["@healing", "@smoke", "@regression", "@ignore"]
     )
     metadata_tag_patterns: List[str] = field(
-        default_factory=lambda: [r"^@ALM2:", r"^@TC-\d+"]
+        default_factory=lambda: [r"^@ALM2:", r"^@TC-\d+", r"^@JiraId-"]
     )
 
     # Mapping keywords in file paths to Business Domains for visualization grouping

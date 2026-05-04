@@ -6,11 +6,22 @@ var currentTab = 'HOTSPOTS';
 // --- SIDEBAR & TABS ---
 function switchTab(tabId) {
     currentTab = tabId;
-    document.getElementById('tab-hotspots').classList.toggle('active', tabId === 'HOTSPOTS');
-    document.getElementById('tab-timeline').classList.toggle('active', tabId === 'TIMELINE');
     
-    document.getElementById('pane-hotspots').style.display = tabId === 'HOTSPOTS' ? 'block' : 'none';
-    document.getElementById('pane-timeline').style.display = tabId === 'TIMELINE' ? 'block' : 'none';
+    // Toggle tab active class
+    const tabs = document.querySelectorAll('.tab');
+    tabs.forEach(t => {
+        const isMatch = t.getAttribute('onclick').includes(`'${tabId}'`);
+        t.classList.toggle('active', isMatch);
+    });
+    
+    // Toggle content visibility
+    document.getElementById('hotspots-content').style.display = tabId === 'hotspots' ? 'block' : 'none';
+    document.getElementById('timeline-content').style.display = tabId === 'timeline' ? 'block' : 'none';
+    document.getElementById('legend-content').style.display = tabId === 'legend' ? 'block' : 'none';
+}
+
+function jumpToNode(nodeId) {
+    focusOnNode(nodeId);
 }
 
 // --- SEARCH ---
@@ -26,9 +37,12 @@ function handleSearch(query) {
     
     for (const id in nodeMetadata) {
         const node = nodeMetadata[id];
-        const text = (node.name + ' ' + (node.type || '')).toLowerCase();
+        const data = node.additional_data?.display_data;
+        if (!data) continue;
+
+        const text = (data.name + ' ' + (data.type_label || '')).toLowerCase();
         if (searchTerms.every(t => text.includes(t))) {
-            matches.push({ id, ...node });
+            matches.push({ id, ...data });
         }
         if (matches.length >= 15) break;
     }
@@ -37,7 +51,7 @@ function handleSearch(query) {
         resultsDiv.innerHTML = matches.map(m => `
             <div class="search-result-item" onclick="focusOnNode('${m.id}')" style="padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; justify-content: space-between;">
                 <span style="font-size: 13px;">${m.name}</span>
-                <span style="font-size: 10px; background: #eee; padding: 2px 4px; border-radius: 4px;">${m.type}</span>
+                <span style="font-size: 10px; background: #eee; padding: 2px 4px; border-radius: 4px;">${m.type_label}</span>
             </div>
         `).join('');
         resultsDiv.style.display = 'block';
@@ -50,8 +64,8 @@ function handleSearch(query) {
 function focusOnNode(nodeId) {
     document.getElementById('search-results').style.display = 'none';
     const node = nodeMetadata[nodeId];
+    if (!node) return;
     
-    // Find impact path if hotspot
     const affectedIds = new Set([nodeId]);
     if (hotspotData) {
         const hs = hotspotData.find(h => h.node_id === nodeId);
@@ -85,9 +99,10 @@ function hideDetails() {
 }
 
 function showDetails(nodeId) {
-    const data = nodeMetadata[nodeId];
-    if (!data) return;
+    const node = nodeMetadata[nodeId];
+    if (!node || !node.additional_data?.display_data) return;
 
+    const data = node.additional_data.display_data;
     const sidePanel = document.getElementById('node-details-side');
     const content = document.getElementById('details-content');
     
@@ -95,25 +110,34 @@ function showDetails(nodeId) {
         <div class="detail-section">
             <div class="detail-label">Component Name</div>
             <div class="detail-value" style="font-size: 16px; font-weight: 700;">${data.name}</div>
+            <div style="font-size: 10px; color: #888; margin-top: 4px;">ID: ${nodeId}</div>
         </div>
         
         <div class="detail-section">
             <div class="detail-label">Type & Status</div>
-            <div style="display: flex; gap: 8px; align-items: center;">
-                <span class="impact-badge badge-type">
-                    ${data.metadata?.additional_data?.reg_key || data.type}
+            <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+                ${data.badges.map(b => `<span class="impact-badge badge-type">${b}</span>`).join('')}
+                <span class="impact-badge ${data.status === 'PASSED' ? 'badge-passed' : 'badge-failed'}" 
+                      style="background: ${data.status === 'PASSED' ? '#e8f5e9' : '#ffebee'}; color: ${data.status === 'PASSED' ? '#2e7d32' : '#c62828'};">
+                    ${data.status}
                 </span>
-                ${data.execution_status ? `
-                    <span class="impact-badge ${data.execution_status === 'PASSED' ? 'badge-passed' : 'badge-failed'}" 
-                          style="background: ${data.execution_status === 'PASSED' ? '#e8f5e9' : '#ffebee'}; color: ${data.execution_status === 'PASSED' ? '#2e7d32' : '#c62828'};">
-                        ${data.execution_status}
-                    </span>
-                ` : ''}
             </div>
         </div>
     `;
 
-    // History Timeline
+    // File Info
+    if (data.file_path) {
+        html += `
+            <div class="detail-section">
+                <div class="detail-label">Source Location</div>
+                <div class="detail-value" style="font-family: monospace; font-size: 11px;">
+                    ${data.file_path}${data.line_number ? `:${data.line_number}` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    // Execution History
     if (data.execution_history && data.execution_history.length > 0) {
         html += `
             <div class="detail-section">
@@ -127,54 +151,30 @@ function showDetails(nodeId) {
         `;
     }
 
-    // Failure Details & Deep Links to Children
-    if (data.execution_status !== 'PASSED' && data.id) {
-        // Find children that are failing
-        const failedChildren = [];
-        edges.get().forEach(edge => {
-            if (edge.from === data.id) {
-                const child = nodeMetadata[edge.to];
-                if (child && (child.execution_status === 'FAILED' || child.execution_status === 'PARTIAL_FAIL')) {
-                    failedChildren.push(child);
-                }
-            }
-        });
-
-        if (failedChildren.length > 0) {
-            html += `
-                <div class="detail-section">
-                    <div class="detail-label" style="color: #d32f2f;"><i class="fas fa-search-location"></i> Failing Components Inside</div>
-                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                        ${failedChildren.map(child => `
-                            <div class="error-box" style="border-left: 4px solid #f44336; cursor: pointer; transition: 0.2s;" 
-                                 onclick="jumpToNode('${child.id}')" onmouseover="this.style.background='#ffebee'" onmouseout="this.style.background='#fff5f5'">
-                                <div style="font-weight: 700; font-size: 11px; color: #b71c1c;">${child.name}</div>
-                                <div style="font-size: 10px; color: #666; margin-top: 4px;">${child.execution_details?.error || 'Click to investigate failure'}</div>
-                                <div style="font-size: 9px; color: #1976d2; margin-top: 4px; font-weight: 800;">🔍 CLICK TO FOCUS ON MAP</div>
-                            </div>
-                        `).join('')}
-                    </div>
+    // Jira Links
+    if (data.jira_tags && data.jira_tags.length > 0) {
+        html += `
+            <div class="detail-section">
+                <div class="detail-label">Jira Traceability</div>
+                <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px;">
+                    ${data.jira_tags.map(tag => {
+                        const cleanTag = tag.replace('@', '');
+                        const url = jiraBaseUrl ? `${jiraBaseUrl}${cleanTag}` : '#';
+                        return `<a href="${url}" target="_blank" class="badge-utility" style="text-decoration: none; font-size: 10px;">${tag}</a>`;
+                    }).join('')}
                 </div>
-            `;
-        } else if (data.execution_details && data.execution_details.error) {
-            // Direct error on the node itself
-            html += `
-                <div class="detail-section">
-                    <div class="detail-label">Error Details</div>
-                    <div class="error-box">${data.execution_details.error}</div>
-                </div>
-            `;
-        }
+            </div>
+        `;
     }
 
-    // AI Expert Analysis (Notes from AI Assistant via MCP)
+    // AI Expert Analysis (The fix for missing notes)
     if (data.expert_notes && data.expert_notes.length > 0) {
         html += `
             <div class="detail-section">
                 <div class="detail-label" style="color: #1976D2;"><i class="fas fa-robot"></i> Expert Analysis</div>
                 ${data.expert_notes.map(note => `
                     <div style="background: #E3F2FD; padding: 10px; border-radius: 8px; border: 1px solid #BBDEFB; margin-top: 10px; font-size: 11px;">
-                        <div style="color: #0D47A1; font-weight: 700; margin-bottom: 3px;">Note from AI Assistant (${note.timestamp}):</div>
+                        <div style="color: #0D47A1; font-weight: 700; margin-bottom: 3px;">${note.timestamp ? `Note from AI Assistant (${note.timestamp}):` : 'Architectural Note:'}</div>
                         <div>${note.note}</div>
                     </div>
                 `).join('')}
@@ -190,11 +190,41 @@ function showDetails(nodeId) {
                 ${data.suggestions.map(s => `
                     <div style="background: #fffde7; padding: 10px; border-radius: 8px; border: 1px solid #fff59d; margin-top: 10px;">
                         <div style="font-weight: 700; color: #827717; font-size: 12px;">${s.description}</div>
-                        <div style="font-family: monospace; font-size: 11px; margin-top: 5px; background: #fff; padding: 5px;">${s.solution}</div>
+                        ${s.solution ? `<div style="font-family: monospace; font-size: 11px; margin-top: 5px; background: #fff; padding: 5px; border: 1px solid #eee;">${s.solution}</div>` : ''}
                     </div>
                 `).join('')}
             </div>
         `;
+    }
+
+    // Internal Failures (for hotspots)
+    if (data.status !== 'PASSED') {
+        const failedChildren = [];
+        edges.get().forEach(edge => {
+            if (edge.from === nodeId) {
+                const child = nodeMetadata[edge.to];
+                if (child && (child.execution_status === 'FAILED' || child.execution_status === 'PARTIAL_FAIL')) {
+                    failedChildren.push({ id: edge.to, name: child.name });
+                }
+            }
+        });
+
+        if (failedChildren.length > 0) {
+            html += `
+                <div class="detail-section">
+                    <div class="detail-label" style="color: #d32f2f;"><i class="fas fa-search-location"></i> Failing Components Inside</div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                        ${failedChildren.map(child => `
+                            <div class="error-box" style="border-left: 4px solid #f44336; cursor: pointer; transition: 0.2s;" 
+                                 onclick="jumpToNode('${child.id}')" onmouseover="this.style.background='#ffebee'" onmouseout="this.style.background='#fff5f5'">
+                                <div style="font-weight: 700; font-size: 11px; color: #b71c1c;">${child.name}</div>
+                                <div style="font-size: 9px; color: #1976d2; margin-top: 4px; font-weight: 800;">🔍 CLICK TO FOCUS ON MAP</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
     }
 
     content.innerHTML = html;
@@ -210,8 +240,11 @@ function renderDashboard() {
     let totalProjectFailures = 0;
     for (const id in nodeMetadata) {
         const node = nodeMetadata[id];
+        const data = node.additional_data?.display_data;
+        if (!data) continue;
+        
         // Ensure we count all terminal failure points (Test Cases or Scenarios)
-        if ((node.type === 'TEST_CASE' || node.type === 'SCENARIO') && node.execution_status === 'FAILED') {
+        if ((data.type_label === 'TEST_CASE' || data.type_label === 'SCENARIO') && data.status === 'FAILED') {
             totalProjectFailures++;
         }
     }
@@ -330,41 +363,47 @@ function renderLegend() {
     const content = document.getElementById('legend-content');
     content.innerHTML = `
         <div style="padding: 10px;">
-            <!-- 1. INFRASTRUCTURE -->
-            <div style="font-weight: 700; color: #666; margin-bottom: 10px; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">🏗️ Infrastructure</div>
+            <!-- 1. API FLOW -->
+            <div style="font-weight: 700; color: #666; margin-bottom: 10px; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">🌐 API Flow</div>
             <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
-                <div style="width: 18px; height: 18px; background: #3f51b5; clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%); margin-right: 10px;"></div>
-                <span><b>Domain / API Group</b></span>
+                <div style="width: 16px; height: 16px; background: #5c6bc0; transform: rotate(45deg); margin: 0 11px 0 1px;"></div>
+                <span><b>API Endpoint / Common API</b></span>
             </div>
 
-            <!-- 2. LIBRARY -->
-            <div style="font-weight: 700; color: #666; margin: 15px 0 10px 0; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">📚 Library & Utilities</div>
+            <!-- 2. UI FLOW -->
+            <div style="font-weight: 700; color: #666; margin: 15px 0 10px 0; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">💻 UI Flow</div>
             <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
-                <div style="width: 18px; height: 18px; background: #607d8b; margin-right: 10px;"></div>
-                <span><b>Common File (Square)</b></span>
-            </div>
-            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
-                <div style="width: 14px; height: 14px; background: #607d8b; transform: rotate(45deg); margin: 0 12px 0 2px;"></div>
-                <span><b>Common Utility (Diamond)</b></span>
-            </div>
-
-            <!-- 3. EXECUTION -->
-            <div style="font-weight: 700; color: #666; margin: 15px 0 10px 0; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">🚀 Execution & Tests</div>
-            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
-                <div style="width: 18px; height: 18px; background: #5c6bc0; transform: rotate(45deg); margin-right: 10px;"></div>
-                <span><b>API Endpoint</b></span>
-            </div>
-            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
-                <div style="width: 18px; height: 18px; background: #03a9f4; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); margin-right: 10px;"></div>
-                <span><b>Test Case / Scenario</b></span>
+                <div style="width: 18px; height: 18px; background: #9c27b0; border-radius: 50%; margin-right: 10px;"></div>
+                <span><b>Page Object (Ellipse)</b></span>
             </div>
             <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
                 <div style="width: 0; height: 0; border-left: 9px solid transparent; border-right: 9px solid transparent; border-bottom: 18px solid #009688; margin-right: 10px;"></div>
-                <span><b>Action / Step</b></span>
+                <span><b>UI Action (Triangle)</b></span>
             </div>
+
+            <!-- 3. DB FLOW -->
+            <div style="font-weight: 700; color: #666; margin: 15px 0 10px 0; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">🗄️ DB Flow</div>
             <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
                 <div style="width: 18px; height: 18px; background: #795548; border-radius: 9px / 4px; border-bottom: 3px solid #5d4037; margin-right: 10px;"></div>
-                <span><b>Database / Storage</b></span>
+                <span><b>Database / SQL</b></span>
+            </div>
+
+            <!-- 4. TEST FLOW -->
+            <div style="font-weight: 700; color: #666; margin: 15px 0 10px 0; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">🧪 Test Flow</div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 18px; height: 18px; background: #03a9f4; margin-right: 10px;"></div>
+                <span><b>Feature / Test Case (Square)</b></span>
+            </div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 18px; height: 18px; background: #03a9f4; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); margin-right: 10px;"></div>
+                <span><b>Workflow (Star)</b></span>
+            </div>
+
+            <!-- 5. DATA FLOW -->
+            <div style="font-weight: 700; color: #666; margin: 15px 0 10px 0; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">📊 Data Flow</div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 18px; height: 18px; background: #00bcd4; border: 1px solid #0097a7; margin-right: 10px;"></div>
+                <span><b>Data File (Box)</b></span>
             </div>
 
             <div style="font-weight: 700; color: #666; margin: 20px 0 15px 0; font-size: 11px; text-transform: uppercase;">Status Colors</div>
@@ -374,25 +413,27 @@ function renderLegend() {
             </div>
             <div style="display: flex; align-items: center; margin-bottom: 8px; font-size: 12px;">
                 <div style="width: 12px; height: 12px; background: #f44336; border-radius: 2px; margin-right: 10px;"></div>
-                <span>Failed (100% Impact)</span>
+                <span>Failed</span>
             </div>
             <div style="display: flex; align-items: center; margin-bottom: 8px; font-size: 12px;">
                 <div style="width: 12px; height: 12px; background: #ff9800; border-radius: 2px; margin-right: 10px;"></div>
-                <span>Partial Failure / Impacted Path</span>
+                <span>Impacted</span>
             </div>
         </div>
     `;
 }
 
 // --- EVENTS ---
-network.on("click", function(params) {
-    if (params.nodes.length === 0) resetFocus();
-    else showDetails(params.nodes[0]);
-});
+function initEvents() {
+    network.on("click", function(params) {
+        if (params.nodes.length === 0) resetFocus();
+        else showDetails(params.nodes[0]);
+    });
 
-network.on("doubleClick", function(params) {
-    if (params.nodes.length > 0) focusOnNode(params.nodes[0]);
-});
+    network.on("doubleClick", function(params) {
+        if (params.nodes.length > 0) focusOnNode(params.nodes[0]);
+    });
+}
 
 function jumpToNode(nodeId) {
     network.selectNodes([nodeId]);
@@ -410,6 +451,7 @@ function jumpToNode(nodeId) {
 window.onload = function() {
     renderDashboard();
     switchTab('hotspots'); // Default tab
+    initEvents();
     
     // Ctrl+K to search
     document.addEventListener('keydown', e => {

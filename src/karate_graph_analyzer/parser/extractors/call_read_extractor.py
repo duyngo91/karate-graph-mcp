@@ -124,7 +124,30 @@ class CallReadExtractor(IDependencyExtractor):
         return {}
 
     def _resolve_variable_expression(self, expression: str) -> Tuple[str, Optional[str], Optional[str]]:
-        """Resolve a variable expression to (physical_path, scenario_tag, logical_path)."""
+        """Resolve a dynamic Karate expression into a path and scenario tag."""
+        # 1. Handle concat: var + '@tag' or var + 'path'
+        concat_match = re.search(r"([\w\.]+)\s*\+\s*['\"]([^'\"]+)['\"]", expression)
+        if concat_match:
+            var_name = concat_match.group(1)
+            suffix = concat_match.group(2)
+            
+            base_path = self.config.variable_patterns.get(var_name)
+            if base_path:
+                full_path = base_path + suffix
+                scenario_tag = None
+                logical_path = None
+                
+                # Check if suffix is a tag
+                if suffix.startswith('@'):
+                    return base_path, suffix, None
+                
+                # Check if full_path has a tag
+                if "@" in full_path:
+                    parts = full_path.split("@", 1)
+                    return parts[0], "@" + parts[1], None
+                    
+                return full_path, None, None
+
         expression = expression.strip()
         scenario_tag = None
         logical_path = None

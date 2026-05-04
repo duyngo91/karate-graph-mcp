@@ -10,9 +10,11 @@ from typing import Any, Dict
 
 from karate_graph_analyzer.interfaces import IGraphExporter
 from karate_graph_analyzer.models import (
+    ComponentCategory,
     DependencyGraph,
     DependencyType,
     Edge,
+    FlowType,
     Node,
     NodeMetadata,
     NodeType,
@@ -41,11 +43,13 @@ class JsonExporter(IGraphExporter):
                     "name": node.name,
                     "execution_status": node.execution_status,
                     "execution_details": node.execution_details,
-                    "metadata": {
+                        "metadata": {
                         "file_path": node.metadata.file_path,
                         "line_number": node.metadata.line_number,
                         "jira_tags": node.metadata.jira_tags,
                         "project_name": node.metadata.project_name,
+                        "category": node.metadata.category.value if hasattr(node.metadata.category, 'value') else node.metadata.category,
+                        "flow": node.metadata.flow.value if hasattr(node.metadata.flow, 'value') else node.metadata.flow,
                         "additional_data": node.metadata.additional_data,
                         "execution_history": getattr(node.metadata, "execution_history", []),
                     },
@@ -102,6 +106,8 @@ class JsonExporter(IGraphExporter):
                 line_number=node_data["metadata"].get("line_number"),
                 jira_tags=node_data["metadata"].get("jira_tags", []),
                 project_name=node_data["metadata"].get("project_name", project_name),
+                category=ComponentCategory(node_data["metadata"].get("category", "UNKNOWN")),
+                flow=FlowType(node_data["metadata"].get("flow", "UNKNOWN")),
                 additional_data=node_data["metadata"].get("additional_data", {}),
                 execution_history=node_data["metadata"].get("execution_history", []),
             )

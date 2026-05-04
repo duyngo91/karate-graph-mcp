@@ -24,7 +24,7 @@ LAYOUT_TEMPLATE = """
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <style>
-        {style}
+        {{STYLE_INJECTION}}
     </style>
 </head>
 <body>
@@ -96,9 +96,9 @@ LAYOUT_TEMPLATE = """
                 <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;">
                 <div style="font-size: 11px; color: #999;">
                     <style>
-                    .badge-type {{ background: #e3f2fd; color: #1976d2; }}
-                    .badge-utility {{ background: #607d8b; color: #ffffff; padding: 2px 8px; border-radius: 4px; font-weight: bold; }}
-                    .badge-passed {{ background: #e8f5e9; color: #2e7d32; }}
+                    .badge-type { background: #e3f2fd; color: #1976d2; }
+                    .badge-utility { background: #607d8b; color: #ffffff; padding: 2px 8px; border-radius: 4px; font-weight: bold; }
+                    .badge-passed { background: #e8f5e9; color: #2e7d32; }
                     </style>
                     💡 Double-click to focus chain<br>
                     💡 Click background to reset
@@ -108,24 +108,24 @@ LAYOUT_TEMPLATE = """
     </div>
 
     <script type="text/javascript">
-        // Data injected by Python
-        var graphNodes = {graph_nodes_json};
-        var graphEdges = {graph_edges_json};
-        var nodeMetadata = {metadata_json};
-        var hotspotData = {hotspots_json};
-        var activeMode = "{mode}";
-        var jiraBaseUrl = "{jira_url}";
+        // Data injected by Python via string replacement
+        var graphNodes = {{GRAPH_NODES}};
+        var graphEdges = {{GRAPH_EDGES}};
+        var nodeMetadata = {{METADATA}};
+        var hotspotData = {{HOTSPOTS}};
+        var activeMode = "{{MODE}}";
+        var jiraBaseUrl = "{{JIRA_URL}}";
         
         // Initialize Vis.js DataSets
         var nodes = new vis.DataSet(graphNodes);
         var edges = new vis.DataSet(graphEdges);
         
         var container = document.getElementById('graph-canvas');
-        var data = {{ nodes: nodes, edges: edges }};
-        var options = {options_json};
+        var data = { nodes: nodes, edges: edges };
+        var options = {{OPTIONS}};
         var network = new vis.Network(container, data, options);
         
-        {script}
+        {{SCRIPT_INJECTION}}
     </script>
 </body>
 </html>

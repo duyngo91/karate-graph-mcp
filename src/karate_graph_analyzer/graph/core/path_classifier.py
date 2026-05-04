@@ -1,13 +1,5 @@
-"""
-Path Classifier.
-
-Handles classification of Karate feature files and scenarios based on
-their file paths and directory structures.
-"""
-
-from typing import TYPE_CHECKING
-from karate_graph_analyzer.models import NodeType, Scenario, ComponentCategory
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, Any
+from karate_graph_analyzer.models import NodeType, Scenario, ComponentCategory, FlowType
 
 if TYPE_CHECKING:
     from karate_graph_analyzer.core.context import AnalysisContext
@@ -27,36 +19,76 @@ class PathClassifier:
         cfg = config or (self.context.config if self.context else None)
         normalized = file_path.replace('\\', '/').lower()
 
-        # Check for page object directories
-        page_dirs = ['pages', 'webpages']
+        # 1. Check for page object directories (UI Flow) - HIGHEST PRIORITY
+        page_dirs = ['pages', 'webpages', 'ui']
         if cfg and cfg.page_object_directories:
             page_dirs = [d.lower() for d in cfg.page_object_directories]
         for d in page_dirs:
             if f'/{d}/' in normalized:
                 return NodeType.PAGE
 
-        # Check for workflow directories
-        workflow_dirs = ['workflows', 'workflow']
-        if cfg and cfg.workflow_directories:
-            workflow_dirs = [d.lower() for d in cfg.workflow_directories]
-        for d in workflow_dirs:
-            if f'/{d}/' in normalized:
-                return NodeType.WORKFLOW
-                
-        # Check for common/API directories
-        common_dirs = ['common', 'services']
+        # 2. Check for database directories (DB Flow)
+        db_dirs = ['db', 'database', 'sql']
+        if any(f'/{d}/' in normalized for d in db_dirs):
+            return NodeType.DATABASE
+
+        # 3. Check for common/API directories (API Flow / Library)
+        common_dirs = ['common', 'services', 'api', 'endpoints']
         if cfg and hasattr(cfg, 'common_directories'):
             common_dirs = [d.lower() for d in cfg.common_directories]
         for d in common_dirs:
             if f'/{d}/' in normalized:
                 return NodeType.COMMON
 
-        # Check for database directories
-        if '/db/' in normalized or '/database/' in normalized:
-            return NodeType.DATABASE
+        # 4. Check for workflow directories (Test Flow)
+        workflow_dirs = ['workflows', 'workflow', 'business-flows']
+        if cfg and cfg.workflow_directories:
+            workflow_dirs = [d.lower() for d in cfg.workflow_directories]
+        for d in workflow_dirs:
+            if f'/{d}/' in normalized:
+                return NodeType.WORKFLOW
+                
+        # 5. Check for data directories (Data Flow)
+        data_dirs = ['data', 'payloads', 'json', 'csv']
+        if any(f'/{d}/' in normalized for d in data_dirs):
+            return NodeType.DATA
 
         # Default: TEST_CASE
         return NodeType.TEST_CASE
+
+    def resolve_flow(self, node_type: Any) -> FlowType:
+        """Map a node type to its corresponding architectural flow."""
+        # Handle string input or enum
+        type_str = node_type.value if hasattr(node_type, 'value') else str(node_type)
+        
+        mapping = {
+            "API": FlowType.API,
+            "API_GROUP": FlowType.API,
+            "COMMON": FlowType.API,
+            "PAGE": FlowType.UI,
+            "ACTION": FlowType.UI,
+            "LOCATOR": FlowType.UI,
+            "DATABASE": FlowType.DATABASE,
+            "TEST_CASE": FlowType.TEST,
+            "SCENARIO": FlowType.TEST,
+            "WORKFLOW": FlowType.TEST,
+            "DATA": FlowType.DATA,
+        }
+        return mapping.get(type_str, FlowType.UNKNOWN)
+
+    def is_infrastructure(self, file_path: str) -> bool:
+        """Check if a path belongs to infrastructure/framework code."""
+        if not file_path:
+            return False
+        normalized = file_path.replace('\\', '/').lower()
+        
+        # Only check the filename and parent folders, not the whole path to avoid project name conflicts
+        # Example: E:/Project/karate-core/... shouldn't flag "core"
+        parts = normalized.split('/')
+        check_path = '/'.join(parts[-4:]) if len(parts) > 4 else normalized
+        
+        infra_keywords = ['internal', 'framework', 'parallel', 'setup', 'teardown']
+        return any(kw in check_path for kw in infra_keywords)
 
     def build_scenario_display_name(self, scenario: Scenario, node_type: NodeType) -> str:
         """Build display name for a scenario based on its node type."""
@@ -72,75 +104,36 @@ class PathClassifier:
                 return f"{scenario.jira_tags[0]} - {scenario.name}"
             return scenario.name
         else:
-            # Simple fallback filter
             clean_tags = [t for t in scenario.tags if not t.startswith("@ALM2:")]
             if clean_tags:
                 return clean_tags[0]
             return scenario.name or f"Unnamed at line {scenario.line_number}"
     
     def detect_business_domain(self, file_path: str) -> str:
-        """
-        Detect business domain from file path regardless of component type.
-        Used for grouping and statistics.
-        """
+        """Detect business domain from file path."""
         normalized_path = file_path.replace('\\', '/').lower()
-        
-        # Get mapping from config
         feature_map = {}
         if self.context and self.context.config:
             feature_map = self.context.config.domain_mapping
         
         path_segments = normalized_path.split('/')
-        
-        # 1. Try keyword matching in segments
         for segment in path_segments:
             for keyword, domain in feature_map.items():
                 if keyword in segment:
                     return domain
         
-        # 2. Fallback to parent directory name if keyword matching fails
         if len(path_segments) >= 2:
             parent_dir = path_segments[-2]
-            if parent_dir not in ['pages', 'services', 'common', 'workflows', 'features']:
+            if parent_dir not in ['pages', 'services', 'common', 'workflows', 'features', 'api']:
                 return parent_dir.replace('-', ' ').replace('_', ' ').title()
             elif len(path_segments) >= 3:
-                # Try one level higher
                 parent_dir = path_segments[-3]
                 return parent_dir.replace('-', ' ').replace('_', ' ').title()
         
         return "Other"
 
-    def detect_feature_from_path(self, file_path: str) -> Optional[str]:
-        """
-        Detect feature name for test cases. 
-        Returns None for shared components (pages, common, etc).
-        """
-        normalized_path = file_path.replace('\\', '/').lower()
-        
-        exclude_patterns = [
-            '/pages/', '/page/', '/services/', '/service/',
-            '/common/', '/workflows/', '/workflow/',
-        ]
-        
-        for pattern in exclude_patterns:
-            if pattern in normalized_path:
-                return None
-        return self.detect_business_domain(file_path)
-
     def classify_component_category(self, file_path: str) -> ComponentCategory:
-        """Classify a component as BUSINESS or INFRASTRUCTURE based on path heuristics."""
-        if not file_path:
-            return ComponentCategory.UNKNOWN
-            
-        normalized = file_path.replace('\\', '/').lower()
-        
-        # Heuristics for infrastructure/framework internal components
-        infra_keywords = [
-            'internal', 'util', 'framework', 'core', 'base', 'parallel', 
-            'setup', 'teardown', 'driver', 'mock', 'temp', 'io/karatelabs'
-        ]
-        
-        if any(kw in normalized for kw in infra_keywords):
+        """Classify a component as BUSINESS or INFRASTRUCTURE."""
+        if self.is_infrastructure(file_path):
             return ComponentCategory.INFRASTRUCTURE
-            
         return ComponentCategory.BUSINESS

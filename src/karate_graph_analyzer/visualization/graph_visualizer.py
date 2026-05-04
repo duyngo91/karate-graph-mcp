@@ -33,27 +33,32 @@ class GraphVisualizer:
         NodeType.LOCATOR: "#9E9E9E",      # Grey
     }
 
-    # --- COMPONENT REGISTRY (3 Ecosystems: Infrastructure, Library, Execution) ---
+    # --- COMPONENT_REGISTRY (Flow-based mapping) ---
     COMPONENT_REGISTRY = {
-        # 1. INFRASTRUCTURE (Indigo Hexagons)
+        # 1. API Flow (Diamonds/Hexagons)
+        "API":          {"shape": "diamond",  "color": "#5c6bc0", "size": 25, "eco": "API Flow"},
+        "COMMON":       {"shape": "square",   "color": "#607d8b", "size": 25, "eco": "API Flow"},
+        "API_GROUP":    {"shape": "hexagon",  "color": "#3f51b5", "size": 35, "eco": "API Flow"},
+        
+        # 2. UI Flow (Ellipses/Triangles)
+        "PAGE":         {"shape": "ellipse",  "color": "#9c27b0", "size": 25, "eco": "UI Flow"},
+        "ACTION":       {"shape": "triangle", "color": "#009688", "size": 20, "eco": "UI Flow"},
+        "LOCATOR":      {"shape": "dot",      "color": "#9e9e9e", "size": 15, "eco": "UI Flow"},
+        
+        # 3. DB Flow (Databases/Dots)
+        "DATABASE":     {"shape": "database", "color": "#795548", "size": 30, "eco": "DB Flow"},
+        "DB_QUERY":     {"shape": "dot",      "color": "#795548", "size": 15, "eco": "DB Flow"},
+        
+        # 4. TEST Flow (Stars/Squares)
+        "TEST_CASE":    {"shape": "star",     "color": "#03a9f4", "size": 35, "eco": "Test Flow"},
+        "SCENARIO":     {"shape": "square",   "color": "#03a9f4", "size": 20, "eco": "Test Flow"},
+        "WORKFLOW":     {"shape": "square",   "color": "#03a9f4", "size": 28, "eco": "Test Flow"},
+        
+        # 5. DATA Flow (Boxes)
+        "DATA":         {"shape": "box",      "color": "#00bcd4", "size": 20, "eco": "Data Flow"},
+        
+        # Infrastructure
         "DOMAIN":       {"shape": "hexagon",  "color": "#3f51b5", "size": 45, "eco": "Infrastructure"},
-        "API_GROUP":    {"shape": "hexagon",  "color": "#3f51b5", "size": 35, "eco": "Infrastructure"},
-        
-        # 2. LIBRARY (Blue Grey Squares/Diamonds)
-        "COMMON":       {"shape": "square",   "color": "#607d8b", "size": 25, "eco": "Library"},
-        "UTILITY":      {"shape": "diamond",  "color": "#607d8b", "size": 20, "eco": "Library"},
-        
-        # 3. EXECUTION (Blue Stars/Diamonds)
-        "API":          {"shape": "diamond",  "color": "#5c6bc0", "size": 25, "eco": "Execution"},
-        "TEST_CASE":    {"shape": "star",     "color": "#03a9f4", "size": 35, "eco": "Execution"},
-        "SCENARIO":     {"shape": "star",     "color": "#03a9f4", "size": 25, "eco": "Execution"},
-        "ACTION":       {"shape": "triangle", "color": "#009688", "size": 20, "eco": "Execution"},
-        "WORKFLOW":     {"shape": "star",     "color": "#03a9f4", "size": 30, "eco": "Execution"},
-        
-        # Others
-        "PAGE":         {"shape": "ellipse",  "color": "#9c27b0", "size": 25, "eco": "UI Objects"},
-        "DATABASE":     {"shape": "database", "color": "#795548", "size": 30, "eco": "Storage"},
-        "DATA":         {"shape": "box",      "color": "#00bcd4", "size": 20, "eco": "Data"},
     }
 
     STATUS_COLORS = {
@@ -177,66 +182,50 @@ class GraphVisualizer:
         """Add nodes and edges from the dependency graph using mode-specific coloring."""
         # 1. Add Nodes
         for node in self.graph.nodes.values():
-            # Resolve Component Identity
-            node_type_str = node.type.value if hasattr(node.type, 'value') else str(node.type)
+            # Resolve reg_key directly from NodeType
+            # This is the "One Layer Decides" principle: Trust the analyzer's classification.
+            reg_key = node.type.value if hasattr(node.type, 'value') else str(node.type)
             
-            # --- NEW DESIGN: Strategy-Based Identity Resolution ---
-            # 1. Prepare Node Context (to avoid redundant string processing)
-            ctx = {
-                "name": str(node.name).lower(),
-                "id": str(node.id).lower().replace("\\", "/"),
-                "path": str(node.metadata.file_path or "").lower().replace("\\", "/"),
-                "type": node_type_str,
-                "orig_expr": str(node.metadata.additional_data.get("original_expression", "")).lower().replace("\\", "/"),
-                "phys_path": str(node.metadata.additional_data.get("physical_path", "")).lower().replace("\\", "/")
-            }
-            
-            # Helper: Is this node in a library folder?
-            lib_kws = ["common", "ecommerce", "services", "utils", "lib/", "db/", "web/pages/"]
-            ctx["is_lib"] = any(kw in f"{ctx['id']} | {ctx['path']} | {ctx['orig_expr']}" for kw in lib_kws)
-            
-            # Helper: Is this a file node (.feature and no @) or a call node (@)?
-            ctx["is_file"] = ".feature" in ctx["name"] or (".feature" in ctx["path"] and "@" not in ctx["name"])
-            ctx["is_call"] = "@" in ctx["name"] or "@" in ctx["id"] or "@" in ctx["orig_expr"]
-
-            # 2. Define Prioritized Identity Rules (Strategy Chain)
-            # The first rule that returns a non-None key wins.
-            identity_rules = [
-                # Rule 1: Library Tier
-                lambda c: "COMMON" if c["is_lib"] and c["is_file"] and "@" not in c["name"] else None,
-                lambda c: "UTILITY" if c["is_lib"] and c["is_call"] else None,
-                lambda c: "UTILITY" if c["is_lib"] and c["type"] in ["SCENARIO", "ACTION", "WORKFLOW"] else None,
+            # Special case: Database sub-nodes (Queries) should use DB_QUERY shape
+            if reg_key == "DATABASE" and node.metadata.additional_data.get("scenario_tag"):
+                reg_key = "DB_QUERY"
                 
-                # Rule 2: Infrastructure Tier
-                lambda c: c["type"] if c["type"] in ["DOMAIN", "API_GROUP", "DATABASE", "DATA"] else None,
-                
-                # Rule 3: Execution Tier
-                lambda c: "COMMON" if c["type"] == "COMMON" else None,
-                lambda c: "SCENARIO" if c["is_call"] or c["type"] in ["SCENARIO", "TEST_CASE", "WORKFLOW"] else None,
-                
-                # Fallback: Use original type if in registry, else default to SCENARIO
-                lambda c: c["type"] if c["type"] in self.COMPONENT_REGISTRY else "SCENARIO"
-            ]
-
-            # 3. Resolve reg_key
-            reg_key = "SCENARIO"
-            for rule in identity_rules:
-                resolved = rule(ctx)
-                if resolved:
-                    reg_key = resolved
-                    break
+            # Fallback for sub-types or legacy types not in registry
+            if reg_key not in self.COMPONENT_REGISTRY:
+                if reg_key in ["ACTION", "SCENARIO", "WORKFLOW"]:
+                    reg_key = "TEST_CASE"
+                else:
+                    reg_key = "SCENARIO" # Extreme fallback
             
             # Get configuration from Registry
-            config = self.COMPONENT_REGISTRY.get(reg_key, self.COMPONENT_REGISTRY.get("SCENARIO"))
+            config = self.COMPONENT_REGISTRY.get(reg_key)
             
             shape = config["shape"]
             base_color = config["color"]
             size = config["size"]
             ecosystem = config["eco"]
             
-            # Update node metadata for Tooltips, HUD and JSON export
-            node.metadata.additional_data["reg_key"] = reg_key
-            node.metadata.additional_data["eco"] = ecosystem
+            # Prepare UI Display Data (The "One Layer Decides" payload)
+            display_data = {
+                "id": node.id,
+                "name": node.name,
+                "type_label": reg_key,
+                "flow": ecosystem,
+                "file_path": node.metadata.file_path,
+                "line_number": node.metadata.line_number,
+                "status": node.execution_status or "NEUTRAL",
+                "badges": [ecosystem, reg_key],
+                "jira_tags": node.metadata.jira_tags,
+                "expert_notes": node.metadata.expert_notes,
+                "suggestions": node.metadata.suggestions,
+                "execution_history": node.metadata.execution_history
+            }
+            
+            domain = node.metadata.additional_data.get('domain')
+            if domain: display_data["badges"].append(domain)
+            
+            # Store unified display data
+            node.metadata.additional_data["display_data"] = display_data
             
             mass = 5 if ecosystem == "Infrastructure" else 1
             is_terminal = ecosystem == "Execution" or reg_key == "UTILITY"
@@ -259,13 +248,9 @@ class GraphVisualizer:
                 border_color = status_color
                 border_width = 4 if node.execution_status != 'PASSED' else 2
                 
-            # Node metadata for frontend
-            node.metadata.additional_data["eco"] = ecosystem
-            node.metadata.additional_data["reg_key"] = reg_key
             
 
 
-            # Enhance label for failed nodes (Only for Terminal Nodes to avoid confusion)
             display_label = node.name
             label_font_size = 14
             
@@ -273,10 +258,6 @@ class GraphVisualizer:
             if fail_count > 0 and is_terminal:
                 display_label = f"[{fail_count} FAIL]\n{node.name}"
                 label_font_size = 14 + min(fail_count, 15)
-            elif node.execution_status != 'PASSED' and not is_terminal:
-                # Structural nodes just get a subtle hint if they are hotspots
-                # display_label = f"⚠ {node.name}" # Optional: add a warning icon instead of text
-                pass
 
             node_attrs = {
                 "label": display_label,
@@ -394,6 +375,7 @@ class GraphVisualizer:
     def _post_process_html(self, output_file: Path):
         """Transform generated HTML into a Professional Command Center."""
         import json
+        import re
         from karate_graph_analyzer.visualization.templates import (
             LAYOUT_TEMPLATE,
             GRAPH_STYLE,
@@ -406,25 +388,19 @@ class GraphVisualizer:
             js_data[node_id] = {
                 "id": node_id,
                 "name": node.name,
-                "type": node.type.value,
+                "type": node.type.value if hasattr(node.type, 'value') else str(node.type),
                 "execution_status": node.execution_status,
                 "execution_details": node.execution_details,
-                "execution_history": getattr(node.metadata, 'execution_history', []),
-                "failure_impact_score": getattr(node, 'failure_impact_score', 0),
-                "suggestions": getattr(node, 'suggestions', []),
-                "file_path": node.metadata.file_path,
-                "jira_tags": node.metadata.jira_tags,
-                "tags": node.tags
+                "additional_data": node.metadata.additional_data
             }
 
-        # 2. Extract Pyvis data (it writes them into the HTML)
+        # 2. Extract Pyvis data from the generated file
         with open(output_file, 'r', encoding='utf-8') as f:
             raw_content = f.read()
 
-        # Extract nodes and edges JSON from the generated file (it uses DataSet({ ... }))
-        import re
-        nodes_match = re.search(r'nodes = new vis\.DataSet\((.*?)\);', raw_content, re.DOTALL)
-        edges_match = re.search(r'edges = new vis\.DataSet\((.*?)\);', raw_content, re.DOTALL)
+        # Robust regex to find the JSON arrays
+        nodes_match = re.search(r'nodes = new vis\.DataSet\(\s*(\[.*?\])\s*\);', raw_content, re.DOTALL)
+        edges_match = re.search(r'edges = new vis\.DataSet\(\s*(\[.*?\])\s*\);', raw_content, re.DOTALL)
         options_match = re.search(r'var options = (\{.*?\});', raw_content, re.DOTALL)
         
         nodes_json = nodes_match.group(1) if nodes_match else "[]"
@@ -436,18 +412,16 @@ class GraphVisualizer:
         if hasattr(self.graph, 'config') and self.graph.config:
             jira_url = self.graph.config.jira_base_url or ""
 
-        # 4. Assemble the final Command Center
-        final_html = LAYOUT_TEMPLATE.format(
-            style=GRAPH_STYLE,
-            script=GRAPH_JS_SCRIPT,
-            graph_nodes_json=nodes_json, 
-            graph_edges_json=edges_json,
-            metadata_json=json.dumps(js_data),
-            hotspots_json=json.dumps(getattr(self, 'hotspots', [])),
-            mode=self.mode.value,
-            jira_url=jira_url,
-            options_json=options_json
-        )
+        # 4. Assemble the final Command Center (Direct injection to avoid formatting issues)
+        final_html = LAYOUT_TEMPLATE.replace("{{STYLE_INJECTION}}", GRAPH_STYLE)
+        final_html = final_html.replace("{{SCRIPT_INJECTION}}", GRAPH_JS_SCRIPT)
+        final_html = final_html.replace("{{GRAPH_NODES}}", nodes_json)
+        final_html = final_html.replace("{{GRAPH_EDGES}}", edges_json)
+        final_html = final_html.replace("{{METADATA}}", json.dumps(js_data))
+        final_html = final_html.replace("{{HOTSPOTS}}", json.dumps(getattr(self, 'hotspots', [])))
+        final_html = final_html.replace("{{MODE}}", self.mode.value)
+        final_html = final_html.replace("{{JIRA_URL}}", jira_url)
+        final_html = final_html.replace("{{OPTIONS}}", options_json)
 
         # 5. Overwrite the file
         with open(output_file, 'w', encoding='utf-8') as f:

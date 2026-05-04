@@ -5,13 +5,14 @@ Handles the logic for linking dependencies between nodes, including
 resolving call read() dependencies and building API hierarchies.
 """
 
+import logging
 import re
 from typing import Dict, List, Optional, Tuple, Any, TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 from karate_graph_analyzer.models import (
-    Dependency,
-    DependencyType,
-    NodeMetadata,
-    NodeType,
+    NodeType, Dependency, DependencyType, NodeMetadata, 
+    PathContext, ComponentCategory, FlowType
 )
 from karate_graph_analyzer.utils.path_resolver import PathResolver
 
@@ -77,6 +78,8 @@ class DependencyLinker:
         context: Any = None
     ) -> str:
         """Get existing dependency node or create a new one."""
+        logger.info(f"LINKING DEP: target={dep.target}, type={dep.type}, params={dep.parameters}")
+        
         node_type_map = {
             DependencyType.WORKFLOW: NodeType.WORKFLOW,
             DependencyType.API: NodeType.API,
@@ -96,26 +99,41 @@ class DependencyLinker:
             )
 
         node_type = node_type_map[dep.type]
-        norm_target = self.normalize_path(dep.target)
+        # Resolve path to absolute if possible
+        # Prefer physical_path if already resolved by extractor (prevents logical vs physical mismatch)
+        abs_path = dep.parameters.get("physical_path") or dep.target
+        
+        if context and dep.type in [DependencyType.WORKFLOW, DependencyType.PAGE, DependencyType.LOCATOR, DependencyType.COMMON]:
+            if not dep.parameters.get("physical_path"):
+                abs_path = PathResolver.resolve(dep.target, context)
+            
+        # Normalize target for identity AFTER resolution
+        norm_target = self.normalize_path(abs_path)
+        
+        logger.info(f"PATH RESOLUTION: target='{dep.target}' -> abs='{abs_path}' -> norm='{norm_target}'")
         
         # Check if target is ignored
         if norm_target in self.ignored_files:
+            logger.info(f"IGNORING TARGET: {norm_target}")
             return None
-            
-        # Resolve path to absolute if possible
-        abs_path = dep.target
-        if context and dep.type in [DependencyType.WORKFLOW, DependencyType.PAGE, DependencyType.LOCATOR, DependencyType.COMMON]:
-            abs_path = PathResolver.resolve(dep.target, context)
             
         # Determine file_path for metadata
         file_path = abs_path if dep.type in [DependencyType.WORKFLOW, DependencyType.PAGE, DependencyType.LOCATOR, DependencyType.COMMON] else dep.parameters.get("file_path")
             
+        # Resolve flow and category
+        category = ComponentCategory.UNKNOWN
+        flow = FlowType.UNKNOWN
+        if self.path_classifier:
+            category = self.path_classifier.classify_component_category(file_path)
+            flow = self.path_classifier.resolve_flow(node_type)
+
         metadata = NodeMetadata(
             file_path=file_path,
             line_number=dep.line_number,
             jira_tags=[],
             project_name=project_name,
-            category=self.path_classifier.classify_component_category(file_path) if self.path_classifier else ComponentCategory.UNKNOWN,
+            category=category,
+            flow=flow,
             environment_variants=[dep.parameters.get("physical_url")] if dep.parameters.get("physical_url") else [],
             additional_data=dep.parameters,
         )
@@ -186,9 +204,9 @@ class DependencyLinker:
             sub_node_id = node_map[key]
         else:
             if is_page:
-                sub_node_id = self.nx_builder.add_action_node(name_to_use, path, metadata)
+                sub_node_id = self.nx_builder.add_action_node(name_to_use, path, metadata, identity_tag=clean_tag)
             else:
-                sub_node_id = self.nx_builder.add_scenario_node(name_to_use, path, metadata)
+                sub_node_id = self.nx_builder.add_scenario_node(name_to_use, path, metadata, identity_tag=clean_tag)
             node_map[key] = sub_node_id
             
         # Link to parent

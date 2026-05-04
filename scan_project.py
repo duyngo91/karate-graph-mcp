@@ -18,10 +18,15 @@ from pathlib import Path
 src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))
 
+import logging
 from karate_graph_analyzer.models import Project, ParserConfig
 from karate_graph_analyzer.graph.graph_builder import GraphBuilder
 from karate_graph_analyzer.visualization.graph_visualizer import GraphVisualizer
 from karate_graph_analyzer.parser.config_parser import auto_detect_config
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
 
 
 def scan_project(project_root: str, output_name: str = None):
@@ -141,45 +146,12 @@ def scan_project(project_root: str, output_name: str = None):
         json_file = output_dir / f"{output_name}_graph.json"
         print(f"💾 Exporting to JSON...")
         
-        import json
-        from datetime import datetime
-        
-        # Convert graph to JSON
-        nodes_list = []
-        for node in graph.nodes.values():
-            nodes_list.append({
-                "id": node.id,
-                "type": node.type.value,
-                "name": node.name,
-                "metadata": {
-                    "file_path": node.metadata.file_path,
-                    "line_number": node.metadata.line_number,
-                    "jira_tags": node.metadata.jira_tags,
-                    "project_name": node.metadata.project_name,
-                    "additional_data": node.metadata.additional_data,
-                }
-            })
-        
-        edges_list = []
-        for edge in graph.edges.values():
-            edges_list.append({
-                "id": edge.id,
-                "from_node": edge.from_node,
-                "to_node": edge.to_node,
-                "type": edge.type.value,
-                "line_number": edge.line_number,
-            })
-        
-        export_data = {
-            "project_name": graph.project_name,
-            "timestamp": datetime.now().isoformat(),
-            "nodes": nodes_list,
-            "edges": edges_list,
-            "cycles": graph.cycles,
-        }
+        from karate_graph_analyzer.exporters.json_exporter import JsonExporter
+        exporter = JsonExporter()
+        json_data = exporter.export(graph)
         
         with open(json_file, 'w', encoding='utf-8') as f:
-            json.dump(export_data, f, indent=2, ensure_ascii=False)
+            f.write(json_data)
         
         print(f"✅ JSON export: {json_file}")
         

@@ -5,10 +5,10 @@ Handles the low-level construction of the NetworkX directed graph,
 node ID generation, and metadata management.
 """
 
-import hashlib
 import logging
-from typing import Dict, List, Optional, Any, Tuple
+import hashlib
 import networkx as nx
+from typing import Dict, List, Optional, Any, Set
 
 from karate_graph_analyzer.models import (
     DependencyType,
@@ -86,6 +86,7 @@ class NetworkXBuilder:
                 "jira_tags": metadata.jira_tags,
                 "project_name": metadata.project_name,
                 "category": metadata.category,
+                "flow": metadata.flow,
                 "environment_variants": metadata.environment_variants,
                 "additional_data": metadata.additional_data,
             }
@@ -194,33 +195,39 @@ class NetworkXBuilder:
         node_id = self._generate_stable_node_id(NodeType.DATA, identity)
         return self._add_node_internal(node_id, NodeType.DATA, data_path, metadata)
 
-    def add_scenario_node(self, scenario_tag: str, workflow_path: str, metadata: NodeMetadata) -> str:
+    def add_scenario_node(self, display_name: str, workflow_path: str, metadata: NodeMetadata, identity_tag: Optional[str] = None) -> str:
         """Add workflow scenario node to graph (@AddPayment, etc.)."""
-        if not scenario_tag.startswith('@'):
-            scenario_tag = f'@{scenario_tag}'
-        identity = "|".join([metadata.project_name, NodeType.SCENARIO.value, workflow_path, scenario_tag])
+        # Identity is based on the stable tag if provided, otherwise the display name
+        tag_for_id = identity_tag or display_name
+        if not tag_for_id.startswith('@'):
+            tag_for_id = f'@{tag_for_id}'
+            
+        identity = "|".join([metadata.project_name, NodeType.SCENARIO.value, workflow_path, tag_for_id])
         node_id = self._generate_stable_node_id(NodeType.SCENARIO, identity)
         
         # Ensure scenario info is in additional_data
         metadata.additional_data.update({
-            "scenario_tag": scenario_tag,
+            "scenario_tag": tag_for_id,
             "workflow_path": workflow_path,
         })
-        return self._add_node_internal(node_id, NodeType.SCENARIO, scenario_tag, metadata)
+        return self._add_node_internal(node_id, NodeType.SCENARIO, display_name, metadata)
 
-    def add_action_node(self, action_tag: str, page_path: str, metadata: NodeMetadata) -> str:
+    def add_action_node(self, display_name: str, page_path: str, metadata: NodeMetadata, identity_tag: Optional[str] = None) -> str:
         """Add page action node to graph (@login, etc.)."""
-        if not action_tag.startswith('@'):
-            action_tag = f'@{action_tag}'
-        identity = "|".join([metadata.project_name, NodeType.ACTION.value, page_path, action_tag])
+        # Identity is based on the stable tag if provided, otherwise the display name
+        tag_for_id = identity_tag or display_name
+        if not tag_for_id.startswith('@'):
+            tag_for_id = f'@{tag_for_id}'
+            
+        identity = "|".join([metadata.project_name, NodeType.ACTION.value, page_path, tag_for_id])
         node_id = self._generate_stable_node_id(NodeType.ACTION, identity)
         
         # Ensure action info is in additional_data
         metadata.additional_data.update({
-            "action_tag": action_tag,
+            "action_tag": tag_for_id,
             "page_path": page_path,
         })
-        return self._add_node_internal(node_id, NodeType.ACTION, action_tag, metadata)
+        return self._add_node_internal(node_id, NodeType.ACTION, display_name, metadata)
 
     def update_node_metadata(self, node_id: str, additional_data: Dict[str, Any]) -> None:
         """Update existing node's additional_data metadata."""
