@@ -4,22 +4,6 @@ var isFocused = false;
 var currentTab = 'HOTSPOTS';
 
 // --- SIDEBAR & TABS ---
-function switchTab(tabId) {
-    currentTab = tabId;
-    
-    const tabs = ['hotspots', 'variables', 'timeline', 'legend'];
-    tabs.forEach(t => {
-        const el = document.querySelector(`.tab[onclick="switchTab('${t}')"]`);
-        if (el) el.classList.toggle('active', t === tabId);
-        
-        const content = document.getElementById(`${t}-content`);
-        if (content) content.style.display = t === tabId ? 'block' : 'none';
-    });
-
-    if (tabId === 'hotspots') renderDashboard();
-    if (tabId === 'variables') renderVariables();
-    if (tabId === 'legend') renderLegend();
-}
 
 function jumpToNode(nodeId) {
     focusOnNode(nodeId);
@@ -402,10 +386,12 @@ function filterNodes(status) {
 }
 
 function switchTab(tabId) {
+    currentTab = tabId;
+    
     // Update tab styles
     document.querySelectorAll('.sidebar-tabs .tab').forEach(t => {
         t.classList.remove('active');
-        if (t.innerText.toLowerCase().includes(tabId)) t.classList.add('active');
+        if (t.getAttribute('onclick').includes(`'${tabId}'`)) t.classList.add('active');
     });
     
     // Switch content
@@ -413,40 +399,11 @@ function switchTab(tabId) {
     const content = document.getElementById(tabId + '-content');
     if (content) {
         content.style.display = 'block';
+        if (tabId === 'hotspots') renderDashboard();
         if (tabId === 'legend') renderLegend();
     }
 }
 
-function renderVariables() {
-    const content = document.getElementById('env-var-list');
-    if (!content) return;
-
-    const envVars = {{ENV_VARS}};
-    if (Object.keys(envVars).length === 0) {
-        content.innerHTML = '<div style="color: #999; padding: 20px;">No environment variables detected.</div>';
-        return;
-    }
-
-    content.innerHTML = `
-        <div style="font-weight: 700; color: #444; margin-bottom: 15px; font-size: 13px;">Global Configuration</div>
-        <table style="width: 100%; border-collapse: collapse;">
-            <thead>
-                <tr style="border-bottom: 2px solid #eee; text-align: left; font-size: 10px; color: #888;">
-                    <th style="padding: 8px 0;">VARIABLE</th>
-                    <th style="padding: 8px 0;">RESOLVED VALUE</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${Object.entries(envVars).sort().map(([key, val]) => `
-                    <tr style="border-bottom: 1px solid #f5f5f5;">
-                        <td style="padding: 8px 0; font-weight: 600; color: #1976d2;">${key}</td>
-                        <td style="padding: 8px 0; color: #666; font-family: monospace; word-break: break-all;">${val}</td>
-                    </tr>
-                `).join('')}
-            </tbody>
-        </table>
-    `;
-}
 
 function renderLegend() {
     const content = document.getElementById('legend-content');

@@ -37,7 +37,6 @@ LAYOUT_TEMPLATE = """
             
             <div class="sidebar-tabs">
                 <div class="tab active" onclick="switchTab('hotspots')"><i class="fas fa-fire"></i> Hotspots</div>
-                <div class="tab" onclick="switchTab('variables')"><i class="fas fa-cog"></i> Config</div>
                 <div class="tab" onclick="switchTab('timeline')"><i class="fas fa-history"></i> History</div>
                 <div class="tab" onclick="switchTab('legend')">📖 Legend</div>
             </div>
@@ -46,14 +45,6 @@ LAYOUT_TEMPLATE = """
             <div id="hotspots-content" class="tab-content">
                 <div id="hotspot-list">
                     <!-- Dynamic hotspots here -->
-                </div>
-            </div>
-
-            <div id="variables-content" class="tab-content" style="display: none;">
-                <div style="padding: 15px;">
-                    <div id="env-var-list" style="font-size: 11px;">
-                        <!-- Variables rendered via JS -->
-                    </div>
                 </div>
             </div>
             
