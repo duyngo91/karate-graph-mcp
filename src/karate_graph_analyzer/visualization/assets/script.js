@@ -385,6 +385,27 @@ function filterNodes(status) {
     nodes.update(updates);
 }
 
+function toggleLayer(layer, isVisible) {
+    const allNodes = nodes.get();
+    const updates = allNodes.map(node => {
+        const metadata = nodeMetadata[node.id];
+        const data = metadata.additional_data?.display_data;
+        if (!data) return null;
+
+        const isStructural = (data.flow === 'Structural');
+        
+        if (layer === 'structural' && isStructural) {
+            return { id: node.id, hidden: !isVisible };
+        }
+        if (layer === 'functional' && !isStructural) {
+            return { id: node.id, hidden: !isVisible };
+        }
+        return null;
+    }).filter(u => u !== null);
+    
+    nodes.update(updates);
+}
+
 function switchTab(tabId) {
     currentTab = tabId;
     
@@ -450,6 +471,17 @@ function renderLegend() {
             <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
                 <div style="width: 18px; height: 18px; background: #00bcd4; border: 1px solid #0097a7; margin-right: 10px;"></div>
                 <span><b>Data File (Box)</b></span>
+            </div>
+
+            <!-- 6. STRUCTURAL LAYER -->
+            <div style="font-weight: 700; color: #666; margin: 15px 0 10px 0; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">🏗️ Structural Layer</div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 18px; height: 18px; background: #fbc02d; transform: rotate(45deg); margin: 0 11px 0 1px;"></div>
+                <span><b>Folder (Hexagon)</b></span>
+            </div>
+            <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
+                <div style="width: 18px; height: 18px; background: #78909c; margin-right: 10px;"></div>
+                <span><b>File (Box)</b></span>
             </div>
 
             <div style="font-weight: 700; color: #666; margin: 20px 0 15px 0; font-size: 11px; text-transform: uppercase;">Status Colors</div>

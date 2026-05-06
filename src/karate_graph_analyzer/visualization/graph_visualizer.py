@@ -57,6 +57,10 @@ class GraphVisualizer:
         # 5. DATA Flow (Boxes)
         "DATA":         {"shape": "box",      "color": "#00bcd4", "size": 20, "eco": "Data Flow"},
         
+        # 6. Structural Flow (Hierarchy)
+        "FOLDER":       {"shape": "hexagon",  "color": "#fbc02d", "size": 35, "eco": "Structural"},
+        "FILE":         {"shape": "box",      "color": "#78909c", "size": 25, "eco": "Structural"},
+        
         # Infrastructure
         "DOMAIN":       {"shape": "hexagon",  "color": "#3f51b5", "size": 45, "eco": "Infrastructure"},
     }
@@ -328,7 +332,10 @@ class GraphVisualizer:
                 edge_type_colors = {"WORKFLOW": "#2196F3", "API": "#FF9800", "PAGE": "#9C27B0", "DATABASE": "#F44336"}
                 color = edge_type_colors.get(edge.type.value, "#808080")
 
-            net.add_edge(edge.from_node, edge.to_node, color=color, width=width, arrows="to", dashes=dashes)
+            if edge.from_node in net.get_nodes() and edge.to_node in net.get_nodes():
+                net.add_edge(edge.from_node, edge.to_node, color=color, width=width, arrows="to", dashes=dashes)
+            else:
+                logger.warning(f"Skipping edge {edge.from_node} -> {edge.to_node}: One or both nodes missing in visualizer")
 
         for cycle in self.graph.cycles:
             for i in range(len(cycle)):

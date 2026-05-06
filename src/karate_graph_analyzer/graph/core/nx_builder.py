@@ -5,6 +5,7 @@ Handles the low-level construction of the NetworkX directed graph,
 node ID generation, and metadata management.
 """
 
+import os
 import logging
 import hashlib
 import networkx as nx
@@ -60,6 +61,27 @@ class NetworkXBuilder:
             # Merging Logic for duplicate logical nodes (e.g. multi-environment)
             node = self.graph.nodes[node_id]
             
+            # If node was implicitly created by an edge, it will be empty
+            if "metadata" not in node:
+                # Re-initialize node data
+                node.update({
+                    "id": node_id,
+                    "type": node_type,
+                    "name": name,
+                    "tags": tags,
+                    "metadata": {
+                        "file_path": metadata.file_path,
+                        "line_number": metadata.line_number,
+                        "jira_tags": metadata.jira_tags,
+                        "project_name": metadata.project_name,
+                        "category": metadata.category,
+                        "flow": metadata.flow,
+                        "environment_variants": metadata.environment_variants,
+                        "additional_data": metadata.additional_data,
+                    }
+                })
+                return node_id
+
             # 1. Merge tags
             existing_tags = node.get("tags", [])
             node["tags"] = list(dict.fromkeys(existing_tags + tags))
@@ -229,6 +251,18 @@ class NetworkXBuilder:
             "page_path": page_path,
         })
         return self._add_node_internal(node_id, NodeType.ACTION, display_name, metadata)
+
+    def add_folder_node(self, folder_path: str, metadata: NodeMetadata) -> str:
+        """Add a folder node to the structural layer."""
+        identity = "|".join([metadata.project_name, NodeType.FOLDER.value, folder_path])
+        node_id = f"folder_{hashlib.sha1(identity.encode('utf-8')).hexdigest()[:12]}"
+        return self._add_node_internal(node_id, NodeType.FOLDER, os.path.basename(folder_path) or folder_path, metadata)
+
+    def add_file_node(self, file_path: str, metadata: NodeMetadata) -> str:
+        """Add a file node to the structural layer."""
+        identity = "|".join([metadata.project_name, NodeType.FILE.value, file_path])
+        node_id = f"file_{hashlib.sha1(identity.encode('utf-8')).hexdigest()[:12]}"
+        return self._add_node_internal(node_id, NodeType.FILE, os.path.basename(file_path), metadata)
 
     def update_node_metadata(self, node_id: str, updates: Dict[str, Any]) -> None:
         """Update existing node's metadata (additional_data, variants, etc.)."""

@@ -33,6 +33,7 @@ from karate_graph_analyzer.graph.core.nx_builder import NetworkXBuilder
 from karate_graph_analyzer.graph.core.path_classifier import PathClassifier
 from karate_graph_analyzer.graph.core.dependency_linker import DependencyLinker
 from karate_graph_analyzer.graph.core.incremental_updater import IncrementalUpdater
+from karate_graph_analyzer.graph.structural_builder import StructuralBuilder
 from karate_graph_analyzer.utils.path_resolver import PathResolver
 from karate_graph_analyzer.core.context import AnalysisContext
 
@@ -52,7 +53,8 @@ class GraphBuilder:
         self.context: Optional[AnalysisContext] = None
         self.config = config or (parser.config if parser else ParserConfig())
         self.path_classifier = PathClassifier()
-        self.dependency_linker = DependencyLinker(self.nx_builder, path_classifier=self.path_classifier)
+        self.structural_builder = StructuralBuilder(self.nx_builder)
+        self.dependency_linker = DependencyLinker(self.nx_builder, path_classifier=self.path_classifier, structural_builder=self.structural_builder)
         self.incremental_updater = IncrementalUpdater(self.nx_builder, self.path_classifier, self.dependency_linker)
         self._injected_parser = parser
 
@@ -87,9 +89,10 @@ class GraphBuilder:
     def detect_cycles(self) -> List[List[str]]:
         return self.nx_builder.detect_cycles()
 
-    def _initialize_context(self, project: Project):
+    def _initialize_context(self, project: Project, clear_graph: bool = True):
         """Shared initialization logic for building graphs."""
-        self.nx_builder.graph = nx.DiGraph()
+        if clear_graph:
+            self.nx_builder.graph = nx.DiGraph()
         self.context = AnalysisContext(project)
         self.config = self.context.config
         
@@ -97,12 +100,16 @@ class GraphBuilder:
         self.path_classifier.context = self.context
         self.dependency_linker.context = self.context
         self.dependency_linker.path_classifier = self.path_classifier
+        self.dependency_linker.structural_builder = self.structural_builder
         
         return self._injected_parser or self._create_default_parser(project)
 
     def build_from_project(self, project: Project) -> DependencyGraph:
         """Build complete graph for a project using 2-pass strategy."""
         parser = self._initialize_context(project)
+        # Build structural layer first
+        self.structural_builder.build_structure(project)
+        
         feature_files = self._get_feature_files(project)
         ast_list: List[FeatureAST] = []
         
@@ -126,11 +133,11 @@ class GraphBuilder:
         self._ignored_files = ignored_files
         self.dependency_linker.ignored_files = ignored_files
 
-        return self.build_from_asts(project, ast_list)
+        return self.build_from_asts(project, ast_list, clear_graph=False)
 
-    def build_from_asts(self, project: Project, ast_list: List[FeatureAST]) -> DependencyGraph:
+    def build_from_asts(self, project: Project, ast_list: List[FeatureAST], clear_graph: bool = True) -> DependencyGraph:
         """Build a graph from pre-parsed ASTs using the same 2-pass strategy."""
-        parser = self._initialize_context(project)
+        parser = self._initialize_context(project, clear_graph=clear_graph)
 
         # Pass 1: Extract API definitions from COMMON components
         common_api_map: Dict[Tuple[str, str], List] = {}
@@ -234,9 +241,12 @@ class GraphBuilder:
                 )
             
             # Fallback to file node if no tags
+            self.structural_builder.link_to_functional_node(scenario.file_path, file_node_id)
             return file_node_id
             
-        return self.nx_builder.add_test_case(scenario, metadata)
+        node_id = self.nx_builder.add_test_case(scenario, metadata)
+        self.structural_builder.link_to_functional_node(scenario.file_path, node_id)
+        return node_id
 
     def _handle_page_and_action(self, scenario: Scenario, metadata: NodeMetadata, node_map: Dict) -> str:
         rel_path = PathResolver.normalize_path(scenario.file_path)
@@ -255,10 +265,12 @@ class GraphBuilder:
         # If no primary tag, use the display name as a fallback tag (legacy behavior)
         tag_to_use = primary_tag or display_name
         
-        return self.dependency_linker._handle_tag_subnode(
+        res_id = self.dependency_linker._handle_tag_subnode(
             file_node_id, NodeType.PAGE, rel_path, tag_to_use, metadata, node_map, DependencyType.PAGE,
             display_name=display_name
         )
+        self.structural_builder.link_to_functional_node(scenario.file_path, res_id)
+        return res_id
 
     def _link_dependencies(self, scenario, ast, parser, project, node_id, common_map, node_map, context):
         deps = parser.extract_dependencies_with_background(scenario, ast.background_steps)
@@ -307,6 +319,9 @@ class GraphBuilder:
         cycles = self.nx_builder.detect_cycles()
         nodes_dict = {}
         for nid, nd in self.nx_builder.graph.nodes(data=True):
+            if "metadata" not in nd:
+                logger.warning(f"Skipping node missing metadata: {nid}")
+                continue
             # Extract metadata and preserve category/flow
             metadata_dict = nd["metadata"].copy()
             p_name = metadata_dict.pop("project_name", project_name)
@@ -327,10 +342,16 @@ class GraphBuilder:
 
             nodes_dict[nid] = Node(id=nd["id"], type=nd["type"], name=nd["name"], metadata=meta, tags=nd.get("tags", []))
             
-        edges_dict = {
-            ed["id"]: Edge(id=ed["id"], from_node=ed["from_node"], to_node=ed["to_node"], type=ed["type"], line_number=ed.get("line_number"))
-            for _, _, ed in self.nx_builder.graph.edges(data=True)
-        }
+        edges_dict = {}
+        for _, _, ed in self.nx_builder.graph.edges(data=True):
+            if ed["from_node"] in nodes_dict and ed["to_node"] in nodes_dict:
+                edges_dict[ed["id"]] = Edge(
+                    id=ed["id"], 
+                    from_node=ed["from_node"], 
+                    to_node=ed["to_node"], 
+                    type=ed["type"], 
+                    line_number=ed.get("line_number")
+                )
         return DependencyGraph(
             project_name=project_name, 
             nodes=nodes_dict, 

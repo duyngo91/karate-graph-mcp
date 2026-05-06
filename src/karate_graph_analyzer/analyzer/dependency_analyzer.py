@@ -383,3 +383,54 @@ class DependencyAnalyzer:
             
         results.sort(key=lambda x: (x["failure_impact_score"], x["failure_percentage"]), reverse=True)
         return results
+
+    def get_subgraph(self, node_id: str, radius: int = 2) -> Dict[str, Any]:
+        """Extract a local subgraph around a node."""
+        import networkx as nx
+        if node_id not in self._nx_graph:
+            return {"nodes": [], "edges": []}
+            
+        # Get nodes in neighborhood
+        # Use undirected version to get both callers and callees
+        undirected = self._nx_graph.to_undirected()
+        try:
+            ego = nx.ego_graph(undirected, node_id, radius=radius)
+            neighborhood_nodes = set(ego.nodes())
+        except nx.NetworkXError:
+            neighborhood_nodes = {node_id}
+            
+        nodes_out = []
+        for nid in neighborhood_nodes:
+            if nid in self.graph.nodes:
+                node = self.graph.nodes[nid]
+                nodes_out.append({
+                    "id": node.id,
+                    "name": node.name,
+                    "type": node.type.value,
+                    "metadata": node.metadata.dict()
+                })
+                
+        edges_out = []
+        for u, v, data in self._nx_graph.edges(data=True):
+            if u in neighborhood_nodes and v in neighborhood_nodes:
+                edges_out.append({
+                    "from": u,
+                    "to": v,
+                    "type": data.get("type", "UNKNOWN")
+                })
+                
+        return {"nodes": nodes_out, "edges": edges_out}
+
+    def query_by_metadata(self, key: str, value: str) -> List[Node]:
+        """Search nodes by metadata attributes."""
+        results = []
+        for node in self.graph.nodes.values():
+            # Check additional_data
+            if node.metadata.additional_data.get(key) == value:
+                results.append(node)
+                continue
+            # Check direct attributes
+            if hasattr(node.metadata, key) and getattr(node.metadata, key) == value:
+                results.append(node)
+                
+        return results

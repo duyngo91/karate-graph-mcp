@@ -59,6 +59,20 @@ LAYOUT_TEMPLATE = """
             </div>
             
             <div style="padding: 15px; border-top: 1px solid var(--border);">
+                <div style="font-size: 11px; font-weight: 800; color: #666; margin-bottom: 10px; text-transform: uppercase;">Layers</div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <label style="display: flex; align-items: center; font-size: 13px; cursor: pointer;">
+                        <input type="checkbox" id="toggle-functional" checked onchange="toggleLayer('functional', this.checked)" style="margin-right: 8px;"> 
+                        Functional Layer
+                    </label>
+                    <label style="display: flex; align-items: center; font-size: 13px; cursor: pointer;">
+                        <input type="checkbox" id="toggle-structural" checked onchange="toggleLayer('structural', this.checked)" style="margin-right: 8px;"> 
+                        Structural Layer
+                    </label>
+                </div>
+            </div>
+
+            <div style="padding: 15px; border-top: 1px solid var(--border);">
                 <div style="position: relative;">
                     <input type="text" id="node-search" placeholder="🔍 Search components (Ctrl+K)..." 
                            style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ddd; outline: none;"

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 class DependencyLinker:
     """Handles linking of dependencies and building complex node structures."""
 
-    def __init__(self, nx_builder, context: Optional["AnalysisContext"] = None, path_classifier: Optional[Any] = None, ignored_files: Optional[set] = None) -> None:
+    def __init__(self, nx_builder, context: Optional["AnalysisContext"] = None, path_classifier: Optional[Any] = None, ignored_files: Optional[set] = None, structural_builder: Optional[Any] = None) -> None:
         """Initialize with a NetworkXBuilder instance.
 
         Args:
@@ -37,6 +37,7 @@ class DependencyLinker:
         self.context = context
         self.path_classifier = path_classifier
         self.ignored_files = ignored_files or set()
+        self.structural_builder = structural_builder
 
     def normalize_path(self, path: str) -> str:
         """Proxy to PathResolver for backward compatibility."""
@@ -217,6 +218,10 @@ class DependencyLinker:
         # Link to parent
         if not self.nx_builder.graph.has_edge(parent_id, sub_node_id):
             self.nx_builder.add_dependency(parent_id, sub_node_id, dep_type)
+            
+        # Link to structural file node if available
+        if self.structural_builder:
+            self.structural_builder.link_to_functional_node(path, sub_node_id)
             
         return sub_node_id
 

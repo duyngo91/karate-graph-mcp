@@ -153,6 +153,18 @@ class DeleteProjectRequest(BaseModel):
     project_name: str = Field(..., min_length=1, description="Name of the project to delete")
 
 
+class GetSubgraphRequest(BaseModel):
+    """Request model for get_subgraph."""
+    node_id: str = Field(..., min_length=1, description="Target node ID")
+    radius: int = Field(default=2, description="Number of hops to include")
+
+
+class QueryNodeByMetadataRequest(BaseModel):
+    """Request model for query_node_by_metadata."""
+    key: str = Field(..., description="Metadata key to search in (e.g., 'feature', 'category')")
+    value: str = Field(..., description="Value to match")
+
+
 class KarateGraphAnalyzerTool:
     """MCP protocol interface for graph analyzer."""
 
@@ -1354,6 +1366,94 @@ class KarateGraphAnalyzerTool:
             "suggestions": suggestions,
             "count": len(suggestions)
         }
+
+    # AI-First GraphRAG tools
+
+    def get_subgraph(self, node_id: str, radius: int = 2) -> Dict[str, Any]:
+        """Extract a local subgraph for AI context."""
+        try:
+            request = GetSubgraphRequest(node_id=node_id, radius=radius)
+            
+            # Find which project contains this node
+            analyzer = self._find_analyzer_for_node(request.node_id)
+            if not analyzer:
+                return self._error_response(4001, "QUERY_ERROR", f"Node '{node_id}' not found")
+
+            subgraph_data = analyzer.get_subgraph(request.node_id, radius=request.radius)
+            
+            return {
+                "success": True,
+                "node_id": node_id,
+                "radius": radius,
+                "subgraph": subgraph_data
+            }
+        except Exception as e:
+            logger.error(f"Failed to get subgraph for '{node_id}': {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def query_node_by_metadata(self, key: str, value: str) -> Dict[str, Any]:
+        """Search nodes by metadata attributes across all projects."""
+        try:
+            request = QueryNodeByMetadataRequest(key=key, value=value)
+            
+            all_results = []
+            for project_name, analyzer in self.analyzers.items():
+                nodes = analyzer.query_by_metadata(request.key, request.value)
+                for node in nodes:
+                    all_results.append({
+                        "id": node.id,
+                        "type": node.type.value,
+                        "name": node.name,
+                        "project": project_name,
+                        "metadata": asdict(node.metadata)
+                    })
+            
+            return {
+                "success": True,
+                "key": key,
+                "value": value,
+                "results": all_results,
+                "count": len(all_results)
+            }
+        except Exception as e:
+            logger.error(f"Failed to query nodes by metadata: {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def get_impact_radius(self, node_id: str, depth: int = 2) -> Dict[str, Any]:
+        """Analyze impact within a specific radius for AI reasoning."""
+        try:
+            # Find which project contains this node
+            analyzer = self._find_analyzer_for_node(node_id)
+            if not analyzer:
+                return self._error_response(4001, "QUERY_ERROR", f"Node '{node_id}' not found")
+
+            # Get subgraph at specified depth
+            import networkx as nx
+            # For impact, we care about predecessors (who depends on me)
+            neighborhood_ids = nx.single_source_shortest_path_length(analyzer._nx_graph.reverse(), node_id, cutoff=depth)
+            
+            impacted_nodes = []
+            for nid, dist in neighborhood_ids.items():
+                if nid == node_id: continue
+                node = analyzer.graph.nodes[nid]
+                impacted_nodes.append({
+                    "id": node.id,
+                    "name": node.name,
+                    "type": node.type.value,
+                    "distance": dist,
+                    "category": node.metadata.category.value if node.metadata.category else "UNKNOWN"
+                })
+                
+            return {
+                "success": True,
+                "node_id": node_id,
+                "radius": depth,
+                "impacted_count": len(impacted_nodes),
+                "impacted_nodes": impacted_nodes
+            }
+        except Exception as e:
+            logger.error(f"Failed to get impact radius for '{node_id}': {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def visualize_project(self, project_name: str, output_path: Optional[str] = None) -> Dict[str, Any]:
         """Generate interactive HTML visualization for a project.

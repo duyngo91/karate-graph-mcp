@@ -60,6 +60,7 @@ class DependencyType(str, Enum):
     LOCATOR = "LOCATOR"
     SETUP = "SETUP"
     DATA = "DATA"
+    CONTAINS = "CONTAINS"
 
 
 class NodeType(str, Enum):
@@ -76,6 +77,8 @@ class NodeType(str, Enum):
     DATABASE = "DATABASE"
     LOCATOR = "LOCATOR"
     DATA = "DATA"
+    FOLDER = "FOLDER"
+    FILE = "FILE"
 
 
 class FlowType(str, Enum):

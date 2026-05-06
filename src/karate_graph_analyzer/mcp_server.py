@@ -229,6 +229,42 @@ def get_fix_suggestions(project_name: str, node_id: str, error_message: str) -> 
     return analyzer_tool.get_fix_suggestions(project_name, node_id, error_message)
 
 @mcp.tool()
+def get_subgraph(node_id: str, radius: int = 2) -> Dict[str, Any]:
+    """
+    Extract a local subgraph for AI context.
+    Provides a concise view of a node and its neighbors.
+    
+    Args:
+        node_id: ID of the target node.
+        radius: Number of hops to include (default: 2).
+    """
+    return analyzer_tool.get_subgraph(node_id, radius)
+
+@mcp.tool()
+def query_node_by_metadata(key: str, value: str) -> Dict[str, Any]:
+    """
+    Search nodes by metadata attributes across all projects.
+    Useful for finding all nodes in a specific 'feature' or 'category'.
+    
+    Args:
+        key: Metadata key to search in (e.g., 'feature', 'category').
+        value: Value to match.
+    """
+    return analyzer_tool.query_node_by_metadata(key, value)
+
+@mcp.tool()
+def get_impact_radius(node_id: str, depth: int = 2) -> Dict[str, Any]:
+    """
+    Analyze impact within a specific radius for AI reasoning.
+    Identifies components that depend on the specified node.
+    
+    Args:
+        node_id: ID of the component being changed.
+        depth: Search depth (default: 2).
+    """
+    return analyzer_tool.get_impact_radius(node_id, depth)
+
+@mcp.tool()
 def visualize_project(project_name: str, output_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Generate an interactive HTML visualization for a project.
