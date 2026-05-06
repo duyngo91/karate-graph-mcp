@@ -403,11 +403,12 @@ class DependencyAnalyzer:
         for nid in neighborhood_nodes:
             if nid in self.graph.nodes:
                 node = self.graph.nodes[nid]
+                from dataclasses import asdict
                 nodes_out.append({
                     "id": node.id,
                     "name": node.name,
                     "type": node.type.value,
-                    "metadata": node.metadata.dict()
+                    "metadata": asdict(node.metadata)
                 })
                 
         edges_out = []
