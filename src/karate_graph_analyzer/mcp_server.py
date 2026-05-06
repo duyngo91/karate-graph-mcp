@@ -253,6 +253,37 @@ def query_node_by_metadata(key: str, value: str) -> Dict[str, Any]:
     return analyzer_tool.query_node_by_metadata(key, value)
 
 @mcp.tool()
+def global_search(query: str) -> Dict[str, Any]:
+    """
+    Search across all nodes in all projects using a global keyword.
+    
+    Args:
+        query: Search query across all fields.
+    """
+    return analyzer_tool.global_search(query)
+
+@mcp.tool()
+def find_path(source_id: str, target_id: str) -> Dict[str, Any]:
+    """
+    Find all simple paths between two nodes to analyze traceability.
+    
+    Args:
+        source_id: Source node ID.
+        target_id: Target node ID.
+    """
+    return analyzer_tool.find_path(source_id, target_id)
+
+@mcp.tool()
+def get_component_importance(project_name: str) -> Dict[str, Any]:
+    """
+    Get nodes sorted by their architectural importance (huyết mạch).
+    
+    Args:
+        project_name: Name of the analyzed project.
+    """
+    return analyzer_tool.get_component_importance(project_name)
+
+@mcp.tool()
 def get_impact_radius(node_id: str, depth: int = 2) -> Dict[str, Any]:
     """
     Analyze impact within a specific radius for AI reasoning.
@@ -312,6 +343,23 @@ def render_execution_report(
         output_path: Optional custom path to save the HTML file.
     """
     return analyzer_tool.render_execution_report(project_name, report_path, output_path)
+
+@mcp.tool()
+def process_reports_folder(
+    project_name: str, 
+    directory_path: str, 
+    output_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Scan a directory for Karate JSON reports, apply them, and generate a visualization.
+    Returns an AI-distilled summary of failures.
+    
+    Args:
+        project_name: Name of the analyzed project.
+        directory_path: Path to the directory containing Karate JSON reports.
+        output_path: Optional custom path to save the HTML file.
+    """
+    return analyzer_tool.process_reports_folder(project_name, directory_path, output_path)
 
 @mcp.tool()
 def compare_projects(

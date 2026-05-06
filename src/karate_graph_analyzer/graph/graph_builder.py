@@ -276,26 +276,26 @@ class GraphBuilder:
         deps = parser.extract_dependencies_with_background(scenario, ast.background_steps)
         for dep in deps:
             if dep.type == DependencyType.COMMON:
-                self._link_common_dependency(node_id, dep, project.name, common_map, node_map)
+                self._link_common_dependency(node_id, dep, project.name, common_map, node_map, context)
             else:
                 dep_id = self.dependency_linker.get_or_create_dependency_node(dep, project.name, node_map, context=context)
                 if dep_id:
                     self.nx_builder.add_dependency(node_id, dep_id, dep.type, line_number=dep.line_number)
 
-    def _link_common_dependency(self, node_id, dep, project_name, common_map, node_map):
+    def _link_common_dependency(self, node_id, dep, project_name, common_map, node_map, context):
         tag = dep.parameters.get("scenario_tag", "")
         if tag and not tag.startswith("@"): tag = "@" + tag
         
         target_norm = PathResolver.normalize_path(dep.target)
         api_deps = next((common_map[k] for k in common_map if k[0].endswith(target_norm) and k[1] == tag), None)
 
-        common_dep_id = self.dependency_linker.get_or_create_dependency_node(dep, project_name, node_map)
+        common_dep_id = self.dependency_linker.get_or_create_dependency_node(dep, project_name, node_map, context=context)
         if common_dep_id:
             self.nx_builder.add_dependency(node_id, common_dep_id, dep.type, line_number=dep.line_number)
             
             if api_deps:
                 for api_dep in api_deps:
-                    dep_id = self.dependency_linker.get_or_create_dependency_node(api_dep, project_name, node_map)
+                    dep_id = self.dependency_linker.get_or_create_dependency_node(api_dep, project_name, node_map, context=context)
                     if dep_id:
                         self.nx_builder.add_dependency(node_id, dep_id, api_dep.type, line_number=dep.line_number)
 

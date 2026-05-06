@@ -13,6 +13,79 @@ class ExecutionReportParser:
     def __init__(self, graph: DependencyGraph):
         self.graph = graph
 
+    def apply_report_data(self, data: Any) -> int:
+        """Apply already loaded report data to the graph nodes."""
+        features = data if isinstance(data, list) else [data]
+        applied_count = 0
+        
+        for feature in features:
+            if self._process_feature(feature):
+                applied_count += 1
+        
+        # Identify all leaf nodes that have status and trigger propagation
+        if applied_count > 0:
+            for node_id, node in self.graph.nodes.items():
+                if node.type in [NodeType.TEST_CASE, NodeType.SCENARIO] and node.execution_status:
+                    self._propagate_status_to_parents(node_id)
+                    
+        return applied_count
+
+    def scan_directory(self, directory_path: str) -> List[str]:
+        """Scan directory for Cucumber JSON report files."""
+        dir_path = Path(directory_path)
+        if not dir_path.exists() or not dir_path.is_dir():
+            logger.error(f"Invalid directory path: {directory_path}")
+            return []
+            
+        # Standard Karate Cucumber JSON files are usually named like: src.test.java...json
+        # We want to exclude karate-summary.json and other metadata files
+        json_files = []
+        for p in dir_path.glob("*.json"):
+            if p.name == "karate-summary.json":
+                continue
+            # Basic heuristic: Karate JSONs usually contain an array of features
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    content = f.read(100)
+                    if content.strip().startswith('['):
+                        json_files.append(str(p))
+            except:
+                continue
+                
+        return json_files
+
+    def get_ai_summary(self) -> Dict[str, Any]:
+        """Generate a distilled summary of execution results for AI consumption."""
+        summary = {
+            "total_nodes": len(self.graph.nodes),
+            "failed_components": [],
+            "status_overview": {}
+        }
+        
+        for node_id, node in self.graph.nodes.items():
+            status = node.execution_status
+            if not status: continue
+            
+            summary["status_overview"][status] = summary["status_overview"].get(status, 0) + 1
+            
+            if status in ["FAILED", "PARTIAL_FAIL"]:
+                comp_info = {
+                    "id": node_id,
+                    "name": node.name,
+                    "type": node.type.value,
+                    "path": node.metadata.file_path
+                }
+                
+                # Add error details for leaf nodes
+                if node.type in [NodeType.TEST_CASE, NodeType.SCENARIO]:
+                    comp_info["error"] = (node.execution_details or {}).get("error") or \
+                                       node.metadata.additional_data.get("last_error")
+                    comp_info["details"] = node.execution_details
+                    
+                summary["failed_components"].append(comp_info)
+                
+        return summary
+
     def apply_reports(self, report_paths: List[str]) -> int:
         """Load and apply multiple report files to the graph nodes."""
         total_applied = 0
@@ -56,24 +129,45 @@ class ExecutionReportParser:
         """Processes a feature object from Karate JSON report."""
         # Feature name and relative path
         feature_name = feature.get("name")
-        feature_uri = feature.get("uri", "") # Usually relative to project root
+        feature_uri = feature.get("uri") or feature.get("relativePath") or feature.get("prefixedPath") or ""
         
         scenarios = feature.get("elements", [])
         if not scenarios:
-            # Check for alternate summary format
-            scenarios = feature.get("scenarios", [])
+            # Check for alternate summary format or karate-json format
+            scenarios = feature.get("scenarios", []) or feature.get("scenarioResults", [])
             
         applied = False
         for scenario_data in scenarios:
-            if scenario_data.get("type") != "scenario" and "name" not in scenario_data:
+            # In karate-json, 'type' might be missing, but 'name' or 'executorName' is present
+            if not scenario_data.get("name") and scenario_data.get("type") != "scenario":
                 continue
                 
             scenario_name = scenario_data.get("name")
-            passed = scenario_data.get("passed", True)
-            if "status" in scenario_data:
+            
+            # Status detection logic (handles standard JSON and karate-json)
+            passed = True
+            if "failed" in scenario_data:
+                passed = not scenario_data.get("failed")
+            elif "passed" in scenario_data:
+                passed = scenario_data.get("passed")
+            elif "status" in scenario_data:
                 passed = scenario_data.get("status") == "passed"
             elif "result" in scenario_data:
                 passed = scenario_data.get("result", {}).get("status") == "passed"
+            else:
+                # Aggregate from steps
+                steps = scenario_data.get("steps", [])
+                for step in steps:
+                    res = step.get("result", {})
+                    if res.get("status") == "failed":
+                        passed = False
+                        # Capture the error message for AI summary
+                        error_msg = res.get("error_message")
+                        if error_msg:
+                            # We can't easily pass it back here without changing signature, 
+                            # but we'll find a way or just handle it in _update_node_status
+                            scenario_data["error"] = error_msg 
+                        break
 
             status = "PASSED" if passed else "FAILED"
             
@@ -91,10 +185,15 @@ class ExecutionReportParser:
                 node_file = node.metadata.file_path or ""
                 
                 # Normalize names for comparison
-                n_name = node.name.lower()
+                import re
+                n_name_raw = node.name.lower()
+                n_name = re.sub(r'^\[[^\]]+\]\s*', '', n_name_raw).lower()
                 s_name = scenario_name.lower()
                 
+                # Try exact match first on cleaned name, then fallback to partial
                 name_match = (s_name == n_name) or (s_name in n_name) or (n_name in s_name)
+                
+                logger.debug(f"Comparing scenario '{s_name}' with node '{n_name}' (type: {node.type}): match={name_match}")
                 
                 if name_match:
                     # If we have URI info, try to use it for better precision
@@ -103,7 +202,11 @@ class ExecutionReportParser:
                     if feature_uri:
                         norm_uri = feature_uri.replace("\\", "/")
                         norm_node_file = node_file.replace("\\", "/")
-                        if norm_uri not in norm_node_file and norm_node_file not in norm_uri:
+                        uri_match = (norm_uri in norm_node_file) or (norm_node_file in norm_uri)
+                        
+                        logger.debug(f"Comparing URI '{norm_uri}' with node file '{norm_node_file}': match={uri_match}")
+                        
+                        if not uri_match:
                             # Only skip if we have a strong URI mismatch
                             # But be lenient if one of them is empty
                             if norm_uri and norm_node_file:
@@ -111,10 +214,14 @@ class ExecutionReportParser:
                         
                     details = None
                     if not passed:
+                        error_msg = scenario_data.get("error") or scenario_data.get("error_message") or "Unknown error"
                         details = {
-                            "error": scenario_data.get("error_message", "Unknown error"),
+                            "error": error_msg,
                             "failed_step": self._find_failed_step(scenario_data)
                         }
+                        # Also store in metadata as a backup
+                        node.metadata.additional_data["last_error"] = error_msg
+                        
                     self._update_node_status(node.id, status, details)
                     matched = True
                     applied = True

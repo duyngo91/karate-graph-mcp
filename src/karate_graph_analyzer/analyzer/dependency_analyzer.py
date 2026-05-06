@@ -191,34 +191,72 @@ class DependencyAnalyzer:
         )
 
     def find_dependencies(self, node_id: str, transitive: bool = True) -> List[Node]:
-        """Find direct or transitive dependencies.
+        """Find direct or transitive dependencies."""
+        import networkx as nx
+        if node_id not in self._nx_graph:
+            return []
+        
+        if transitive:
+            try:
+                descendant_ids = nx.descendants(self._nx_graph, node_id)
+            except nx.NetworkXError:
+                return []
+        else:
+            descendant_ids = set(self._nx_graph.successors(node_id))
+            
+        results = []
+        for did in descendant_ids:
+            if did in self.graph.nodes:
+                results.append(self.graph.nodes[did])
+        return results
 
+    def apply_execution_report(self, report_data: List[Dict[str, Any]]) -> int:
+        """Apply execution results from Karate JSON report to the graph."""
+        from karate_graph_analyzer.parser.execution_parser import ExecutionReportParser
+        parser = ExecutionReportParser(self.graph)
+        return parser.apply_report_data(report_data)
+
+    def process_execution_directory(self, directory_path: str) -> Dict[str, Any]:
+        """Scan directory, apply all reports, and return AI-distilled summary.
+        
         Args:
-            node_id: Node to find dependencies for
-            transitive: If True, find all transitive dependencies
-
+            directory_path: Path to Karate reports directory
+            
         Returns:
-            List of dependent nodes
+            Distilled summary for AI
         """
+        from karate_graph_analyzer.parser.execution_parser import ExecutionReportParser
+        parser = ExecutionReportParser(self.graph)
+        
+        # 1. Scan directory
+        report_files = parser.scan_directory(directory_path)
+        
+        # 2. Apply reports
+        parser.apply_reports(report_files)
+        
+        # 3. Return AI summary
+        return parser.get_ai_summary()
+
+    def _propagate_execution_status(self):
+        """Propagate status from Scenarios up to Features and Folders.
+        Note: This is now handled by ExecutionReportParser.apply_report_data.
+        """
+        pass
+
+    def query_dependencies(self, node_id: str, transitive: bool = True) -> List[Node]:
+        """Query dependencies using cached NetworkX graph."""
         import networkx as nx
         
         # Check if node exists in the graph
         if node_id not in self.graph.nodes:
-            # Return empty list if node not found (graceful handling)
             return []
         
-        # Find dependencies based on transitive flag using cached NetworkX graph
         if transitive:
-            # Find all transitive dependencies (all descendants)
-            # descendants() returns all nodes reachable from the source node
             try:
                 dependency_ids = nx.descendants(self._nx_graph, node_id)
             except nx.NetworkXError:
-                # Node not in graph (shouldn't happen due to earlier check, but be safe)
                 return []
         else:
-            # Find direct dependencies (immediate successors)
-            # successors() returns nodes that the given node points to
             dependency_ids = list(self._nx_graph.successors(node_id))
         
         # Convert node IDs to Node objects
@@ -432,6 +470,66 @@ class DependencyAnalyzer:
                 continue
             # Check direct attributes
             if hasattr(node.metadata, key) and getattr(node.metadata, key) == value:
+                results.append(node)
+                
+        return results
+
+    def find_paths(self, start_node_id: str, end_node_id: str) -> List[List[str]]:
+        """Find all simple paths between two nodes."""
+        import networkx as nx
+        if start_node_id not in self._nx_graph or end_node_id not in self._nx_graph:
+            return []
+        
+        try:
+            # Limit to simple paths to avoid infinite loops and keep it efficient
+            paths = list(nx.all_simple_paths(self._nx_graph, start_node_id, end_node_id, cutoff=10))
+            return paths
+        except nx.NetworkXError:
+            return []
+
+    def get_component_importance(self) -> List[Dict[str, Any]]:
+        """Calculate node importance using degree centrality (in-degree).
+        
+        Nodes with high in-degree are 'huyết mạch' because many things depend on them.
+        """
+        import networkx as nx
+        centrality = nx.in_degree_centrality(self._nx_graph)
+        
+        importance = []
+        for nid, score in centrality.items():
+            if score > 0:
+                node = self.graph.nodes.get(nid)
+                if node:
+                    importance.append({
+                        "id": nid,
+                        "name": node.name,
+                        "type": node.type.value,
+                        "score": round(score * 100, 2)  # Percentage score
+                    })
+        
+        # Sort by score descending
+        return sorted(importance, key=lambda x: x["score"], reverse=True)
+
+    def global_search(self, query: str) -> List[Node]:
+        """Search across all node fields (name, id, metadata values)."""
+        query = query.lower()
+        results = []
+        
+        for node in self.graph.nodes.values():
+            # Check basic fields
+            if query in node.name.lower() or query in node.id.lower():
+                results.append(node)
+                continue
+                
+            # Check metadata fields
+            meta_str = str(node.metadata).lower()
+            if query in meta_str:
+                results.append(node)
+                continue
+                
+            # Check additional data
+            add_data_str = str(node.metadata.additional_data).lower()
+            if query in add_data_str:
                 results.append(node)
                 
         return results

@@ -118,6 +118,14 @@ class MergeProjectsRequest(BaseModel):
     new_project_name: str = Field(default="Merged_Project", description="Name for the resulting merged project")
 
 
+class ProcessReportsFolderRequest(BaseModel):
+    """Request model for process_reports_folder."""
+
+    project_name: str = Field(..., description="Name of the analyzed project")
+    directory_path: str = Field(..., description="Path to the directory containing Karate JSON reports")
+    output_path: Optional[str] = Field(default=None, description="Optional custom path to save the HTML file")
+
+
 class RenderExecutionReportRequest(BaseModel):
     """Request model for render_execution_report."""
 
@@ -163,6 +171,22 @@ class QueryNodeByMetadataRequest(BaseModel):
     """Request model for query_node_by_metadata."""
     key: str = Field(..., description="Metadata key to search in (e.g., 'feature', 'category')")
     value: str = Field(..., description="Value to match")
+
+
+class GlobalSearchRequest(BaseModel):
+    """Request model for global_search."""
+    query: str = Field(..., description="Search query across all fields")
+
+
+class FindPathRequest(BaseModel):
+    """Request model for find_path."""
+    source_id: str = Field(..., description="Source node ID")
+    target_id: str = Field(..., description="Target node ID")
+
+
+class ProjectOnlyRequest(BaseModel):
+    """Request model for tools that only need a project name."""
+    project_name: str = Field(..., description="Project name")
 
 
 class KarateGraphAnalyzerTool:
@@ -1419,6 +1443,75 @@ class KarateGraphAnalyzerTool:
             logger.error(f"Failed to query nodes by metadata: {e}")
             return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
+    def global_search(self, query: str) -> Dict[str, Any]:
+        """Search across all nodes in all projects."""
+        try:
+            request = GlobalSearchRequest(query=query)
+            all_results = []
+            
+            for project_name, analyzer in self.analyzers.items():
+                nodes = analyzer.global_search(request.query)
+                for node in nodes:
+                    all_results.append({
+                        "id": node.id,
+                        "type": node.type.value,
+                        "name": node.name,
+                        "project": project_name,
+                        "metadata": asdict(node.metadata)
+                    })
+            
+            return {
+                "success": True,
+                "query": query,
+                "results": all_results,
+                "count": len(all_results)
+            }
+        except Exception as e:
+            logger.error(f"Failed global search for '{query}': {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def find_path(self, source_id: str, target_id: str) -> Dict[str, Any]:
+        """Find paths between two nodes."""
+        try:
+            request = FindPathRequest(source_id=source_id, target_id=target_id)
+            
+            # Paths must be within the same project for now
+            analyzer = self._find_analyzer_for_node(source_id)
+            if not analyzer:
+                return self._error_response(4001, "QUERY_ERROR", f"Source node '{source_id}' not found")
+            
+            paths = analyzer.find_paths(request.source_id, request.target_id)
+            
+            return {
+                "success": True,
+                "source_id": source_id,
+                "target_id": target_id,
+                "paths": paths,
+                "count": len(paths)
+            }
+        except Exception as e:
+            logger.error(f"Failed to find paths: {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def get_component_importance(self, project_name: str) -> Dict[str, Any]:
+        """Get nodes sorted by their architectural importance."""
+        try:
+            if project_name not in self.analyzers:
+                return self._error_response(7001, "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
+            
+            analyzer = self.analyzers[project_name]
+            importance = analyzer.get_component_importance()
+            
+            return {
+                "success": True,
+                "project_name": project_name,
+                "importance": importance[:20],  # Top 20 for brevity
+                "total_count": len(importance)
+            }
+        except Exception as e:
+            logger.error(f"Failed to get component importance: {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
     def get_impact_radius(self, node_id: str, depth: int = 2) -> Dict[str, Any]:
         """Analyze impact within a specific radius for AI reasoning."""
         try:
@@ -1456,23 +1549,13 @@ class KarateGraphAnalyzerTool:
             return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def visualize_project(self, project_name: str, output_path: Optional[str] = None) -> Dict[str, Any]:
-        """Generate interactive HTML visualization for a project.
-        
-        Args:
-            project_name: Name of the project
-            output_path: Optional output path for HTML file
-            
-        Returns:
-            Dictionary with visualization path
-        """
+        """Generate interactive HTML visualization for a project."""
         if project_name not in self.graphs:
             return self._error_response(3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' has not been analyzed")
         
         graph = self.graphs[project_name]
         
-        # Default output path
         if not output_path:
-            # Try to save in project root / output
             project = self.registry.get(project_name)
             if project:
                 out_dir = Path(project.root_path) / "output"
@@ -1482,7 +1565,6 @@ class KarateGraphAnalyzerTool:
                 output_path = f"{project_name}_graph.html"
         
         try:
-            # Determine mode: if any node has execution status, use EXECUTION mode
             mode = VisualizationMode.DEFAULT
             if any(node.execution_status for node in graph.nodes.values()):
                 mode = VisualizationMode.EXECUTION
@@ -1499,6 +1581,89 @@ class KarateGraphAnalyzerTool:
         except Exception as e:
             logger.error(f"Failed to visualize project '{project_name}': {e}")
             return self._error_response(8001, "VISUALIZATION_ERROR", str(e))
+
+    def process_reports_folder(self, project_name: str, directory_path: str, output_path: Optional[str] = None) -> Dict[str, Any]:
+        """Scan directory for reports, apply them, and generate visualization.
+        
+        Args:
+            project_name: Name of the project
+            directory_path: Path to reports directory
+            output_path: Optional output path for visualization
+            
+        Returns:
+            Dictionary with AI-distilled summary and visualization path
+        """
+        try:
+            if project_name not in self.analyzers:
+                return self._error_response(7001, "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
+            
+            analyzer = self.analyzers[project_name]
+            
+            # 1. Process directory and get AI summary
+            ai_summary = analyzer.process_execution_directory(directory_path)
+            
+            # 2. Save state
+            self._save_graph_state(project_name, analyzer.graph)
+            
+            # 3. Visualize
+            viz_result = self.visualize_project(project_name, output_path)
+            
+            return {
+                "success": True,
+                "project_name": project_name,
+                "ai_summary": ai_summary,
+                "visualization_path": viz_result.get("visualization_path"),
+                "message": f"Processed directory successfully. Found {ai_summary['status_overview'].get('FAILED', 0) + ai_summary['status_overview'].get('PASSED', 0)} report files."
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to process reports folder: {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def render_execution_report(self, project_name: str, report_path: str, output_path: Optional[str] = None) -> Dict[str, Any]:
+        """Apply execution report and generate visualization."""
+        try:
+            if project_name not in self.analyzers:
+                return self._error_response(7001, "PROJECT_NOT_FOUND", f"Project '{project_name}' not found")
+            
+            analyzer = self.analyzers[project_name]
+            
+            # Load and apply report
+            with open(report_path, 'r', encoding='utf-8') as f:
+                report_data = json.load(f)
+                
+            applied_count = analyzer.apply_execution_report(report_data)
+            
+            # Save state
+            self._save_graph_state(project_name, analyzer.graph)
+            
+            # Visualize
+            return self.visualize_project(project_name, output_path)
+            
+        except Exception as e:
+            logger.error(f"Failed to render execution report: {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def compare_projects(self, base_project_name: str, new_project_name: str, output_path: Optional[str] = None) -> Dict[str, Any]:
+        """Compare two projects and visualize the diff."""
+        try:
+            if base_project_name not in self.graphs or new_project_name not in self.graphs:
+                return self._error_response(7001, "PROJECT_NOT_FOUND", "One or both projects not found")
+            
+            base_graph = self.graphs[base_project_name]
+            new_graph = self.graphs[new_project_name]
+            
+            # Perform diff analysis (this should be implemented in the analyzer/expert)
+            # For now, we'll just use a placeholder logic if not fully implemented
+            # ... (Implementation details for diff)
+            
+            return {
+                "success": True,
+                "message": "Comparison feature is under development"
+            }
+        except Exception as e:
+            logger.error(f"Failed to compare projects: {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def _save_graph_state(self, project_name: str, graph: DependencyGraph) -> bool:
         """Persist graph state to disk."""
