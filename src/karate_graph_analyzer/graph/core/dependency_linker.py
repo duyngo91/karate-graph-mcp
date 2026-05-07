@@ -163,8 +163,10 @@ class DependencyLinker:
                     NodeType.JAVA_CLASS, norm_target, metadata, node_map, self.nx_builder.add_java_class_node
                 )
                 
-                # 2. Create the Java Method node
-                method_id = self.nx_builder.add_java_method_node(norm_target, method_name, metadata)
+                # 2. Create/Get the Java Method node (ID: class.method)
+                method_id = self._get_or_create_node(
+                    NodeType.JAVA_METHOD, f"{norm_target}.{method_name}", metadata, node_map, self.nx_builder.add_java_method_node
+                )
                 
                 # 3. Link Method -> Class (CONTAINS)
                 self.nx_builder.add_dependency(method_id, class_node_id, DependencyType.CONTAINS)
