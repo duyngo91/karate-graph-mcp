@@ -49,7 +49,7 @@ class JavaExtractor:
         # 1. Track variables assigned via 'new' within the scenario
         # e.g., * def myObj = new MyClass()
         variable_to_class: Dict[str, str] = {}
-        new_var_pattern = r"def\s+(\w+)\s*=\s*new\s+(\w+)"
+        new_var_pattern = r"def\s+(\w+)\s*=\s*new\s+([a-zA-Z0-9_]+)"
         for step in scenario.steps:
             new_var_match = re.search(new_var_pattern, step.text)
             if new_var_match:
