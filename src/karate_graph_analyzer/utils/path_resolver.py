@@ -108,8 +108,13 @@ class PathResolver:
         norm = norm.lstrip("/")
 
         # 5. Ensure .feature extension if it's likely a feature file path
-        if norm and "." not in norm.split("/")[-1]:
-            norm += ".feature"
+        # Heuristic: must not be 'Java' and should either contain a slash or be all lowercase
+        # (Java classes usually start with Uppercase and don't have slashes until resolved)
+        filename = norm.split("/")[-1]
+        if norm and "." not in filename:
+            is_java = norm.split('.')[0] == "Java"
+            if not is_java and ("/" in norm or norm[0].islower()):
+                norm += ".feature"
         
         return norm
     @staticmethod
