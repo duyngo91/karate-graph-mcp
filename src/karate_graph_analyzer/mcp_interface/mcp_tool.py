@@ -318,18 +318,18 @@ class KarateGraphAnalyzerTool:
 
     def _load_or_build_project_graph(
         self, project: Project, include_structural_nodes: bool = False
-    ) -> DependencyGraph:
+    ) -> tuple[DependencyGraph, bool]:
         """Load a cached project graph or build and persist a fresh one."""
         graph = self._load_graph_state(project.name)
 
         # Check if cached graph matches requested structural node setting
         # If cache exists but has different structural setting, we should rebuild
         if graph and getattr(graph, "include_structural_nodes", False) == include_structural_nodes:
-            return graph
+            return graph, True
 
         graph = GraphBuilder(include_structural_nodes=include_structural_nodes).build_from_project(project)
         self._save_graph_state(project.name, graph)
-        return graph
+        return graph, False
 
     def _resolve_project_visualization_path(
         self, project_name: str, output_path: Optional[str] = None
@@ -550,20 +550,21 @@ class KarateGraphAnalyzerTool:
                     f"Project '{project_name}' not found in registry",
                 )
 
-            graph = self._load_or_build_project_graph(
+            graph, was_cached = self._load_or_build_project_graph(
                 project, include_structural_nodes=request.include_structural_nodes
             )
             self._store_runtime_graph(project_name, graph)
 
+            status_msg = "(Persistent State Loaded)" if was_cached else "(Freshly Analyzed)"
             logger.info(
-                f"Analyzed project '{project_name}': "
+                f"Analyzed project '{project_name}' {status_msg}: "
                 f"{len(graph.nodes)} nodes, {len(graph.edges)} edges"
             )
 
             return {
                 "success": True,
                 "project_name": project_name,
-                "message": f"Analysis completed for {project_name} (Persistent State Loaded)",
+                "message": f"Analysis completed for {project_name} {status_msg}",
                 "statistics": self._build_graph_statistics(graph),
                 "cycles": graph.cycles,
             }
