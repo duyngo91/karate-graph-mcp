@@ -77,4 +77,27 @@ class JavaExtractor:
                     })
                     logger.debug(f"Detected Java constructor usage: {all_aliases[alias]}")
 
+        # 3. Detect potential direct class calls (e.g. MyUtils.doSomething)
+        # even if not in aliases, if it starts with an uppercase letter
+        potential_class_pattern = r"([A-Z][a-zA-Z0-9_]*)\.([a-zA-Z0-9_]+)\("
+        for step in scenario.steps:
+            text = step.text
+            class_matches = re.findall(potential_class_pattern, text)
+            for class_name, method in class_matches:
+                # If it's already caught by an alias, skip it to avoid duplicates
+                if any(u.get("class_path") == class_name and u.get("method_name") == method for u in usages):
+                    continue
+                
+                # Check if it's a known alias (could be lowercase alias for uppercase class)
+                if class_name in all_aliases:
+                    class_path = all_aliases[class_name]
+                else:
+                    class_path = class_name # Fallback to class name as path
+                
+                usages.append({
+                    "class_path": class_path,
+                    "method_name": method
+                })
+                logger.debug(f"Detected potential Java class usage: {class_path}.{method}")
+
         return usages
