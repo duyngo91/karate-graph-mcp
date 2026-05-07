@@ -288,7 +288,7 @@ class FeatureFileParser:
             all_java_aliases = self.config.java_aliases.copy()
             all_java_aliases.update(java_extractor.local_aliases)
             
-            used_java_usages = java_extractor.extract_java_usages(scenario, all_java_aliases)
+            used_java_usages = java_extractor.extract_java_usages(all_steps, all_java_aliases)
             for usage in used_java_usages:
                 java_class = usage["class_path"]
                 method_name = usage["method_name"]

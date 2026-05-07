@@ -38,19 +38,19 @@ class JavaExtractor:
             logger.debug(f"Extracted local Java alias: {alias} -> {class_path}")
         return aliases
 
-    def extract_java_usages(self, scenario: Scenario, all_aliases: Dict[str, str]) -> List[Dict[str, str]]:
-        """Extract Java class and method usages from a scenario's steps.
+    def extract_java_usages(self, steps: List[Step], all_aliases: Dict[str, str]) -> List[Dict[str, str]]:
+        """Extract Java class and method usages from a list of steps.
         
         Returns:
             List of dictionaries containing 'class_path' and 'method_name'
         """
         usages = []
         
-        # 1. Track variables assigned via 'new' within the scenario
+        # 1. Track variables assigned via 'new' within these steps
         # e.g., * def myObj = new MyClass()
         variable_to_class: Dict[str, str] = {}
         new_var_pattern = r"def\s+(\w+)\s*=\s*new\s+([a-zA-Z0-9_]+)"
-        for step in scenario.steps:
+        for step in steps:
             new_var_match = re.search(new_var_pattern, step.text)
             if new_var_match:
                 var_name, alias = new_var_match.groups()
@@ -58,7 +58,7 @@ class JavaExtractor:
                     variable_to_class[var_name] = all_aliases[alias]
                     logger.debug(f"Tracked Java variable: {var_name} -> {all_aliases[alias]}")
 
-        for step in scenario.steps:
+        for step in steps:
             text = step.text
             
             # 2. Match target.method(...) - target can be alias, variable, or class
@@ -73,7 +73,7 @@ class JavaExtractor:
                 elif target in variable_to_class:
                     class_path = variable_to_class[target]
                 elif target[0].isupper() and len(target) > 1:
-                    # Direct class call (starts with UpperCase, length > 1 to avoid matching single letters)
+                    # Direct class call (starts with UpperCase)
                     class_path = target
                 
                 if class_path:
