@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import networkx as nx
+
 from pydantic import BaseModel, Field, field_validator
 
 from karate_graph_analyzer.analyzer.dependency_analyzer import DependencyAnalyzer
@@ -1209,8 +1211,8 @@ class KarateGraphAnalyzerTool:
         # We need the project root path
         project_root = ""
         for p in self.registry.list():
-            if p["name"] == project_name:
-                project_root = p["root_path"]
+            if p.name == project_name:
+                project_root = p.root_path
                 break
                 
         smart_suggestion = analyzer.get_smart_fix_suggestion(node_id, error_message, project_root)
@@ -1274,7 +1276,6 @@ class KarateGraphAnalyzerTool:
         try:
             analyzer = self._find_analyzer_for_node(node_id)
             if not analyzer: return self._error_response(4001, "QUERY_ERROR", f"Node '{node_id}' not found")
-            import networkx as nx
             neighborhood_ids = nx.single_source_shortest_path_length(analyzer._nx_graph.reverse(), node_id, cutoff=depth)
             impacted_nodes = []
             for nid, dist in neighborhood_ids.items():
