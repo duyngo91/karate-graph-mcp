@@ -288,14 +288,20 @@ class FeatureFileParser:
             all_java_aliases = self.config.java_aliases.copy()
             all_java_aliases.update(java_extractor.local_aliases)
             
-            used_java_classes = java_extractor.extract_java_usages(scenario, all_java_aliases)
-            for java_class in used_java_classes:
+            used_java_usages = java_extractor.extract_java_usages(scenario, all_java_aliases)
+            for usage in used_java_usages:
+                java_class = usage["class_path"]
+                method_name = usage["method_name"]
+                
+                # Create a specific target for method-level tracking if needed
+                # For now, we'll keep the class as the target but add the method to parameters
                 dependencies.append(Dependency(
                     type=DependencyType.JAVA,
                     target=java_class,
                     line_number=scenario.line_number,
                     parameters={
                         "class_path": java_class,
+                        "method_name": method_name,
                         "scenario_name": scenario.name,
                         "scenario_tags": scenario.tags
                     }

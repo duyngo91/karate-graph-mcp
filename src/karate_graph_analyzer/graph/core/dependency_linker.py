@@ -154,6 +154,23 @@ class DependencyLinker:
         if dep.type == DependencyType.API:
             return self.create_api_hierarchy(dep.target, metadata, node_map)
             
+        if dep.type == DependencyType.JAVA:
+            method_name = dep.parameters.get("method_name")
+            if method_name:
+                logger.info(f"LINKING JAVA METHOD: {norm_target}.{method_name}")
+                # 1. Create/Get the Java Class node
+                class_node_id = self._get_or_create_node(
+                    NodeType.JAVA_CLASS, norm_target, metadata, node_map, self.nx_builder.add_java_class_node
+                )
+                
+                # 2. Create the Java Method node
+                method_id = self.nx_builder.add_java_method_node(norm_target, method_name, metadata)
+                
+                # 3. Link Method -> Class (CONTAINS)
+                self.nx_builder.add_dependency(method_id, class_node_id, DependencyType.CONTAINS)
+                
+                return method_id
+
         # Common pattern for WORKFLOW, COMMON, PAGE, LOCATOR, DATABASE
         node_id = self._get_or_create_node(
             node_type, 

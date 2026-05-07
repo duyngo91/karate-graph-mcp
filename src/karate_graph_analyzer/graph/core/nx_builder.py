@@ -46,6 +46,7 @@ class NetworkXBuilder:
             NodeType.DATABASE: "db",
             NodeType.LOCATOR: "loc",
             NodeType.JAVA_CLASS: "java",
+            NodeType.JAVA_METHOD: "jvm",
         }
         prefix = prefix_map.get(node_type, "node")
         digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
@@ -269,6 +270,12 @@ class NetworkXBuilder:
         identity = "|".join([metadata.project_name, NodeType.JAVA_CLASS.value, class_path])
         node_id = self._generate_stable_node_id(NodeType.JAVA_CLASS, identity)
         return self._add_node_internal(node_id, NodeType.JAVA_CLASS, class_path, metadata)
+
+    def add_java_method_node(self, class_path: str, method_name: str, metadata: NodeMetadata) -> str:
+        """Add Java method node to graph."""
+        identity = "|".join([metadata.project_name, NodeType.JAVA_METHOD.value, f"{class_path}.{method_name}"])
+        node_id = self._generate_stable_node_id(NodeType.JAVA_METHOD, identity)
+        return self._add_node_internal(node_id, NodeType.JAVA_METHOD, f"{class_path}.{method_name}", metadata)
 
     def update_node_metadata(self, node_id: str, updates: Dict[str, Any]) -> None:
         """Update existing node's metadata (additional_data, variants, etc.)."""

@@ -1197,8 +1197,28 @@ class KarateGraphAnalyzerTool:
         if analyzer_error:
             return analyzer_error
         analyzer = self.analyzers[project_name]
-        suggestions = analyzer.fix_expert.suggest_fixes(node_id, error_message)
-        return {"success": True, "project_name": project_name, "node_id": node_id, "suggestions": suggestions, "count": len(suggestions)}
+        
+        # 1. Get historical fixes
+        historical_suggestions = analyzer.fix_expert.suggest_fixes(node_id, error_message)
+        
+        # 2. Get smart AI suggestion (live analysis)
+        # We need the project root path
+        project_root = ""
+        for p in self.registry.list_projects():
+            if p["name"] == project_name:
+                project_root = p["root_path"]
+                break
+                
+        smart_suggestion = analyzer.get_smart_fix_suggestion(node_id, error_message, project_root)
+        
+        return {
+            "success": True, 
+            "project_name": project_name, 
+            "node_id": node_id, 
+            "smart_suggestion": smart_suggestion,
+            "historical_suggestions": historical_suggestions, 
+            "count": len(historical_suggestions) + (1 if smart_suggestion else 0)
+        }
 
     def get_subgraph(self, node_id: str, radius: int = 2) -> Dict[str, Any]:
         try:
