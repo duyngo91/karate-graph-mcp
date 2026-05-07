@@ -224,6 +224,9 @@ class KarateGraphAnalyzerTool:
         else:
             self.storage_dir = Path(".karate_cache") / "graphs"
             
+        import os
+        logger.info(f"KarateGraphAnalyzerTool initialized in CWD: {os.getcwd()}")
+        logger.info(f"Using storage directory: {self.storage_dir.absolute()}")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
         # Load existing projects from storage
