@@ -18,9 +18,9 @@ from pydantic import BaseModel, Field, field_validator
 from karate_graph_analyzer.analyzer.dependency_analyzer import DependencyAnalyzer
 from karate_graph_analyzer.cache.cache_manager import CacheManager
 from karate_graph_analyzer.exporters import ExporterFactory
-from karate_graph_analyzer.graph.graph_builder import GraphBuilder
 from karate_graph_analyzer.mcp_interface.search_tools import SearchTools
 from karate_graph_analyzer.services.graph_cache_service import GraphCacheService
+from karate_graph_analyzer.services.project_lifecycle_service import ProjectLifecycleService
 from karate_graph_analyzer.services.query_service import QueryService
 from karate_graph_analyzer.services.report_service import ReportService
 from karate_graph_analyzer.models import (
@@ -194,6 +194,23 @@ class ProjectOnlyRequest(BaseModel):
     project_name: str = Field(..., description="Project name")
 
 
+class QueryPresetRequest(BaseModel):
+    """Request model for preset query shortcuts."""
+
+    project_name: str = Field(..., min_length=1, description="Project name")
+    limit: int = Field(default=10, ge=1, le=200, description="Max number of items")
+
+
+class AutoFixHintPackRequest(BaseModel):
+    """Request model for auto fix hint pack."""
+
+    project_name: str = Field(..., min_length=1, description="Project name")
+    node_id: str = Field(..., min_length=1, description="Failing node id")
+    error_message: str = Field(..., min_length=1, description="Error message")
+    max_historical: int = Field(
+        default=3, ge=1, le=20, description="Max historical suggestions included"
+    )
+
 class KarateGraphAnalyzerTool:
     """MCP protocol interface for graph analyzer."""
 
@@ -230,6 +247,7 @@ class KarateGraphAnalyzerTool:
         logger.info(f"Using storage directory: {self.storage_dir.absolute()}")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.graph_cache = GraphCacheService(self.storage_dir)
+        self.lifecycle_service = ProjectLifecycleService(self.registry, self.graph_cache)
         self.query_service = QueryService()
         self.report_service = ReportService()
 
@@ -330,13 +348,7 @@ class KarateGraphAnalyzerTool:
         self, project: Project, include_structural_nodes: bool = False
     ) -> tuple[DependencyGraph, bool]:
         """Load a cached project graph or build and persist a fresh one."""
-        graph = self.graph_cache.load_if_fresh(project, include_structural_nodes)
-        if graph:
-            return graph, True
-
-        graph = GraphBuilder(include_structural_nodes=include_structural_nodes).build_from_project(project)
-        self.graph_cache.save_project_graph(project, graph, include_structural_nodes)
-        return graph, False
+        return self.lifecycle_service.load_or_build(project, include_structural_nodes)
 
     def _resolve_project_visualization_path(
         self, project_name: str, output_path: Optional[str] = None
@@ -610,18 +622,18 @@ class KarateGraphAnalyzerTool:
             # Validate input
             request = AnalyzeProjectRequest(project_name=project_name, include_structural_nodes=include_structural_nodes)
 
-            # Get project from registry
-            project = self.registry.get(request.project_name)
-            if not project:
+            try:
+                _, graph, was_cached = self.lifecycle_service.analyze(
+                    request.project_name,
+                    include_structural_nodes=request.include_structural_nodes,
+                )
+            except KeyError:
                 return self._error_response(
                     3003,
                     "PROJECT_MANAGEMENT",
                     f"Project '{project_name}' not found in registry",
                 )
 
-            graph, was_cached = self._load_or_build_project_graph(
-                project, include_structural_nodes=request.include_structural_nodes
-            )
             self._store_runtime_graph(project_name, graph)
 
             status_msg = "(Persistent State Loaded)" if was_cached else "(Freshly Analyzed)"
@@ -1205,6 +1217,108 @@ class KarateGraphAnalyzerTool:
             lambda tools: tools.find_unused_components(project_name)
         )
 
+    def top_hotspots(self, project_name: str, limit: int = 10) -> Dict[str, Any]:
+        """Preset: return top failure hotspots."""
+        request = QueryPresetRequest(project_name=project_name, limit=limit)
+        hotspots_result = self.get_failure_hotspots(request.project_name)
+        if not hotspots_result.get("success"):
+            return hotspots_result
+
+        hotspots = hotspots_result.get("hotspots", [])
+        return {
+            "success": True,
+            "preset": "top-hotspots",
+            "project_name": request.project_name,
+            "limit": request.limit,
+            "results": hotspots[: request.limit],
+            "count": min(len(hotspots), request.limit),
+            "total_available": len(hotspots),
+        }
+
+    def unused_components(self, project_name: str, limit: int = 10) -> Dict[str, Any]:
+        """Preset: return flattened unused component list."""
+        request = QueryPresetRequest(project_name=project_name, limit=limit)
+        unused_result = self.find_unused_components(request.project_name)
+        if not unused_result.get("success"):
+            return unused_result
+
+        flattened: List[Dict[str, Any]] = []
+        by_type = unused_result.get("unused_components", {})
+        for component_type, nodes in by_type.items():
+            for node in nodes:
+                item = dict(node)
+                item["component_type"] = component_type
+                flattened.append(item)
+
+        flattened.sort(key=lambda item: item.get("name", ""))
+        return {
+            "success": True,
+            "preset": "unused-components",
+            "project_name": request.project_name,
+            "limit": request.limit,
+            "results": flattened[: request.limit],
+            "count": min(len(flattened), request.limit),
+            "total_available": len(flattened),
+        }
+
+    def flaky_risk(self, project_name: str, limit: int = 10) -> Dict[str, Any]:
+        """Preset: return test cases with mixed pass/fail history."""
+        request = QueryPresetRequest(project_name=project_name, limit=limit)
+        graph_error = self._require_graph(request.project_name)
+        if graph_error:
+            return graph_error
+
+        graph = self.graphs[request.project_name]
+        flaky_items: List[Dict[str, Any]] = []
+
+        for node in graph.nodes.values():
+            if node.type.value != "TEST_CASE":
+                continue
+
+            history = node.metadata.execution_history or []
+            if len(history) < 2:
+                continue
+
+            pass_count = sum(1 for status in history if status == "PASSED")
+            fail_count = sum(1 for status in history if status == "FAILED")
+            if pass_count == 0 or fail_count == 0:
+                continue
+
+            total_runs = pass_count + fail_count
+            failure_rate = fail_count / total_runs if total_runs else 0.0
+            flaky_score = min(pass_count, fail_count) / total_runs if total_runs else 0.0
+
+            flaky_items.append(
+                {
+                    "id": node.id,
+                    "name": node.name,
+                    "jira_tags": node.metadata.jira_tags,
+                    "total_runs": total_runs,
+                    "pass_count": pass_count,
+                    "fail_count": fail_count,
+                    "failure_rate": round(failure_rate, 4),
+                    "flaky_score": round(flaky_score, 4),
+                    "last_status": node.execution_status,
+                    "file_path": node.metadata.file_path,
+                    "line_number": node.metadata.line_number,
+                }
+            )
+
+        flaky_items.sort(
+            key=lambda item: (item["flaky_score"], item["total_runs"], item["failure_rate"]),
+            reverse=True,
+        )
+
+        return {
+            "success": True,
+            "preset": "flaky-risk",
+            "project_name": request.project_name,
+            "limit": request.limit,
+            "results": flaky_items[: request.limit],
+            "count": min(len(flaky_items), request.limit),
+            "total_available": len(flaky_items),
+        }
+
     def get_project_health(self, project_name: str) -> Dict[str, Any]:
         analyzer_error = self._require_analyzer(project_name)
         if analyzer_error:
@@ -1273,6 +1387,91 @@ class KarateGraphAnalyzerTool:
             "smart_suggestion": smart_suggestion,
             "historical_suggestions": historical_suggestions, 
             "count": len(historical_suggestions) + (1 if smart_suggestion else 0)
+        }
+
+    def auto_fix_hint_pack(
+        self,
+        project_name: str,
+        node_id: str,
+        error_message: str,
+        max_historical: int = 3,
+    ) -> Dict[str, Any]:
+        """Build a step-by-step checklist from smart and historical suggestions."""
+        request = AutoFixHintPackRequest(
+            project_name=project_name,
+            node_id=node_id,
+            error_message=error_message,
+            max_historical=max_historical,
+        )
+
+        suggestions_result = self.get_fix_suggestions(
+            request.project_name, request.node_id, request.error_message
+        )
+        if not suggestions_result.get("success"):
+            return suggestions_result
+
+        checklist: List[Dict[str, Any]] = []
+
+        smart = suggestions_result.get("smart_suggestion") or {}
+        if isinstance(smart, dict) and smart and not smart.get("error"):
+            checklist.append(
+                {
+                    "step": 1,
+                    "source": "smart",
+                    "title": f"Validate root cause: {smart.get('root_cause', 'Unknown')}",
+                    "action": smart.get("suggestion", "Inspect the failing component logic."),
+                    "confidence": smart.get("confidence", 0.0),
+                    "details": {
+                        "node_name": smart.get("node_name"),
+                        "node_type": smart.get("node_type"),
+                        "error_summary": smart.get("error_summary"),
+                        "file_path": smart.get("file_path"),
+                    },
+                }
+            )
+
+        historical_suggestions = suggestions_result.get("historical_suggestions", [])
+        for index, item in enumerate(historical_suggestions[: request.max_historical], start=1):
+            checklist.append(
+                {
+                    "step": len(checklist) + 1,
+                    "source": "historical",
+                    "title": f"Apply historical fix pattern #{index}",
+                    "action": item.get("description", "Reuse previous successful remediation."),
+                    "confidence": item.get("confidence", 0.0),
+                    "details": {
+                        "solution": item.get("solution"),
+                        "error_pattern": item.get("error_pattern"),
+                        "times_used": item.get("times_used"),
+                        "last_used": item.get("last_used"),
+                    },
+                }
+            )
+
+        checklist.append(
+            {
+                "step": len(checklist) + 1,
+                "source": "workflow",
+                "title": "Re-run impacted scope",
+                "action": "Execute impacted tests first, then full regression for this project.",
+                "confidence": 1.0,
+                "details": {
+                    "project_name": request.project_name,
+                    "node_id": request.node_id,
+                },
+            }
+        )
+
+        return {
+            "success": True,
+            "preset": "auto-fix-hint-pack",
+            "project_name": request.project_name,
+            "node_id": request.node_id,
+            "error_message": request.error_message,
+            "checklist": checklist,
+            "count": len(checklist),
+            "smart_suggestion_available": bool(smart and not smart.get("error")),
+            "historical_suggestions_available": len(historical_suggestions),
         }
 
     def get_subgraph(self, node_id: str, radius: int = 2) -> Dict[str, Any]:
