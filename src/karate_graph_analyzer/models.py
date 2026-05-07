@@ -58,6 +58,7 @@ class DependencyType(str, Enum):
     PAGE = "PAGE"
     DATABASE = "DATABASE"
     LOCATOR = "LOCATOR"
+    JAVA = "JAVA"
     SETUP = "SETUP"
     DATA = "DATA"
     CONTAINS = "CONTAINS"
@@ -79,6 +80,7 @@ class NodeType(str, Enum):
     DATA = "DATA"
     FOLDER = "FOLDER"
     FILE = "FILE"
+    JAVA_CLASS = "JAVA_CLASS"
 
 
 class FlowType(str, Enum):
@@ -317,6 +319,9 @@ class ParserConfig:
     # Reverse mapping for logical name resolution (physical -> logical)
     global_reverse_mapping: Dict[str, str] = field(default_factory=dict)
 
+    # Java Aliases (variable_name -> java_class_path)
+    java_aliases: Dict[str, str] = field(default_factory=dict)
+
     # Tags to ignore for node identification and display (regression/technical tags)
     metadata_tags: List[str] = field(
         default_factory=lambda: ["@healing", "@smoke", "@regression", "@ignore"]
@@ -326,18 +331,7 @@ class ParserConfig:
     )
 
     # Mapping keywords in file paths to Business Domains for visualization grouping
-    domain_mapping: Dict[str, str] = field(
-        default_factory=lambda: {
-            'authentication': 'Authentication', 'auth': 'Authentication', 'login': 'Authentication',
-            'orders': 'Order Management', 'order': 'Order Management',
-            'products': 'Product Catalog', 'product': 'Product Catalog', 'catalog': 'Product Catalog',
-            'users': 'User Management', 'user': 'User Management', 'profile': 'User Management',
-            'payments': 'Payment Processing', 'payment': 'Payment Processing', 'checkout': 'Payment Processing',
-            'cart': 'Shopping Cart', 'shopping': 'Shopping Cart',
-            'search': 'Search', 'notification': 'Notifications', 'notifications': 'Notifications',
-            'admin': 'Administration', 'report': 'Reporting', 'reports': 'Reporting', 'analytics': 'Analytics',
-        }
-    )
+    domain_mapping: Dict[str, str] = field(default_factory=dict)
 
     # Jira base URL for clickable links
     jira_base_url: Optional[str] = None # e.g. "https://jira.example.com/browse/"

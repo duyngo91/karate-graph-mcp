@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Optional, Any
+import re
+from typing import TYPE_CHECKING, Optional, Any, List
 from karate_graph_analyzer.models import NodeType, Scenario, ComponentCategory, FlowType
 
 if TYPE_CHECKING:
@@ -109,8 +110,31 @@ class PathClassifier:
                 return clean_tags[0]
             return scenario.name or f"Unnamed at line {scenario.line_number}"
     
-    def detect_business_domain(self, file_path: str) -> str:
-        """Detect business domain from file path."""
+    def detect_business_domain(self, file_path: str, tags: Optional[List[str]] = None) -> str:
+        """Detect business domain from tags (priority) or file path (fallback)."""
+        # 1. Try to detect from tags first (The "Rule" you mentioned)
+        if tags and self.context and self.context.config:
+            cfg = self.context.config
+            technical_tags = {t.lower() for t in cfg.metadata_tags}
+            
+            for t in tags:
+                # Skip technical tags (like @regression, @smoke)
+                if t.lower() in technical_tags:
+                    continue
+                    
+                # Skip Jira/ALM tags using patterns defined in config
+                is_metadata = False
+                for pattern in cfg.metadata_tag_patterns:
+                    if re.match(pattern, t):
+                        is_metadata = True
+                        break
+                
+                if not is_metadata:
+                    # Found a business tag (e.g., @Lending, @Payment)
+                    # Return it cleaned up as the domain
+                    return t.lstrip('@').replace('-', ' ').replace('_', ' ').title()
+
+        # 2. Fallback to existing path-based detection
         normalized_path = file_path.replace('\\', '/').lower()
         feature_map = {}
         if self.context and self.context.config:

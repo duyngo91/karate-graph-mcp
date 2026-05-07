@@ -45,6 +45,7 @@ class NetworkXBuilder:
             NodeType.ACTION: "act",
             NodeType.DATABASE: "db",
             NodeType.LOCATOR: "loc",
+            NodeType.JAVA_CLASS: "java",
         }
         prefix = prefix_map.get(node_type, "node")
         digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
@@ -262,6 +263,12 @@ class NetworkXBuilder:
         identity = "|".join([metadata.project_name, NodeType.FILE.value, file_path])
         node_id = f"file_{hashlib.sha1(identity.encode('utf-8')).hexdigest()[:12]}"
         return self._add_node_internal(node_id, NodeType.FILE, os.path.basename(file_path), metadata)
+
+    def add_java_class_node(self, class_path: str, metadata: NodeMetadata) -> str:
+        """Add Java class node to graph."""
+        identity = "|".join([metadata.project_name, NodeType.JAVA_CLASS.value, class_path])
+        node_id = self._generate_stable_node_id(NodeType.JAVA_CLASS, identity)
+        return self._add_node_internal(node_id, NodeType.JAVA_CLASS, class_path, metadata)
 
     def update_node_metadata(self, node_id: str, updates: Dict[str, Any]) -> None:
         """Update existing node's metadata (additional_data, variants, etc.)."""

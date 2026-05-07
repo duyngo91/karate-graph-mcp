@@ -89,6 +89,7 @@ class DependencyLinker:
             DependencyType.LOCATOR: NodeType.LOCATOR,
             DependencyType.COMMON: NodeType.COMMON,
             DependencyType.DATA: NodeType.DATA,
+            DependencyType.JAVA: NodeType.JAVA_CLASS,
         }
 
         if dep.type == DependencyType.SETUP:
@@ -178,6 +179,7 @@ class DependencyLinker:
             NodeType.LOCATOR: self.nx_builder.add_locator_node,
             NodeType.DATABASE: self.nx_builder.add_database_node,
             NodeType.DATA: self.nx_builder.add_data_node,
+            NodeType.JAVA_CLASS: self.nx_builder.add_java_class_node,
         }
         return mapping.get(node_type)
 

@@ -26,6 +26,7 @@ class KarateConfigParser:
         self.project_root = Path(project_root)
         self.config_cache: Dict[str, Dict[str, str]] = {}
         self.global_reverse_mapping: Dict[str, str] = {}  # physical -> logical
+        self.java_aliases: Dict[str, str] = {}  # alias -> full.class.Path
 
     def auto_configure(self) -> "ParserConfig":
         """Perform full auto-detection and return a ParserConfig object.
@@ -43,7 +44,8 @@ class KarateConfigParser:
             variable_patterns=auto_config,
             scoped_url_mappings=scoped_configs,
             global_reverse_mapping=self.global_reverse_mapping,
-            env_url_mapping=env_mapping
+            env_url_mapping=env_mapping,
+            java_aliases=self.java_aliases
         )
     
     def find_config_files(self) -> List[Path]:
@@ -141,6 +143,18 @@ class KarateConfigParser:
                     json_vars = self.parse_json_config(json_path)
                     variables.update(json_vars)
                     logger.debug(f"Extracted {len(json_vars)} variables from {json_file}")
+            
+            # 4. Extract Java.type aliases
+            # Pattern: var alias = Java.type('com.company.Utils')
+            java_patterns = [
+                r"(?:var|let|const)\s+([\w\.]+)\s*=\s*Java\.type\s*\(\s*['\"]([^'\"]+)['\"]\s*\)",
+                r"([\w\.]+)\s*:\s*Java\.type\s*\(\s*['\"]([^'\"]+)['\"]\s*\)"
+            ]
+            for pattern in java_patterns:
+                java_matches = re.findall(pattern, content)
+                for alias, class_path in java_matches:
+                    self.java_aliases[alias] = class_path
+                    logger.info(f"Extracted Java Alias: {alias} -> {class_path}")
             
             logger.info(f"Parsed {config_path.name}: {len(variables)} variables")
             return variables

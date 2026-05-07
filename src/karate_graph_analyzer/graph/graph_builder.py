@@ -204,9 +204,9 @@ class GraphBuilder:
                         self.dependency_linker.get_or_create_dependency_node(d, project.name, node_map, context=context)
                     continue
                 
-                # Add business domain classification
+                # Add business domain classification (Prioritize Tags, fallback to path)
                 if self.path_classifier and scenario.file_path:
-                    feature = self.path_classifier.detect_business_domain(scenario.file_path)
+                    feature = self.path_classifier.detect_business_domain(scenario.file_path, scenario.tags)
                     metadata.additional_data['feature'] = feature
                 
                 # Create main node
