@@ -49,14 +49,21 @@ class JavaExtractor:
         # 1. Track variables assigned via 'new' within these steps
         # e.g., * def myObj = new MyClass()
         variable_to_class: Dict[str, str] = {}
-        new_var_pattern = r"def\s+(\w+)\s*=\s*new\s+([a-zA-Z0-9_]+)"
+        # Support both 'def var = new Alias()' and '* def var = new Alias()'
+        new_var_pattern = r"(?:def\s+)(\w+)\s*=\s*new\s+([a-zA-Z0-9_]+)"
+        
+        logger.info(f"JAVA EXTRACTOR: Processing {len(steps)} steps with {len(all_aliases)} aliases")
+        
         for step in steps:
-            new_var_match = re.search(new_var_pattern, step.text)
+            text = step.text
+            new_var_match = re.search(new_var_pattern, text)
             if new_var_match:
                 var_name, alias = new_var_match.groups()
                 if alias in all_aliases:
                     variable_to_class[var_name] = all_aliases[alias]
-                    logger.info(f"JAVA EXTRACTOR TRACKED VARIABLE: {var_name} -> {all_aliases[alias]}")
+                    logger.info(f"JAVA EXTRACTOR: Tracked variable '{var_name}' as class '{all_aliases[alias]}'")
+                else:
+                    logger.warning(f"JAVA EXTRACTOR: Variable '{var_name}' uses unknown alias '{alias}'")
 
         for step in steps:
             text = step.text
@@ -67,17 +74,21 @@ class JavaExtractor:
             for target, method in method_matches:
                 class_path = None
                 
+                # IMPORTANT: Skip 'Java.type' calls
+                if target.lower() == "java" and method == "type":
+                    continue
+                
                 # Try to resolve target
                 if target in all_aliases:
                     class_path = all_aliases[target]
                 elif target in variable_to_class:
                     class_path = variable_to_class[target]
-                elif target[0].isupper() and target != "Java" and len(target) > 1:
+                elif target[0].isupper() and target.lower() != "java" and len(target) > 1:
                     # Direct class call (starts with UpperCase)
                     class_path = target
                 
                 if class_path:
-                    logger.info(f"JAVA EXTRACTOR FOUND METHOD: {class_path}.{method}")
+                    logger.info(f"JAVA EXTRACTOR: Found method call {class_path}.{method}")
                     usages.append({
                         "class_path": class_path,
                         "method_name": method
@@ -89,7 +100,7 @@ class JavaExtractor:
                 if re.search(new_pattern, text):
                     # Check if already added (some regex might overlap)
                     if not any(u["class_path"] == class_path and u["method_name"] == "[Constructor]" for u in usages):
-                        logger.info(f"JAVA EXTRACTOR FOUND CONSTRUCTOR: {class_path}")
+                        logger.info(f"JAVA EXTRACTOR: Found constructor for {class_path}")
                         usages.append({
                             "class_path": class_path,
                             "method_name": "[Constructor]"
