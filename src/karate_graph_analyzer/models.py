@@ -117,6 +117,16 @@ class Examples:
     table: GherkinTable
     line_number: int
 
+    @property
+    def headers(self) -> List[str]:
+        """Backward-compatible access to the examples table headers."""
+        return self.table.headers
+
+    @property
+    def rows(self) -> List[List[str]]:
+        """Backward-compatible access to the examples table rows."""
+        return self.table.rows
+
 
 @dataclass
 class Scenario:
@@ -217,6 +227,7 @@ class DependencyGraph:
     edges: Dict[str, Edge]
     cycles: List[List[str]] = field(default_factory=list)
     config: Optional["ParserConfig"] = None
+    include_structural_nodes: bool = False
 
     def merge(self, other: "DependencyGraph", new_project_name: Optional[str] = None) -> "DependencyGraph":
         """Merge another graph into this one."""
@@ -280,8 +291,6 @@ class ParserConfig:
     page_object_directories: List[str] = field(default_factory=lambda: ["pages", "webPages"])
     locator_directories: List[str] = field(default_factory=lambda: ["locators", "resources/locators"])
     variable_patterns: Dict[str, str] = field(default_factory=dict)
-    base_url_mapping: Dict[str, str] = field(default_factory=dict)
-    global_reverse_mapping: Dict[str, str] = field(default_factory=dict)  # physical -> logical
     api_extraction_rules: List[str] = field(
         default_factory=lambda: [
             r"url\s+['\"]([^'\"]+)['\"]",  # url 'http://...'

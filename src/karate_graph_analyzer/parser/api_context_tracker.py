@@ -13,6 +13,7 @@ class ApiContextTracker:
         self.current_base_url_dep: Optional[Dependency] = None
         self.current_api_paths: List[Dependency] = []
         self.has_emitted_api = False
+        self.last_emitted_target: Optional[str] = None
         self.dependencies: List[Dependency] = []
 
     def process_dependency(self, dep: Dependency, scenario: Scenario, http_method: str) -> bool:
@@ -31,6 +32,9 @@ class ApiContextTracker:
         elif dep.parameters.get("path_only"):
             self.current_api_paths.append(dep)
         else:
+            if self.current_base_url_dep is not None:
+                self.emit_api_call(dep.line_number, scenario, http_method)
+                self.current_api_paths = []
             self.current_base_url_dep = dep
             
         return True
@@ -72,10 +76,11 @@ class ApiContextTracker:
                 }
             ))
             self.has_emitted_api = True
+            self.last_emitted_target = full_url
             
         elif self.current_base_url_dep:
             # URL only
-            if is_final and self.has_emitted_api:
+            if is_final and self.last_emitted_target == self.current_base_url_dep.target:
                 return
                 
             d = self.current_base_url_dep
@@ -86,6 +91,7 @@ class ApiContextTracker:
             })
             self.dependencies.append(d)
             self.has_emitted_api = True
+            self.last_emitted_target = d.target
             
         elif self.current_api_paths:
             # Path only (fallback)
@@ -104,3 +110,4 @@ class ApiContextTracker:
                 })
                 self.dependencies.append(p)
             self.has_emitted_api = True
+            self.last_emitted_target = self.current_api_paths[-1].target

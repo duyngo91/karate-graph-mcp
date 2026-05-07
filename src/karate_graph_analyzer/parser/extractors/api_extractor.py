@@ -77,13 +77,19 @@ class ApiExtractor(IDependencyExtractor):
                 sanitized_endpoint = self.sanitize_url(endpoint)
                 if sanitized_endpoint:
                     logical_endpoint = self.normalize_logical_url(sanitized_endpoint)
+                    target_endpoint = (
+                        sanitized_endpoint
+                        if sanitized_endpoint.startswith(("http://", "https://"))
+                        else logical_endpoint
+                    )
                     dependencies.append(
                         Dependency(
                             type=DependencyType.API,
-                            target=logical_endpoint,
+                            target=target_endpoint,
                             line_number=line_number,
                             parameters={
-                                "physical_url": sanitized_endpoint if logical_endpoint != sanitized_endpoint else None
+                                "physical_url": sanitized_endpoint if logical_endpoint != sanitized_endpoint else None,
+                                "logical_url": logical_endpoint if logical_endpoint != sanitized_endpoint else None,
                             },
                         )
                     )

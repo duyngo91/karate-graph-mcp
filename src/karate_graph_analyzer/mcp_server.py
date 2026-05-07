@@ -65,14 +65,15 @@ def list_projects() -> List[Dict[str, Any]]:
     return analyzer_tool.list_projects()
 
 @mcp.tool()
-def analyze_project(project_name: str) -> Dict[str, Any]:
+def analyze_project(project_name: str, include_structural_nodes: bool = False) -> Dict[str, Any]:
     """
     Analyze a registered project to build its dependency graph.
     
     Args:
         project_name: Name of the registered project.
+        include_structural_nodes: Whether to include folder/file structural nodes (default: False).
     """
-    return analyzer_tool.analyze_project(project_name)
+    return analyzer_tool.analyze_project(project_name, include_structural_nodes)
 
 @mcp.tool()
 def bulk_analyze() -> Dict[str, Any]:

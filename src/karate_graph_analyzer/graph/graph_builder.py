@@ -47,14 +47,26 @@ logger = logging.getLogger(__name__)
 class GraphBuilder:
     """Facade for constructing dependency graphs."""
 
-    def __init__(self, parser: Optional["FeatureFileParser"] = None, config: Optional[ParserConfig] = None) -> None:
+    def __init__(
+        self,
+        parser: Optional["FeatureFileParser"] = None,
+        config: Optional[ParserConfig] = None,
+        include_structural_nodes: bool = False,
+    ) -> None:
         self.nx_builder = NetworkXBuilder()
         # Default context if no project yet
         self.context: Optional[AnalysisContext] = None
         self.config = config or (parser.config if parser else ParserConfig())
+        self.include_structural_nodes = include_structural_nodes
         self.path_classifier = PathClassifier()
-        self.structural_builder = StructuralBuilder(self.nx_builder)
-        self.dependency_linker = DependencyLinker(self.nx_builder, path_classifier=self.path_classifier, structural_builder=self.structural_builder)
+        self.structural_builder = (
+            StructuralBuilder(self.nx_builder) if include_structural_nodes else None
+        )
+        self.dependency_linker = DependencyLinker(
+            self.nx_builder,
+            path_classifier=self.path_classifier,
+            structural_builder=self.structural_builder,
+        )
         self.incremental_updater = IncrementalUpdater(self.nx_builder, self.path_classifier, self.dependency_linker)
         self._injected_parser = parser
 
@@ -107,8 +119,9 @@ class GraphBuilder:
     def build_from_project(self, project: Project) -> DependencyGraph:
         """Build complete graph for a project using 2-pass strategy."""
         parser = self._initialize_context(project)
-        # Build structural layer first
-        self.structural_builder.build_structure(project)
+        # Build structural layer first when explicitly requested.
+        if self.structural_builder:
+            self.structural_builder.build_structure(project)
         
         feature_files = self._get_feature_files(project)
         ast_list: List[FeatureAST] = []
@@ -176,7 +189,11 @@ class GraphBuilder:
                     jira_tags=scenario.jira_tags, project_name=project.name,
                     category=category,
                     flow=flow,
-                    additional_data={"scenario_type": scenario.type.value, "tags": scenario.tags},
+                    additional_data={
+                        "scenario_type": scenario.type.value,
+                        "tags": scenario.tags,
+                        "display_jira_prefix": False,
+                    },
                 )
 
                 if node_type == NodeType.API:
@@ -241,11 +258,13 @@ class GraphBuilder:
                 )
             
             # Fallback to file node if no tags
-            self.structural_builder.link_to_functional_node(scenario.file_path, file_node_id)
+            if self.structural_builder:
+                self.structural_builder.link_to_functional_node(scenario.file_path, file_node_id)
             return file_node_id
             
         node_id = self.nx_builder.add_test_case(scenario, metadata)
-        self.structural_builder.link_to_functional_node(scenario.file_path, node_id)
+        if self.structural_builder:
+            self.structural_builder.link_to_functional_node(scenario.file_path, node_id)
         return node_id
 
     def _handle_page_and_action(self, scenario: Scenario, metadata: NodeMetadata, node_map: Dict) -> str:
@@ -269,7 +288,8 @@ class GraphBuilder:
             file_node_id, NodeType.PAGE, rel_path, tag_to_use, metadata, node_map, DependencyType.PAGE,
             display_name=display_name
         )
-        self.structural_builder.link_to_functional_node(scenario.file_path, res_id)
+        if self.structural_builder:
+            self.structural_builder.link_to_functional_node(scenario.file_path, res_id)
         return res_id
 
     def _link_dependencies(self, scenario, ast, parser, project, node_id, common_map, node_map, context):
@@ -357,7 +377,8 @@ class GraphBuilder:
             nodes=nodes_dict, 
             edges=edges_dict, 
             cycles=cycles,
-            config=self.config
+            config=self.config,
+            include_structural_nodes=self.include_structural_nodes
         )
 
     def _enrich_locator_metadata(self, meta: NodeMetadata, project_root: str):
