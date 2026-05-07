@@ -21,6 +21,7 @@ from karate_graph_analyzer.parser.lexer import GherkinLexer, GherkinTokenType
 from karate_graph_analyzer.parser.orchestrator import DependencyOrchestrator
 from karate_graph_analyzer.utils.path_resolver import PathResolver
 from karate_graph_analyzer.parser.api_context_tracker import ApiContextTracker
+from karate_graph_analyzer.parser.extractors.java_extractor import JavaExtractor
 
 if TYPE_CHECKING:
     from karate_graph_analyzer.interfaces import IDependencyExtractor
@@ -69,6 +70,7 @@ class FeatureFileParser:
             self.orchestrator.register_extractor(CallReadExtractor(config))
             self.orchestrator.register_extractor(ApiExtractor(config))
             self.orchestrator.register_extractor(DatabaseExtractor(config))
+            self.orchestrator.register_extractor(JavaExtractor())
 
     def parse_file(self, file_path: str) -> FeatureAST:
         """Parse a single feature file into a structured AST representation."""
@@ -248,7 +250,9 @@ class FeatureFileParser:
     ) -> List[Dependency]:
         """Orchestrate dependency extraction across steps, merging background context."""
         from karate_graph_analyzer.parser.extractors.api_extractor import ApiExtractor
+        from karate_graph_analyzer.parser.extractors.java_extractor import JavaExtractor
         api_extractor = self.orchestrator.get_extractor_by_type(ApiExtractor)
+        java_extractor = self.orchestrator.get_extractor_by_type(JavaExtractor)
         http_method = (api_extractor.extract_http_method(scenario.steps) if api_extractor else "GET") or "GET"
 
         # Resolve scoped config for this specific file
@@ -270,9 +274,32 @@ class FeatureFileParser:
                         "scenario_tags": scenario.tags
                     })
                     dependencies.append(d)
+            
+            # 1.1 Local Java Aliases
+            if java_extractor:
+                java_extractor.extract_local_aliases(step.text)
 
         # 2. Finalize API dependencies
         dependencies.extend(tracker.finalize(scenario.line_number, scenario, http_method))
+        
+        # 2.1 Finalize Java dependencies
+        if java_extractor:
+            # Merge global aliases from config with local ones
+            all_java_aliases = self.config.java_aliases.copy()
+            all_java_aliases.update(java_extractor.local_aliases)
+            
+            used_java_classes = java_extractor.extract_java_usages(scenario, all_java_aliases)
+            for java_class in used_java_classes:
+                dependencies.append(Dependency(
+                    type=DependencyType.JAVA,
+                    target=java_class,
+                    line_number=scenario.line_number,
+                    parameters={
+                        "class_path": java_class,
+                        "scenario_name": scenario.name,
+                        "scenario_tags": scenario.tags
+                    }
+                ))
 
         # 3. Add @setup dependency if present
         if scenario.setup_scenario:
