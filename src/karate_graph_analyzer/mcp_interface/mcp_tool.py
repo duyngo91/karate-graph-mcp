@@ -487,8 +487,17 @@ class KarateGraphAnalyzerTool:
                 self.registry.remove(project.name)
 
             self._clear_runtime_projects()
+            
+            # Clear on-disk cache
+            self.cache_manager.clear()
+            
+            # Remove all saved graph JSON files
+            import shutil
+            if self.storage_dir.exists():
+                shutil.rmtree(self.storage_dir)
+                self.storage_dir.mkdir(parents=True, exist_ok=True)
 
-            logger.info(f"Cleared all {count} projects")
+            logger.info(f"Cleared all {count} projects and cache")
 
             return {
                 "success": True,
@@ -1327,6 +1336,26 @@ class KarateGraphAnalyzerTool:
             exporter = JsonExporter()
             return exporter.import_graph(json_data, project_name)
         except Exception as e: return None
+
+    def _remove_runtime_project(self, project_name: str) -> None:
+        """Remove a project from runtime memory and storage."""
+        if project_name in self.graphs:
+            del self.graphs[project_name]
+        if project_name in self.analyzers:
+            del self.analyzers[project_name]
+        
+        # Remove saved state
+        path = self.storage_dir / f"{project_name}.json"
+        if path.exists():
+            path.unlink()
+        
+        self.search_tools = None # Force refresh
+
+    def _clear_runtime_projects(self) -> None:
+        """Clear all projects from runtime memory."""
+        self.graphs.clear()
+        self.analyzers.clear()
+        self.search_tools = None
 
     def _error_response(self, code: Any, category: str, message: str) -> Dict[str, Any]:
         return {"success": False, "error": {"code": str(code), "category": category, "message": message, "timestamp": datetime.now().isoformat()}}
