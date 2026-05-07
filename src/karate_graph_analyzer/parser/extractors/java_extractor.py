@@ -68,12 +68,10 @@ class JavaExtractor:
                     })
                     logger.debug(f"Detected Java method usage: {all_aliases[alias]}.{method}")
 
-                # 2. Match new alias(...) - method_name will be '<init>'
-                new_pattern = rf"new\s+{re.escape(alias)}"
                 if re.search(new_pattern, text):
                     usages.append({
                         "class_path": all_aliases[alias],
-                        "method_name": "<init>"
+                        "method_name": "[Constructor]"
                     })
                     logger.debug(f"Detected Java constructor usage: {all_aliases[alias]}")
 
