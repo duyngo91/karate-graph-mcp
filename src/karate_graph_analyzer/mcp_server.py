@@ -203,6 +203,39 @@ def get_failure_hotspots(project_name: str) -> Dict[str, Any]:
     return analyzer_tool.get_failure_hotspots(project_name)
 
 @mcp.tool()
+def top_hotspots(project_name: str, limit: int = 10) -> Dict[str, Any]:
+    """
+    Preset query: top failure hotspots for a project.
+
+    Args:
+        project_name: Name of the analyzed project.
+        limit: Maximum number of hotspots to return.
+    """
+    return analyzer_tool.top_hotspots(project_name, limit)
+
+@mcp.tool()
+def unused_components(project_name: str, limit: int = 10) -> Dict[str, Any]:
+    """
+    Preset query: unused components flattened across types.
+
+    Args:
+        project_name: Name of the analyzed project.
+        limit: Maximum number of unused components to return.
+    """
+    return analyzer_tool.unused_components(project_name, limit)
+
+@mcp.tool()
+def flaky_risk(project_name: str, limit: int = 10) -> Dict[str, Any]:
+    """
+    Preset query: test cases with mixed pass/fail history (flaky risk).
+
+    Args:
+        project_name: Name of the analyzed project.
+        limit: Maximum number of test cases to return.
+    """
+    return analyzer_tool.flaky_risk(project_name, limit)
+
+@mcp.tool()
 def record_fix(project_name: str, node_id: str, error_message: str, solution: str, description: str) -> Dict[str, Any]:
     """
     Record a successful fix for a component and error pattern.
@@ -228,6 +261,26 @@ def get_fix_suggestions(project_name: str, node_id: str, error_message: str) -> 
         error_message: Current error message.
     """
     return analyzer_tool.get_fix_suggestions(project_name, node_id, error_message)
+
+@mcp.tool()
+def auto_fix_hint_pack(
+    project_name: str,
+    node_id: str,
+    error_message: str,
+    max_historical: int = 3,
+) -> Dict[str, Any]:
+    """
+    Build a step-by-step auto-fix checklist from smart + historical suggestions.
+
+    Args:
+        project_name: Name of the analyzed project.
+        node_id: ID of the failing component.
+        error_message: Current error message.
+        max_historical: Maximum historical patterns to include.
+    """
+    return analyzer_tool.auto_fix_hint_pack(
+        project_name, node_id, error_message, max_historical
+    )
 
 @mcp.tool()
 def get_subgraph(node_id: str, radius: int = 2) -> Dict[str, Any]:
