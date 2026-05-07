@@ -234,7 +234,11 @@ class KarateGraphAnalyzerTool:
     def _ensure_search_tools(self) -> Optional[Dict[str, Any]]:
         """Return an error response if search tooling is unavailable."""
         if self.search_tools is None:
-            return self._error_response(*self.SEARCH_NOT_READY_ERROR)
+            if self.graphs:
+                self._refresh_search_tools()
+            
+            if self.search_tools is None:
+                return self._error_response(*self.SEARCH_NOT_READY_ERROR)
         return None
 
     def _get_analyzer(self, project_name: str) -> Optional[DependencyAnalyzer]:
