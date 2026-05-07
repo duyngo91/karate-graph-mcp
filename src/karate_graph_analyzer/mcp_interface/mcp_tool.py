@@ -20,6 +20,9 @@ from karate_graph_analyzer.cache.cache_manager import CacheManager
 from karate_graph_analyzer.exporters import ExporterFactory
 from karate_graph_analyzer.graph.graph_builder import GraphBuilder
 from karate_graph_analyzer.mcp_interface.search_tools import SearchTools
+from karate_graph_analyzer.services.graph_cache_service import GraphCacheService
+from karate_graph_analyzer.services.query_service import QueryService
+from karate_graph_analyzer.services.report_service import ReportService
 from karate_graph_analyzer.models import (
     DependencyGraph,
     ImpactResult,
@@ -28,8 +31,6 @@ from karate_graph_analyzer.models import (
     ReusableComponent,
     VisualizationMode,
 )
-from karate_graph_analyzer.visualization.graph_visualizer import GraphVisualizer
-from karate_graph_analyzer.analyzer.graph_diff import GraphComparator
 from karate_graph_analyzer.storage.project_registry import ProjectRegistry
 from karate_graph_analyzer.utils.source_snippet import get_source_snippet
 
@@ -228,6 +229,9 @@ class KarateGraphAnalyzerTool:
         logger.info(f"KarateGraphAnalyzerTool initialized in CWD: {os.getcwd()}")
         logger.info(f"Using storage directory: {self.storage_dir.absolute()}")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.graph_cache = GraphCacheService(self.storage_dir)
+        self.query_service = QueryService()
+        self.report_service = ReportService()
 
         # Load existing projects from storage
         try:
@@ -297,6 +301,9 @@ class KarateGraphAnalyzerTool:
         """Remove one project from in-memory state and refresh search tooling."""
         self.graphs.pop(project_name, None)
         self.analyzers.pop(project_name, None)
+        path = self.storage_dir / f"{project_name}.json"
+        if path.exists():
+            path.unlink()
         self._refresh_search_tools()
 
     def _clear_runtime_projects(self) -> None:
@@ -323,15 +330,12 @@ class KarateGraphAnalyzerTool:
         self, project: Project, include_structural_nodes: bool = False
     ) -> tuple[DependencyGraph, bool]:
         """Load a cached project graph or build and persist a fresh one."""
-        graph = self._load_graph_state(project.name)
-
-        # Check if cached graph matches requested structural node setting
-        # If cache exists but has different structural setting, we should rebuild
-        if graph and getattr(graph, "include_structural_nodes", False) == include_structural_nodes:
+        graph = self.graph_cache.load_if_fresh(project, include_structural_nodes)
+        if graph:
             return graph, True
 
         graph = GraphBuilder(include_structural_nodes=include_structural_nodes).build_from_project(project)
-        self._save_graph_state(project.name, graph)
+        self.graph_cache.save_project_graph(project, graph, include_structural_nodes)
         return graph, False
 
     def _resolve_project_visualization_path(
@@ -351,9 +355,7 @@ class KarateGraphAnalyzerTool:
 
     def _resolve_timestamped_output_path(self, prefix: str, *parts: str) -> str:
         """Create a timestamped HTML output path under the local output folder."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        slug = "_".join(parts)
-        return str(Path("output") / f"{prefix}_{slug}_{timestamp}.html")
+        return self.report_service.build_timestamped_output_path(prefix, *parts)
 
     def _render_graph_visualization(
         self,
@@ -362,13 +364,77 @@ class KarateGraphAnalyzerTool:
         output_path: str,
     ) -> str:
         """Render a graph using the standard visualizer."""
-        visualizer = GraphVisualizer(graph, mode=mode)
-        return visualizer.render(output_path=output_path)
+        return self.report_service.render_graph(graph, output_path, mode)
 
     def _load_json_file(self, file_path: str) -> Any:
         """Load JSON content from disk."""
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
+
+    def _serialize_node_metadata(self, node: Any) -> Dict[str, Any]:
+        """Serialize node metadata in a consistent shape."""
+        return {
+            "file_path": node.metadata.file_path,
+            "line_number": node.metadata.line_number,
+            "jira_tags": node.metadata.jira_tags,
+            "project_name": node.metadata.project_name,
+        }
+
+    def _serialize_node_summary(
+        self,
+        node: Any,
+        *,
+        include_metadata: bool = True,
+        include_additional_data: bool = False,
+        include_source_snippet: bool = False,
+    ) -> Dict[str, Any]:
+        """Serialize a node to response shape used by MCP query methods."""
+        result = {
+            "id": node.id,
+            "type": node.type.value,
+            "name": node.name,
+        }
+
+        if include_metadata:
+            metadata = self._serialize_node_metadata(node)
+            if include_source_snippet:
+                metadata["source_snippet"] = get_source_snippet(
+                    node.metadata.file_path, node.metadata.line_number
+                )
+            if include_additional_data:
+                metadata["additional_data"] = node.metadata.additional_data
+            result["metadata"] = metadata
+
+        return result
+
+    def _collect_cross_project_search_results(
+        self, query_fn: Any
+    ) -> List[Dict[str, Any]]:
+        """Collect node search results from every analyzed project."""
+        def _collect_for_analyzer(analyzer: DependencyAnalyzer) -> List[Dict[str, Any]]:
+            project_name = analyzer.graph.project_name
+            nodes = query_fn(analyzer)
+            return [
+                {
+                    "id": node.id,
+                    "type": node.type.value,
+                    "name": node.name,
+                    "project": project_name,
+                    "metadata": asdict(node.metadata),
+                }
+                for node in nodes
+            ]
+
+        return self.query_service.collect_cross_project_results(
+            self.analyzers, _collect_for_analyzer
+        )
+
+    def _with_search_tools(self, action: Any) -> Dict[str, Any]:
+        """Execute a search action only when search tools are initialized."""
+        search_error = self._ensure_search_tools()
+        if search_error:
+            return search_error
+        return action(self.search_tools)
 
     def register_project(
         self,
@@ -689,21 +755,7 @@ class KarateGraphAnalyzerTool:
             dependencies = analyzer.find_dependencies(request.component_id, transitive=transitive)
 
             # Convert to dictionaries
-            result_nodes = []
-            for node in dependencies:
-                result_nodes.append(
-                    {
-                        "id": node.id,
-                        "type": node.type.value,
-                        "name": node.name,
-                        "metadata": {
-                            "file_path": node.metadata.file_path,
-                            "line_number": node.metadata.line_number,
-                            "jira_tags": node.metadata.jira_tags,
-                            "project_name": node.metadata.project_name,
-                        },
-                    }
-                )
+            result_nodes = [self._serialize_node_summary(node) for node in dependencies]
 
             logger.info(
                 f"Found {len(result_nodes)} dependencies for component '{component_id}' "
@@ -795,19 +847,11 @@ class KarateGraphAnalyzerTool:
 
                     return {
                         "success": True,
-                        "node": {
-                            "id": node.id,
-                            "type": node.type.value,
-                            "name": node.name,
-                            "metadata": {
-                                "file_path": node.metadata.file_path,
-                                "line_number": node.metadata.line_number,
-                                "jira_tags": node.metadata.jira_tags,
-                                "project_name": node.metadata.project_name,
-                                "source_snippet": get_source_snippet(node.metadata.file_path, node.metadata.line_number),
-                                "additional_data": node.metadata.additional_data,
-                            },
-                        },
+                        "node": self._serialize_node_summary(
+                            node,
+                            include_additional_data=True,
+                            include_source_snippet=True,
+                        ),
                         "project_name": project_name,
                     }
 
@@ -998,18 +1042,14 @@ class KarateGraphAnalyzerTool:
 
             base_graph = self.graphs[request.base_project_name]
             new_graph = self.graphs[request.new_project_name]
-            
-            diff_graph = GraphComparator().compare(base_graph, new_graph)
             output_path = request.output_path or self._resolve_timestamped_output_path(
                 "diff_report",
                 request.base_project_name,
                 "vs",
                 request.new_project_name,
             )
-            final_path = self._render_graph_visualization(
-                diff_graph,
-                VisualizationMode.DIFF,
-                output_path,
+            final_path = self.report_service.render_diff(
+                base_graph, new_graph, output_path
             )
             
             logger.info(f"Generated diff report for '{base_project_name}' vs '{new_project_name}' at {final_path}")
@@ -1063,10 +1103,7 @@ class KarateGraphAnalyzerTool:
 
     def _find_analyzer_for_node(self, node_id: str) -> Optional[DependencyAnalyzer]:
         """Find the analyzer that contains the specified node."""
-        for project_name, graph in self.graphs.items():
-            if node_id in graph.nodes:
-                return self.analyzers.get(project_name)
-        return None
+        return self.query_service.find_analyzer_for_node(self.analyzers, node_id)
 
     # Legacy export/import methods
     def _export_to_json(self, graph: DependencyGraph) -> str:
@@ -1094,80 +1131,79 @@ class KarateGraphAnalyzerTool:
         path: Optional[str] = None,
         domain: Optional[str] = None
     ) -> Dict[str, Any]:
-        search_error = self._ensure_search_tools()
-        if search_error:
-            return search_error
-        return self.search_tools.search_api(project_name, method, path, domain)
+        return self._with_search_tools(
+            lambda tools: tools.search_api(project_name, method, path, domain)
+        )
     
     def get_api_stats(self, project_name: str, keyword: Optional[str] = None) -> Dict[str, Any]:
-        search_error = self._ensure_search_tools()
-        if search_error:
-            return search_error
-        query_api = self.search_tools._get_query_api(project_name)
-        if not query_api:
-             return self._error_response(3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' not found")
-        stats = query_api.get_api_stats(keyword)
-        return {
-            "success": True,
-            "project_name": project_name,
-            "keyword_filter": keyword,
-            "total_apis": stats["total_count"],
-            "domain_breakdown": stats["domain_breakdown"],
-            "apis": stats["results"]
-        }
+        def _action(tools: SearchTools) -> Dict[str, Any]:
+            query_api = tools._get_query_api(project_name)
+            if not query_api:
+                return self._error_response(
+                    3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' not found"
+                )
+            stats = query_api.get_api_stats(keyword)
+            return {
+                "success": True,
+                "project_name": project_name,
+                "keyword_filter": keyword,
+                "total_apis": stats["total_count"],
+                "domain_breakdown": stats["domain_breakdown"],
+                "apis": stats["results"],
+            }
+
+        return self._with_search_tools(_action)
     
     def get_page_stats(self, project_name: str, domain: Optional[str] = None) -> Dict[str, Any]:
-        search_error = self._ensure_search_tools()
-        if search_error:
-            return search_error
-        query_api = self.search_tools._get_query_api(project_name)
-        if not query_api:
-             return self._error_response(3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' not found")
-        stats = query_api.get_page_stats(domain)
-        return {
-            "success": True,
-            "project_name": project_name,
-            "domain_filter": domain,
-            "total_pages": stats["total_count"],
-            "domain_breakdown": stats["domain_breakdown"],
-            "pages": stats["results"]
-        }
+        def _action(tools: SearchTools) -> Dict[str, Any]:
+            query_api = tools._get_query_api(project_name)
+            if not query_api:
+                return self._error_response(
+                    3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' not found"
+                )
+            stats = query_api.get_page_stats(domain)
+            return {
+                "success": True,
+                "project_name": project_name,
+                "domain_filter": domain,
+                "total_pages": stats["total_count"],
+                "domain_breakdown": stats["domain_breakdown"],
+                "pages": stats["results"],
+            }
+
+        return self._with_search_tools(_action)
     
     def search_workflow(self, project_name: str, path: Optional[str] = None, scenario_tag: Optional[str] = None, keyword: Optional[str] = None) -> Dict[str, Any]:
-        search_error = self._ensure_search_tools()
-        if search_error:
-            return search_error
-        return self.search_tools.search_workflow(project_name, path, scenario_tag, keyword)
+        return self._with_search_tools(
+            lambda tools: tools.search_workflow(project_name, path, scenario_tag, keyword)
+        )
     
     def search_page(self, project_name: str, path: Optional[str] = None, action_tag: Optional[str] = None) -> Dict[str, Any]:
-        search_error = self._ensure_search_tools()
-        if search_error:
-            return search_error
-        return self.search_tools.search_page(project_name, path, action_tag)
+        return self._with_search_tools(
+            lambda tools: tools.search_page(project_name, path, action_tag)
+        )
     
     def search_test_case(self, project_name: str, jira_tag: Optional[str] = None, name_pattern: Optional[str] = None, uses_api: Optional[str] = None, uses_workflow: Optional[str] = None) -> Dict[str, Any]:
-        search_error = self._ensure_search_tools()
-        if search_error:
-            return search_error
-        return self.search_tools.search_test_case(project_name, jira_tag, name_pattern, uses_api, uses_workflow)
+        return self._with_search_tools(
+            lambda tools: tools.search_test_case(
+                project_name, jira_tag, name_pattern, uses_api, uses_workflow
+            )
+        )
     
     def get_usage_stats(self, project_name: str, node_id: str) -> Dict[str, Any]:
-        search_error = self._ensure_search_tools()
-        if search_error:
-            return search_error
-        return self.search_tools.get_usage_stats(project_name, node_id)
+        return self._with_search_tools(
+            lambda tools: tools.get_usage_stats(project_name, node_id)
+        )
     
     def get_most_used_components(self, project_name: str, component_type: str, limit: int = 10) -> Dict[str, Any]:
-        search_error = self._ensure_search_tools()
-        if search_error:
-            return search_error
-        return self.search_tools.get_most_used_components(project_name, component_type, limit)
+        return self._with_search_tools(
+            lambda tools: tools.get_most_used_components(project_name, component_type, limit)
+        )
     
     def find_unused_components(self, project_name: str) -> Dict[str, Any]:
-        search_error = self._ensure_search_tools()
-        if search_error:
-            return search_error
-        return self.search_tools.find_unused_components(project_name)
+        return self._with_search_tools(
+            lambda tools: tools.find_unused_components(project_name)
+        )
 
     def get_project_health(self, project_name: str) -> Dict[str, Any]:
         analyzer_error = self._require_analyzer(project_name)
@@ -1243,123 +1279,175 @@ class KarateGraphAnalyzerTool:
         try:
             request = GetSubgraphRequest(node_id=node_id, radius=radius)
             analyzer = self._find_analyzer_for_node(request.node_id)
-            if not analyzer: return self._error_response(4001, "QUERY_ERROR", f"Node '{node_id}' not found")
-            return {"success": True, "node_id": node_id, "radius": radius, "subgraph": analyzer.get_subgraph(request.node_id, radius=request.radius)}
-        except Exception as e: return self._error_response(6003, "INTERNAL_ERROR", str(e))
+            if not analyzer:
+                return self._error_response(4001, "QUERY_ERROR", f"Node '{node_id}' not found")
+            return {
+                "success": True,
+                "node_id": node_id,
+                "radius": radius,
+                "subgraph": analyzer.get_subgraph(request.node_id, radius=request.radius),
+            }
+        except Exception as e:
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def query_node_by_metadata(self, key: str, value: str) -> Dict[str, Any]:
         try:
             request = QueryNodeByMetadataRequest(key=key, value=value)
-            all_results = []
-            for project_name, analyzer in self.analyzers.items():
-                nodes = analyzer.query_by_metadata(request.key, request.value)
-                for node in nodes: all_results.append({"id": node.id, "type": node.type.value, "name": node.name, "project": project_name, "metadata": asdict(node.metadata)})
-            return {"success": True, "key": key, "value": value, "results": all_results, "count": len(all_results)}
-        except Exception as e: return self._error_response(6003, "INTERNAL_ERROR", str(e))
+            all_results = self._collect_cross_project_search_results(
+                lambda analyzer: analyzer.query_by_metadata(request.key, request.value)
+            )
+            return {
+                "success": True,
+                "key": key,
+                "value": value,
+                "results": all_results,
+                "count": len(all_results),
+            }
+        except Exception as e:
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def global_search(self, query: str) -> Dict[str, Any]:
         try:
             request = GlobalSearchRequest(query=query)
-            all_results = []
-            for project_name, analyzer in self.analyzers.items():
-                nodes = analyzer.global_search(request.query)
-                for node in nodes: all_results.append({"id": node.id, "type": node.type.value, "name": node.name, "project": project_name, "metadata": asdict(node.metadata)})
-            return {"success": True, "query": query, "results": all_results, "count": len(all_results)}
-        except Exception as e: return self._error_response(6003, "INTERNAL_ERROR", str(e))
+            all_results = self._collect_cross_project_search_results(
+                lambda analyzer: analyzer.global_search(request.query)
+            )
+            return {
+                "success": True,
+                "query": query,
+                "results": all_results,
+                "count": len(all_results),
+            }
+        except Exception as e:
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def find_path(self, source_id: str, target_id: str) -> Dict[str, Any]:
         try:
             request = FindPathRequest(source_id=source_id, target_id=target_id)
             analyzer = self._find_analyzer_for_node(source_id)
-            if not analyzer: return self._error_response(4001, "QUERY_ERROR", f"Source node '{source_id}' not found")
+            if not analyzer:
+                return self._error_response(4001, "QUERY_ERROR", f"Source node '{source_id}' not found")
             paths = analyzer.find_paths(request.source_id, request.target_id)
-            return {"success": True, "source_id": source_id, "target_id": target_id, "paths": paths, "count": len(paths)}
-        except Exception as e: return self._error_response(6003, "INTERNAL_ERROR", str(e))
+            return {
+                "success": True,
+                "source_id": source_id,
+                "target_id": target_id,
+                "paths": paths,
+                "count": len(paths),
+            }
+        except Exception as e:
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def get_component_importance(self, project_name: str) -> Dict[str, Any]:
         try:
             analyzer_error = self._require_analyzer(project_name)
-            if analyzer_error: return analyzer_error
+            if analyzer_error:
+                return analyzer_error
             analyzer = self.analyzers[project_name]
             importance = analyzer.get_component_importance()
-            return {"success": True, "project_name": project_name, "importance": importance[:20], "total_count": len(importance)}
-        except Exception as e: return self._error_response(6003, "INTERNAL_ERROR", str(e))
+            return {
+                "success": True,
+                "project_name": project_name,
+                "importance": importance[:20],
+                "total_count": len(importance),
+            }
+        except Exception as e:
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def get_impact_radius(self, node_id: str, depth: int = 2) -> Dict[str, Any]:
         try:
             analyzer = self._find_analyzer_for_node(node_id)
-            if not analyzer: return self._error_response(4001, "QUERY_ERROR", f"Node '{node_id}' not found")
-            neighborhood_ids = nx.single_source_shortest_path_length(analyzer._nx_graph.reverse(), node_id, cutoff=depth)
+            if not analyzer:
+                return self._error_response(4001, "QUERY_ERROR", f"Node '{node_id}' not found")
+            neighborhood_ids = nx.single_source_shortest_path_length(
+                analyzer._nx_graph.reverse(), node_id, cutoff=depth
+            )
             impacted_nodes = []
             for nid, dist in neighborhood_ids.items():
-                if nid == node_id: continue
+                if nid == node_id:
+                    continue
                 node = analyzer.graph.nodes[nid]
-                impacted_nodes.append({"id": node.id, "name": node.name, "type": node.type.value, "distance": dist, "category": node.metadata.category.value if node.metadata.category else "UNKNOWN"})
-            return {"success": True, "node_id": node_id, "radius": depth, "impacted_count": len(impacted_nodes), "impacted_nodes": impacted_nodes}
-        except Exception as e: return self._error_response(6003, "INTERNAL_ERROR", str(e))
+                node_item = self._serialize_node_summary(node, include_metadata=False)
+                node_item["distance"] = dist
+                node_item["category"] = (
+                    node.metadata.category.value if node.metadata.category else "UNKNOWN"
+                )
+                impacted_nodes.append(node_item)
+            return {
+                "success": True,
+                "node_id": node_id,
+                "radius": depth,
+                "impacted_count": len(impacted_nodes),
+                "impacted_nodes": impacted_nodes,
+            }
+        except Exception as e:
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def visualize_project(self, project_name: str, output_path: Optional[str] = None) -> Dict[str, Any]:
         graph_error = self._require_graph(project_name)
-        if graph_error: return graph_error
+        if graph_error:
+            return graph_error
         graph = self.graphs[project_name]
         output_path = self._resolve_project_visualization_path(project_name, output_path)
         try:
             mode = VisualizationMode.DEFAULT
-            if any(node.execution_status for node in graph.nodes.values()): mode = VisualizationMode.EXECUTION
+            if any(node.execution_status for node in graph.nodes.values()):
+                mode = VisualizationMode.EXECUTION
             final_path = self._render_graph_visualization(graph, mode, output_path)
-            return {"success": True, "project_name": project_name, "visualization_path": final_path, "message": f"Visualization generated successfully at {final_path}"}
-        except Exception as e: return self._error_response(8001, "VISUALIZATION_ERROR", str(e))
+            return {
+                "success": True,
+                "project_name": project_name,
+                "visualization_path": final_path,
+                "message": f"Visualization generated successfully at {final_path}",
+            }
+        except Exception as e:
+            return self._error_response(8001, "VISUALIZATION_ERROR", str(e))
 
     def process_reports_folder(self, project_name: str, directory_path: str, output_path: Optional[str] = None) -> Dict[str, Any]:
         try:
             analyzer_error = self._require_analyzer(project_name)
-            if analyzer_error: return analyzer_error
+            if analyzer_error:
+                return analyzer_error
             analyzer = self.analyzers[project_name]
             ai_summary = analyzer.process_execution_directory(directory_path)
             self._save_graph_state(project_name, analyzer.graph)
             viz_result = self.visualize_project(project_name, output_path)
-            return {"success": True, "project_name": project_name, "ai_summary": ai_summary, "visualization_path": viz_result.get("visualization_path"), "message": f"Processed directory successfully."}
-        except Exception as e: return self._error_response(6003, "INTERNAL_ERROR", str(e))
+            return {
+                "success": True,
+                "project_name": project_name,
+                "ai_summary": ai_summary,
+                "visualization_path": viz_result.get("visualization_path"),
+                "message": "Processed directory successfully.",
+            }
+        except Exception as e:
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def _save_graph_state(self, project_name: str, graph: DependencyGraph) -> bool:
-        try:
-            path = self.storage_dir / f"{project_name}.json"
-            from karate_graph_analyzer.exporters.json_exporter import JsonExporter
-            exporter = JsonExporter()
-            json_data = exporter.export(graph)
-            with open(path, 'w', encoding='utf-8') as f: f.write(json_data)
-            return True
-        except Exception as e: return False
+        project = self.registry.get(project_name)
+        if project:
+            return self.graph_cache.save_project_graph(
+                project,
+                graph,
+                getattr(graph, "include_structural_nodes", False),
+            )
+        return self.graph_cache.save_raw_graph(project_name, graph)
 
     def _load_graph_state(self, project_name: str) -> Optional[DependencyGraph]:
-        try:
-            path = self.storage_dir / f"{project_name}.json"
-            if not path.exists(): return None
-            with open(path, 'r', encoding='utf-8') as f: json_data = f.read()
-            from karate_graph_analyzer.exporters.json_exporter import JsonExporter
-            exporter = JsonExporter()
-            return exporter.import_graph(json_data, project_name)
-        except Exception as e: return None
-
-    def _remove_runtime_project(self, project_name: str) -> None:
-        """Remove a project from runtime memory and storage."""
-        if project_name in self.graphs:
-            del self.graphs[project_name]
-        if project_name in self.analyzers:
-            del self.analyzers[project_name]
-        
-        # Remove saved state
-        path = self.storage_dir / f"{project_name}.json"
-        if path.exists():
-            path.unlink()
-        
-        self.search_tools = None # Force refresh
-
-    def _clear_runtime_projects(self) -> None:
-        """Clear all projects from runtime memory."""
-        self.graphs.clear()
-        self.analyzers.clear()
-        self.search_tools = None
+        project = self.registry.get(project_name)
+        if project:
+            return self.graph_cache.load_if_fresh(
+                project,
+                include_structural_nodes=False,
+            )
+        return None
 
     def _error_response(self, code: Any, category: str, message: str) -> Dict[str, Any]:
-        return {"success": False, "error": {"code": str(code), "category": category, "message": message, "timestamp": datetime.now().isoformat()}}
+        return {
+            "success": False,
+            "error": {
+                "code": str(code),
+                "category": category,
+                "message": message,
+                "timestamp": datetime.now().isoformat(),
+            },
+        }

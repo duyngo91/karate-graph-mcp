@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.karate_cache/
 
 # Virtual environments
 venv/

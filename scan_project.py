@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 
-def scan_project(project_root: str, output_name: str = None):
+def scan_project(project_root: str, output_name: str = None, include_structural_nodes: bool = True):
     """Scan a Karate project and generate graph.
     
     Args:
@@ -86,7 +86,7 @@ def scan_project(project_root: str, output_name: str = None):
     
     # Build graph
     print(f"⚙️  Building dependency graph...")
-    builder = GraphBuilder()
+    builder = GraphBuilder(include_structural_nodes=include_structural_nodes)
     
     try:
         graph = builder.build_from_project(project)
@@ -95,6 +95,7 @@ def scan_project(project_root: str, output_name: str = None):
         print(f"   📊 Nodes: {len(graph.nodes)}")
         print(f"   🔗 Edges: {len(graph.edges)}")
         print(f"   🔄 Cycles: {len(graph.cycles)}")
+        print(f"   🧱 Structural layer: {'ON' if include_structural_nodes else 'OFF'}")
         
         # Node type breakdown
         print(f"\n📈 Node Types:")
@@ -187,9 +188,17 @@ def main():
         return 1
     
     project_root = sys.argv[1]
-    output_name = sys.argv[2] if len(sys.argv) > 2 else None
-    
-    return scan_project(project_root, output_name)
+    output_name = None
+    include_structural_nodes = True
+
+    extra_args = sys.argv[2:]
+    for arg in extra_args:
+        if arg == "--no-structure":
+            include_structural_nodes = False
+        elif output_name is None:
+            output_name = arg
+
+    return scan_project(project_root, output_name, include_structural_nodes)
 
 
 if __name__ == "__main__":

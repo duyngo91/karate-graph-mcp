@@ -68,20 +68,6 @@ class ProjectRegistry(IProjectRepository):
         # Add project to registry
         self.projects[project.name] = project
 
-    def remove(self, project_name: str) -> None:
-        """Remove a project from the registry.
-
-        Args:
-            project_name: Name of the project to remove
-
-        Raises:
-            KeyError: If project does not exist
-        """
-        if project_name not in self.projects:
-            raise KeyError(f"Project '{project_name}' not found in registry")
-
-        del self.projects[project_name]
-
     def get(self, project_name: str) -> Optional[Project]:
         """Get a project by name.
 
