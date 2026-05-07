@@ -69,13 +69,17 @@ class JavaExtractor:
             text = step.text
             
             # 2. Match target.method(...) - target can be alias, variable, or class
-            method_pattern = r"([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*\("
+            # Be careful with multiple dots like Java.feature.type
+            method_pattern = r"([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)\.([a-zA-Z0-9_]+)\s*\("
             method_matches = re.findall(method_pattern, text)
             for target, method in method_matches:
                 class_path = None
                 
-                # IMPORTANT: Skip 'Java.type' calls
-                if target.lower() == "java" and method == "type":
+                logger.info(f"JAVA EXTRACTOR DEBUG: Found potential call - target='{target}', method='{method}' in text='{text}'")
+
+                # IMPORTANT: Skip anything starting with 'Java' (Karate internal)
+                if target.split('.')[0].lower() == "java":
+                    logger.info(f"JAVA EXTRACTOR: Skipping internal Java call: {target}.{method}")
                     continue
                 
                 # Try to resolve target
@@ -83,12 +87,12 @@ class JavaExtractor:
                     class_path = all_aliases[target]
                 elif target in variable_to_class:
                     class_path = variable_to_class[target]
-                elif target[0].isupper() and target.lower() != "java" and len(target) > 1:
+                elif target[0].isupper() and len(target) > 1:
                     # Direct class call (starts with UpperCase)
                     class_path = target
                 
                 if class_path:
-                    logger.info(f"JAVA EXTRACTOR: Found method call {class_path}.{method}")
+                    logger.info(f"JAVA EXTRACTOR: Found VALID method call {class_path}.{method}")
                     usages.append({
                         "class_path": class_path,
                         "method_name": method
