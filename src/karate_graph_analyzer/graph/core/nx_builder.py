@@ -141,11 +141,10 @@ class NetworkXBuilder:
         metadata.additional_data["tags"] = list(dict.fromkeys(existing_tags + scenario.tags))
         
         display_name = scenario.name
-        if scenario.jira_tags:
-            # Use the first Jira tag as the ID prefix, removing the '@'
-            jira_id = scenario.jira_tags[0].lstrip('@')
+        if metadata.additional_data.get("display_jira_prefix", True) and scenario.jira_tags:
+            jira_id = scenario.jira_tags[0].lstrip("@")
             display_name = f"[{jira_id}] {scenario.name}"
-            
+
         return self._add_node_internal(node_id, NodeType.TEST_CASE, display_name, metadata, extra)
 
     def get_test_case_id(self, project_name: str, file_path: str, line_number: int, name: str) -> str:

@@ -282,10 +282,12 @@ class DependencyAnalyzer:
         
         # Build graphs for all projects
         project_graphs: Dict[str, DependencyGraph] = {}
+        project_roots: Dict[str, str] = {}
         for project in projects:
             builder = GraphBuilder()
             graph = builder.build_from_project(project)
             project_graphs[project.name] = graph
+            project_roots[project.name] = project.root_path
         
         # Track components across projects
         # Key: (node_type, name) -> List[ComponentInstance]
@@ -298,8 +300,11 @@ class DependencyAnalyzer:
                 if node.type not in [NodeType.WORKFLOW, NodeType.API, NodeType.PAGE, NodeType.COMMON]:
                     continue
                 
-                # Create component key (type, name)
-                component_key = (node.type, node.name)
+                # Create component key (type, stable project-relative identity)
+                component_name = self._common_component_identity(
+                    node, project_roots.get(project_name, "")
+                )
+                component_key = (node.type, component_name)
                 
                 # Create ComponentInstance
                 instance = ComponentInstance(
@@ -308,7 +313,11 @@ class DependencyAnalyzer:
                     node_id=node_id,
                 )
                 
-                component_instances[component_key].append(instance)
+                if not any(
+                    existing.project_name == project_name
+                    for existing in component_instances[component_key]
+                ):
+                    component_instances[component_key].append(instance)
         
         # Filter to only components that appear in multiple projects
         common_components = []
@@ -337,6 +346,29 @@ class DependencyAnalyzer:
         common_components.sort(key=lambda c: c.usage_count, reverse=True)
         
         return common_components
+
+    def _common_component_identity(self, node: Node, project_root: str) -> str:
+        """Return a cross-project identity for reusable components."""
+        import os
+
+        if node.type in [NodeType.WORKFLOW, NodeType.COMMON, NodeType.PAGE]:
+            raw_path = node.metadata.file_path or node.name
+            if raw_path and project_root:
+                try:
+                    abs_root = os.path.abspath(project_root)
+                    abs_path = os.path.abspath(raw_path)
+                    if abs_path.startswith(abs_root):
+                        raw_path = os.path.relpath(abs_path, abs_root)
+                except (OSError, ValueError):
+                    pass
+            normalized = raw_path.replace("\\", "/")
+            parts = [part for part in normalized.split("/") if part]
+            for anchor in ("common", "workflows", "workflow", "pages", "webPages"):
+                if anchor in parts:
+                    return "/".join(parts[parts.index(anchor):])
+            return normalized
+
+        return node.name
 
     def query_by_tag(self, jira_tag: str) -> List[Node]:
         """Fast lookup using inverted index.
@@ -389,19 +421,30 @@ class DependencyAnalyzer:
                 
             total_affected = len(affected_items)
             failed_affected = 0
+            affected_failed_test_cases = []
             
             for item in affected_items:
                 # Retrieve original node to check status
                 original_node = self.graph.nodes.get(item.node_id)
                 if original_node and original_node.execution_status == "FAILED":
                     failed_affected += 1
+                    affected_failed_test_cases.append({
+                        "node_id": original_node.id,
+                        "name": original_node.name,
+                        "jira_tags": original_node.metadata.jira_tags,
+                        "file_path": original_node.metadata.file_path,
+                        "line_number": item.line_number,
+                        "dependency_path": item.dependency_path,
+                        "depth": item.depth,
+                    })
             
             if failed_affected >= min_impact:
                 hotspot_stats[node_id] = {
                     "failed": failed_affected,
                     "total": total_affected,
                     "name": node.name,
-                    "type": node.type.value
+                    "type": node.type.value,
+                    "affected_failed_test_cases": affected_failed_test_cases,
                 }
 
         # 3. Build results
@@ -415,6 +458,7 @@ class DependencyAnalyzer:
                 "failure_impact_score": stats["failed"],
                 "total_test_cases": stats["total"],
                 "failed_test_cases": stats["failed"],
+                "affected_failed_test_cases": stats["affected_failed_test_cases"],
                 "failure_percentage": fail_percent,
                 "type": stats["type"]
             })

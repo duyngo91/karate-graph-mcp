@@ -5,6 +5,7 @@ Strategy Pattern implementation for exporting/importing DependencyGraph as JSON.
 """
 
 import json
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Dict
 
@@ -13,11 +14,13 @@ from karate_graph_analyzer.models import (
     ComponentCategory,
     DependencyGraph,
     DependencyType,
+    DiffStatus,
     Edge,
     FlowType,
     Node,
     NodeMetadata,
     NodeType,
+    ParserConfig,
 )
 
 
@@ -41,9 +44,11 @@ class JsonExporter(IGraphExporter):
                     "id": node.id,
                     "type": node.type.value,
                     "name": node.name,
+                    "tags": node.tags,
                     "execution_status": node.execution_status,
                     "execution_details": node.execution_details,
-                        "metadata": {
+                    "diff_status": node.diff_status.value,
+                    "metadata": {
                         "file_path": node.metadata.file_path,
                         "line_number": node.metadata.line_number,
                         "jira_tags": node.metadata.jira_tags,
@@ -53,6 +58,8 @@ class JsonExporter(IGraphExporter):
                         "additional_data": node.metadata.additional_data,
                         "environment_variants": getattr(node.metadata, "environment_variants", {}),
                         "execution_history": getattr(node.metadata, "execution_history", []),
+                        "expert_notes": getattr(node.metadata, "expert_notes", []),
+                        "suggestions": getattr(node.metadata, "suggestions", []),
                     },
                 }
             )
@@ -65,6 +72,8 @@ class JsonExporter(IGraphExporter):
                     "from_node": edge.from_node,
                     "to_node": edge.to_node,
                     "type": edge.type.value,
+                    "line_number": edge.line_number,
+                    "diff_status": edge.diff_status.value,
                 }
             )
 
@@ -74,6 +83,8 @@ class JsonExporter(IGraphExporter):
             "nodes": nodes_list,
             "edges": edges_list,
             "cycles": graph.cycles,
+            "config": asdict(graph.config) if graph.config else None,
+            "include_structural_nodes": getattr(graph, "include_structural_nodes", False),
         }
 
         return json.dumps(export_data, indent=2)
@@ -112,6 +123,8 @@ class JsonExporter(IGraphExporter):
                 additional_data=node_data["metadata"].get("additional_data", {}),
                 environment_variants=node_data["metadata"].get("environment_variants", {}),
                 execution_history=node_data["metadata"].get("execution_history", []),
+                expert_notes=node_data["metadata"].get("expert_notes", []),
+                suggestions=node_data["metadata"].get("suggestions", []),
             )
 
             node = Node(
@@ -119,8 +132,10 @@ class JsonExporter(IGraphExporter):
                 type=NodeType(node_data["type"]),
                 name=node_data["name"],
                 metadata=metadata,
+                tags=node_data.get("tags", []),
                 execution_status=node_data.get("execution_status"),
                 execution_details=node_data.get("execution_details", {}),
+                diff_status=DiffStatus(node_data.get("diff_status", "UNCHANGED")),
             )
             nodes[node.id] = node
 
@@ -142,12 +157,21 @@ class JsonExporter(IGraphExporter):
                 from_node=edge_data["from_node"],
                 to_node=edge_data["to_node"],
                 type=DependencyType(edge_data["type"]),
+                line_number=edge_data.get("line_number"),
+                diff_status=DiffStatus(edge_data.get("diff_status", "UNCHANGED")),
             )
             edges[edge.id] = edge
 
         # Reconstruct cycles
         cycles = graph_data.get("cycles", [])
+        config_data = graph_data.get("config")
+        config = ParserConfig(**config_data) if config_data else None
 
         return DependencyGraph(
-            project_name=project_name, nodes=nodes, edges=edges, cycles=cycles
+            project_name=project_name, 
+            nodes=nodes, 
+            edges=edges, 
+            cycles=cycles, 
+            config=config,
+            include_structural_nodes=graph_data.get("include_structural_nodes", False)
         )

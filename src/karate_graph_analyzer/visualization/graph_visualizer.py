@@ -32,6 +32,21 @@ class GraphVisualizer:
         NodeType.DATA: "#795548",         # Brown (Data files)
         NodeType.LOCATOR: "#9E9E9E",      # Grey
     }
+    NODE_SHAPES = {
+        NodeType.TEST_CASE: "star",
+        NodeType.WORKFLOW: "square",
+        NodeType.COMMON: "square",
+        NodeType.SCENARIO: "square",
+        NodeType.API: "diamond",
+        NodeType.API_GROUP: "hexagon",
+        NodeType.PAGE: "ellipse",
+        NodeType.ACTION: "triangle",
+        NodeType.DATABASE: "database",
+        NodeType.DATA: "box",
+        NodeType.LOCATOR: "dot",
+        NodeType.FOLDER: "hexagon",
+        NodeType.FILE: "box",
+    }
 
     # --- COMPONENT_REGISTRY (Flow-based mapping) ---
     COMPONENT_REGISTRY = {
@@ -235,9 +250,11 @@ class GraphVisualizer:
             
             # Store unified display data
             node.metadata.additional_data["display_data"] = display_data
+            node.metadata.additional_data["reg_key"] = reg_key
+            node.metadata.additional_data["eco"] = ecosystem
             
             mass = 5 if ecosystem == "Infrastructure" else 1
-            is_terminal = ecosystem == "Execution" or reg_key == "UTILITY"
+            is_terminal = reg_key in {"TEST_CASE", "SCENARIO", "ACTION", "API", "DATABASE"}
 
             # Status & Failure Propagation
             fail_count = node.execution_details.get("failed_count", 0)
