@@ -45,57 +45,54 @@ class JavaExtractor:
             List of dictionaries containing 'class_path' and 'method_name'
         """
         usages = []
-        if not all_aliases:
-            return usages
-
-        alias_names = list(all_aliases.keys())
-        if not alias_names:
-            return usages
-            
-        alias_names.sort(key=len, reverse=True)
         
+        # 1. Track variables assigned via 'new' within the scenario
+        # e.g., * def myObj = new MyClass()
+        variable_to_class: Dict[str, str] = {}
+        new_var_pattern = r"def\s+(\w+)\s*=\s*new\s+(\w+)"
+        for step in scenario.steps:
+            new_var_match = re.search(new_var_pattern, step.text)
+            if new_var_match:
+                var_name, alias = new_var_match.groups()
+                if alias in all_aliases:
+                    variable_to_class[var_name] = all_aliases[alias]
+                    logger.debug(f"Tracked Java variable: {var_name} -> {all_aliases[alias]}")
+
         for step in scenario.steps:
             text = step.text
             
-            for alias in alias_names:
-                # 1. Match alias.methodName(...)
-                method_pattern = rf"{re.escape(alias)}\.(\w+)"
-                method_matches = re.findall(method_pattern, text)
-                for method in method_matches:
+            # 2. Match target.method(...) - target can be alias, variable, or class
+            method_pattern = r"([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*\("
+            method_matches = re.findall(method_pattern, text)
+            for target, method in method_matches:
+                class_path = None
+                
+                # Try to resolve target
+                if target in all_aliases:
+                    class_path = all_aliases[target]
+                elif target in variable_to_class:
+                    class_path = variable_to_class[target]
+                elif target[0].isupper() and len(target) > 1:
+                    # Direct class call (starts with UpperCase, length > 1 to avoid matching single letters)
+                    class_path = target
+                
+                if class_path:
                     usages.append({
-                        "class_path": all_aliases[alias],
+                        "class_path": class_path,
                         "method_name": method
                     })
-                    logger.debug(f"Detected Java method usage: {all_aliases[alias]}.{method}")
+                    logger.debug(f"Detected Java method usage: {class_path}.{method}")
 
+            # 3. Match new Alias(...) - Constructor
+            for alias_name, class_path in all_aliases.items():
+                new_pattern = rf"new\s+{re.escape(alias_name)}\s*\("
                 if re.search(new_pattern, text):
-                    usages.append({
-                        "class_path": all_aliases[alias],
-                        "method_name": "[Constructor]"
-                    })
-                    logger.debug(f"Detected Java constructor usage: {all_aliases[alias]}")
-
-        # 3. Detect potential direct class calls (e.g. MyUtils.doSomething)
-        # even if not in aliases, if it starts with an uppercase letter
-        potential_class_pattern = r"([A-Z][a-zA-Z0-9_]*)\.([a-zA-Z0-9_]+)\("
-        for step in scenario.steps:
-            text = step.text
-            class_matches = re.findall(potential_class_pattern, text)
-            for class_name, method in class_matches:
-                # If it's already caught by an alias, skip it to avoid duplicates
-                if any(u.get("class_path") == class_name and u.get("method_name") == method for u in usages):
-                    continue
-                
-                # Check if it's a known alias (could be lowercase alias for uppercase class)
-                if class_name in all_aliases:
-                    class_path = all_aliases[class_name]
-                else:
-                    class_path = class_name # Fallback to class name as path
-                
-                usages.append({
-                    "class_path": class_path,
-                    "method_name": method
-                })
-                logger.debug(f"Detected potential Java class usage: {class_path}.{method}")
+                    # Check if already added (some regex might overlap)
+                    if not any(u["class_path"] == class_path and u["method_name"] == "[Constructor]" for u in usages):
+                        usages.append({
+                            "class_path": class_path,
+                            "method_name": "[Constructor]"
+                        })
+                        logger.debug(f"Detected Java constructor usage: {class_path}")
 
         return usages
