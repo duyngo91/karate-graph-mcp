@@ -38,42 +38,43 @@ class JavaExtractor:
             logger.debug(f"Extracted local Java alias: {alias} -> {class_path}")
         return aliases
 
-    def extract_java_usages(self, scenario: Scenario, all_aliases: Dict[str, str]) -> Set[str]:
-        """Extract Java class usages from a scenario's steps.
+    def extract_java_usages(self, scenario: Scenario, all_aliases: Dict[str, str]) -> List[Dict[str, str]]:
+        """Extract Java class and method usages from a scenario's steps.
         
-        Matches:
-        - alias.method()
-        - new alias()
-        
-        Args:
-            scenario: The scenario to analyze
-            all_aliases: Merged dictionary of global and local aliases
-            
         Returns:
-            Set of Java class paths used in this scenario
+            List of dictionaries containing 'class_path' and 'method_name'
         """
-        used_classes = set()
+        usages = []
         if not all_aliases:
-            return used_classes
+            return usages
 
-        # Create a regex pattern to match any of the aliases followed by . or used with new
         alias_names = list(all_aliases.keys())
         if not alias_names:
-            return used_classes
+            return usages
             
-        # Sort alias names by length descending to match longest first (e.g. MyUtils vs MyUtilsSpecial)
         alias_names.sort(key=len, reverse=True)
         
-        # Pattern for usage: alias.method or new alias
-        # We look for words followed by . or preceded by new
         for step in scenario.steps:
             text = step.text
             
-            # Check for alias.method()
             for alias in alias_names:
-                # Use word boundary to avoid partial matches
-                if re.search(rf"\b{re.escape(alias)}\.", text) or re.search(rf"\bnew\s+{re.escape(alias)}\b", text):
-                    used_classes.add(all_aliases[alias])
-                    logger.debug(f"Detected Java usage in scenario '{scenario.name}': {alias} -> {all_aliases[alias]}")
+                # 1. Match alias.methodName(...)
+                method_pattern = rf"{re.escape(alias)}\.(\w+)"
+                method_matches = re.findall(method_pattern, text)
+                for method in method_matches:
+                    usages.append({
+                        "class_path": all_aliases[alias],
+                        "method_name": method
+                    })
+                    logger.debug(f"Detected Java method usage: {all_aliases[alias]}.{method}")
 
-        return used_classes
+                # 2. Match new alias(...) - method_name will be '<init>'
+                new_pattern = rf"new\s+{re.escape(alias)}"
+                if re.search(new_pattern, text):
+                    usages.append({
+                        "class_path": all_aliases[alias],
+                        "method_name": "<init>"
+                    })
+                    logger.debug(f"Detected Java constructor usage: {all_aliases[alias]}")
+
+        return usages

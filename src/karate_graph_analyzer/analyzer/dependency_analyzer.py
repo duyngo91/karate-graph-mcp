@@ -63,6 +63,14 @@ class DependencyAnalyzer:
         from karate_graph_analyzer.analyzer.fix_expert import FixExpert
         self.fix_expert = FixExpert()
 
+        # Initialize healer expert (AI Smart Suggestions)
+        from karate_graph_analyzer.analyzer.healer_expert import HealerExpert
+        self.healer_expert = HealerExpert(self.graph)
+
+    def get_smart_fix_suggestion(self, node_id: str, error_message: str, project_root: str) -> Dict[str, Any]:
+        """Get AI-powered smart fix suggestion for a failure."""
+        return self.healer_expert.suggest_fix(node_id, error_message, project_root)
+
     def impact_analysis(self, component_id: str) -> ImpactResult:
         """Find all test cases affected by component change.
 

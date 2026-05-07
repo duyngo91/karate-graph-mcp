@@ -81,6 +81,7 @@ class NodeType(str, Enum):
     FOLDER = "FOLDER"
     FILE = "FILE"
     JAVA_CLASS = "JAVA_CLASS"
+    JAVA_METHOD = "JAVA_METHOD"
 
 
 class FlowType(str, Enum):

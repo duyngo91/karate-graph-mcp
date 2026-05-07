@@ -46,7 +46,9 @@ class AnalysisExpert:
             NodeType.WORKFLOW, 
             NodeType.SCENARIO,
             NodeType.DATABASE,
-            NodeType.LOCATOR
+            NodeType.LOCATOR,
+            NodeType.JAVA_CLASS,
+            NodeType.JAVA_METHOD
         }
         
         for node_id, node in self.graph.nodes.items():
