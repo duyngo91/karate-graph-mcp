@@ -2,7 +2,7 @@
 import re
 import logging
 from typing import Dict, List, Set, Optional
-from karate_graph_analyzer.models import Scenario, Dependency
+from karate_graph_analyzer.models import Scenario, Dependency, Step
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class JavaExtractor:
                 var_name, alias = new_var_match.groups()
                 if alias in all_aliases:
                     variable_to_class[var_name] = all_aliases[alias]
-                    logger.debug(f"Tracked Java variable: {var_name} -> {all_aliases[alias]}")
+                    logger.info(f"JAVA EXTRACTOR TRACKED VARIABLE: {var_name} -> {all_aliases[alias]}")
 
         for step in steps:
             text = step.text
@@ -72,16 +72,16 @@ class JavaExtractor:
                     class_path = all_aliases[target]
                 elif target in variable_to_class:
                     class_path = variable_to_class[target]
-                elif target[0].isupper() and len(target) > 1:
+                elif target[0].isupper() and target != "Java" and len(target) > 1:
                     # Direct class call (starts with UpperCase)
                     class_path = target
                 
                 if class_path:
+                    logger.info(f"JAVA EXTRACTOR FOUND METHOD: {class_path}.{method}")
                     usages.append({
                         "class_path": class_path,
                         "method_name": method
                     })
-                    logger.debug(f"Detected Java method usage: {class_path}.{method}")
 
             # 3. Match new Alias(...) - Constructor
             for alias_name, class_path in all_aliases.items():
@@ -89,10 +89,10 @@ class JavaExtractor:
                 if re.search(new_pattern, text):
                     # Check if already added (some regex might overlap)
                     if not any(u["class_path"] == class_path and u["method_name"] == "[Constructor]" for u in usages):
+                        logger.info(f"JAVA EXTRACTOR FOUND CONSTRUCTOR: {class_path}")
                         usages.append({
                             "class_path": class_path,
                             "method_name": "[Constructor]"
                         })
-                        logger.debug(f"Detected Java constructor usage: {class_path}")
 
         return usages
