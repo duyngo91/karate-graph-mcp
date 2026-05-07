@@ -271,11 +271,11 @@ class NetworkXBuilder:
         node_id = self._generate_stable_node_id(NodeType.JAVA_CLASS, identity)
         return self._add_node_internal(node_id, NodeType.JAVA_CLASS, class_path, metadata)
 
-    def add_java_method_node(self, class_path: str, method_name: str, metadata: NodeMetadata) -> str:
+    def add_java_method_node(self, name: str, metadata: NodeMetadata) -> str:
         """Add Java method node to graph."""
-        identity = "|".join([metadata.project_name, NodeType.JAVA_METHOD.value, f"{class_path}.{method_name}"])
+        identity = "|".join([metadata.project_name, NodeType.JAVA_METHOD.value, name])
         node_id = self._generate_stable_node_id(NodeType.JAVA_METHOD, identity)
-        return self._add_node_internal(node_id, NodeType.JAVA_METHOD, f"{class_path}.{method_name}", metadata)
+        return self._add_node_internal(node_id, NodeType.JAVA_METHOD, name, metadata)
 
     def update_node_metadata(self, node_id: str, updates: Dict[str, Any]) -> None:
         """Update existing node's metadata (additional_data, variants, etc.)."""

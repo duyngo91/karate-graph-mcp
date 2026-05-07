@@ -1204,7 +1204,7 @@ class KarateGraphAnalyzerTool:
         # 2. Get smart AI suggestion (live analysis)
         # We need the project root path
         project_root = ""
-        for p in self.registry.list_projects():
+        for p in self.registry.list():
             if p["name"] == project_name:
                 project_root = p["root_path"]
                 break
