@@ -48,7 +48,7 @@ Add the following to your AI client configuration (e.g., `claude_desktop_config.
   "mcpServers": {
     "karate-analyzer": {
       "command": "python",
-      "args": ["C:/path/to/repo/src/karate_graph_analyzer/mcp_server.py"],
+      "args": ["-m", "karate_graph_analyzer"],
       "env": {
         "PYTHONPATH": "C:/path/to/repo/src",
         "PYTHONIOENCODING": "utf-8"
@@ -59,6 +59,7 @@ Add the following to your AI client configuration (e.g., `claude_desktop_config.
 ```
 > [!IMPORTANT]
 > Replace `C:/path/to/repo` with the actual absolute path of this repository.
+> You can also use script entrypoint `karate-mcp-server` after `pip install -e .`.
 
 ### 3. Start Analyzing via Chat
 Once connected, just ask your AI:

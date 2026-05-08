@@ -49,6 +49,7 @@ visualization = [
 
 [project.scripts]
 karate-analyzer = "karate_graph_analyzer.__main__:main"
+karate-mcp-server = "karate_graph_analyzer.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
