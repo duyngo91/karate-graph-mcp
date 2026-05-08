@@ -36,7 +36,7 @@ LAYOUT_TEMPLATE = """
             </div>
             
             <div class="sidebar-tabs">
-                <div class="tab active" onclick="switchTab('hotspots')"><i class="fas fa-fire"></i> Hotspots</div>
+                <div class="tab active" onclick="switchTab('hotspots')"><i class="fas fa-fire"></i> Failure Impact</div>
                 <div class="tab" onclick="switchTab('timeline')"><i class="fas fa-history"></i> History</div>
                 <div class="tab" onclick="switchTab('legend')">📖 Legend</div>
             </div>
