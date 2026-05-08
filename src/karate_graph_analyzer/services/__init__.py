@@ -4,16 +4,20 @@ from karate_graph_analyzer.services.project_service import ProjectService
 from karate_graph_analyzer.services.project_lifecycle_service import ProjectLifecycleService
 from karate_graph_analyzer.services.analysis_service import AnalysisService
 from karate_graph_analyzer.services.export_service import ExportService
+from karate_graph_analyzer.services.fingerprint_service import FingerprintService
 from karate_graph_analyzer.services.graph_cache_service import GraphCacheService
 from karate_graph_analyzer.services.query_service import QueryService
 from karate_graph_analyzer.services.report_service import ReportService
+from karate_graph_analyzer.services.runtime_graph_store import RuntimeGraphStore
 
 __all__ = [
     "ProjectService",
     "ProjectLifecycleService",
     "AnalysisService",
     "ExportService",
+    "FingerprintService",
     "GraphCacheService",
     "QueryService",
     "ReportService",
+    "RuntimeGraphStore",
 ]

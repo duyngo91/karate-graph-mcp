@@ -2,10 +2,13 @@
 Proper MCP Server for Karate Feature Graph Analyzer using FastMCP.
 """
 
+import argparse
 import logging
+import sys
 from typing import Any, Dict, List, Optional
 from fastmcp import FastMCP
 
+from karate_graph_analyzer import __version__
 from karate_graph_analyzer.mcp_interface.mcp_tool import KarateGraphAnalyzerTool
 
 # Configure logging
@@ -22,6 +25,28 @@ mcp = FastMCP("Karate-Graph-Analyzer")
 # We use a global instance to persist state across tool calls if needed
 # (FastMCP handles lifecycle, but we want the registry to be consistent)
 analyzer_tool = KarateGraphAnalyzerTool()
+
+
+@mcp.tool()
+def mcp_health() -> Dict[str, Any]:
+    """Health probe for MCP connectivity and server state."""
+    return {
+        "success": True,
+        "server": "Karate-Graph-Analyzer",
+        "version": __version__,
+        "registered_projects": len(analyzer_tool.registry.list()),
+        "analyzed_projects": len(analyzer_tool.graphs),
+    }
+
+
+@mcp.tool()
+def mcp_version() -> Dict[str, Any]:
+    """Return server and package version metadata."""
+    return {
+        "success": True,
+        "server": "Karate-Graph-Analyzer",
+        "version": __version__,
+    }
 
 @mcp.tool()
 def register_project(
@@ -223,6 +248,28 @@ def unused_components(project_name: str, limit: int = 10) -> Dict[str, Any]:
         limit: Maximum number of unused components to return.
     """
     return analyzer_tool.unused_components(project_name, limit)
+
+@mcp.tool()
+def common_usage_map(project_name: str, limit: int = 50) -> Dict[str, Any]:
+    """
+    Return reusable components sorted by how many test cases use them.
+
+    Args:
+        project_name: Name of the analyzed project.
+        limit: Maximum number of reusable components to return.
+    """
+    return analyzer_tool.common_usage_map(project_name, limit)
+
+@mcp.tool()
+def similar_common_components(project_name: str, limit: int = 50) -> Dict[str, Any]:
+    """
+    Find common/scenario/action components that share the same dependency shape.
+
+    Args:
+        project_name: Name of the analyzed project.
+        limit: Maximum number of duplicate-like groups to return.
+    """
+    return analyzer_tool.similar_common_components(project_name, limit)
 
 @mcp.tool()
 def flaky_risk(project_name: str, limit: int = 10) -> Dict[str, Any]:
@@ -431,6 +478,19 @@ def compare_projects(
     """
     return analyzer_tool.compare_projects(base_project_name, new_project_name, output_path)
 
-if __name__ == "__main__":
-    # Start the server using stdio
+
+def main() -> int:
+    """Run Karate Graph Analyzer as a FastMCP stdio server."""
+    parser = argparse.ArgumentParser(description="Karate Graph Analyzer MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio"],
+        default="stdio",
+        help="Server transport (default: stdio)",
+    )
+    parser.parse_args()
     mcp.run()
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

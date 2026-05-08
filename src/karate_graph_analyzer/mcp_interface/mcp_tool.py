@@ -7,7 +7,6 @@ Provides MCP protocol interface for graph analyzer.
 import json
 import logging
 from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -18,14 +17,17 @@ from pydantic import BaseModel, Field, field_validator
 from karate_graph_analyzer.analyzer.dependency_analyzer import DependencyAnalyzer
 from karate_graph_analyzer.cache.cache_manager import CacheManager
 from karate_graph_analyzer.exporters import ExporterFactory
+from karate_graph_analyzer.mcp_interface.responses import error_response
 from karate_graph_analyzer.mcp_interface.search_tools import SearchTools
 from karate_graph_analyzer.services.graph_cache_service import GraphCacheService
 from karate_graph_analyzer.services.project_lifecycle_service import ProjectLifecycleService
 from karate_graph_analyzer.services.query_service import QueryService
 from karate_graph_analyzer.services.report_service import ReportService
+from karate_graph_analyzer.services.runtime_graph_store import RuntimeGraphStore
 from karate_graph_analyzer.models import (
     DependencyGraph,
     ImpactResult,
+    NodeType,
     ParserConfig,
     Project,
     ReusableComponent,
@@ -232,8 +234,10 @@ class KarateGraphAnalyzerTool:
         """
         self.registry = ProjectRegistry(storage_path=storage_path)
         self.cache_manager = CacheManager()
-        self.graphs: Dict[str, DependencyGraph] = {}  # project_name -> graph
-        self.analyzers: Dict[str, DependencyAnalyzer] = {}  # project_name -> analyzer
+        self.runtime_store = RuntimeGraphStore()
+        # Backward-compatible aliases used by existing tests/integrations.
+        self.graphs = self.runtime_store.graphs  # project_name -> graph
+        self.analyzers = self.runtime_store.analyzers  # project_name -> analyzer
         self.search_tools: Optional[SearchTools] = None  # Initialized after first graph is loaded
         
         # Ensure storage directory for graphs exists
@@ -270,7 +274,7 @@ class KarateGraphAnalyzerTool:
 
     def _get_analyzer(self, project_name: str) -> Optional[DependencyAnalyzer]:
         """Return analyzer for an analyzed project."""
-        return self.analyzers.get(project_name)
+        return self.runtime_store.get_analyzer(project_name)
 
     def _require_analyzer(self, project_name: str) -> Optional[Dict[str, Any]]:
         """Return an error response if the project has not been analyzed."""
@@ -283,7 +287,7 @@ class KarateGraphAnalyzerTool:
 
     def _get_graph(self, project_name: str) -> Optional[DependencyGraph]:
         """Return graph for an analyzed project."""
-        return self.graphs.get(project_name)
+        return self.runtime_store.get_graph(project_name)
 
     def _require_graph(
         self,
@@ -311,14 +315,12 @@ class KarateGraphAnalyzerTool:
 
     def _store_runtime_graph(self, project_name: str, graph: DependencyGraph) -> None:
         """Store graph/analyzer state in memory and refresh search tooling."""
-        self.graphs[project_name] = graph
-        self.analyzers[project_name] = DependencyAnalyzer(graph)
+        self.runtime_store.put(project_name, graph)
         self._refresh_search_tools()
 
     def _remove_runtime_project(self, project_name: str) -> None:
         """Remove one project from in-memory state and refresh search tooling."""
-        self.graphs.pop(project_name, None)
-        self.analyzers.pop(project_name, None)
+        self.runtime_store.remove(project_name)
         path = self.storage_dir / f"{project_name}.json"
         if path.exists():
             path.unlink()
@@ -326,8 +328,7 @@ class KarateGraphAnalyzerTool:
 
     def _clear_runtime_projects(self) -> None:
         """Clear in-memory graph/analyzer state and refresh search tooling."""
-        self.graphs.clear()
-        self.analyzers.clear()
+        self.runtime_store.clear()
         self._refresh_search_tools()
 
     def _build_graph_statistics(self, graph: DependencyGraph) -> Dict[str, Any]:
@@ -1115,7 +1116,7 @@ class KarateGraphAnalyzerTool:
 
     def _find_analyzer_for_node(self, node_id: str) -> Optional[DependencyAnalyzer]:
         """Find the analyzer that contains the specified node."""
-        return self.query_service.find_analyzer_for_node(self.analyzers, node_id)
+        return self.runtime_store.find_analyzer_for_node(node_id)
 
     # Legacy export/import methods
     def _export_to_json(self, graph: DependencyGraph) -> str:
@@ -1341,6 +1342,134 @@ class KarateGraphAnalyzerTool:
         for key, nodes in duplicates.items():
             results[key] = [{"id": n.id, "name": n.name, "file_path": n.metadata.file_path, "line_number": n.metadata.line_number} for n in nodes]
         return {"success": True, "project_name": project_name, "redundant_apis": results, "count": len(results)}
+
+    def common_usage_map(self, project_name: str, limit: int = 50) -> Dict[str, Any]:
+        """Return reusable components sorted by how many test cases use them."""
+        request = QueryPresetRequest(project_name=project_name, limit=limit)
+        graph_error = self._require_graph(request.project_name)
+        if graph_error:
+            return graph_error
+
+        from karate_graph_analyzer.graph.graph_query import GraphQuery
+
+        graph = self.graphs[request.project_name]
+        query = GraphQuery(graph)
+        reusable_types = {
+            NodeType.COMMON,
+            NodeType.SCENARIO,
+            NodeType.WORKFLOW,
+            NodeType.PAGE,
+            NodeType.ACTION,
+            NodeType.API,
+            NodeType.DATA,
+            NodeType.DATABASE,
+        }
+
+        results: List[Dict[str, Any]] = []
+        for node in graph.nodes.values():
+            if node.type not in reusable_types:
+                continue
+
+            stats = query.get_usage_stats(node)
+            usage_count = stats.get("usage_count", 0)
+            if usage_count == 0:
+                continue
+
+            results.append(
+                {
+                    "id": node.id,
+                    "type": node.type.value,
+                    "name": node.name,
+                    "usage_count": usage_count,
+                    "used_by_test_cases": stats.get("used_by_test_cases", []),
+                    "direct_dependencies": stats.get("direct_dependencies", []),
+                    "file_path": node.metadata.file_path,
+                    "line_number": node.metadata.line_number,
+                    "scenario_tag": node.metadata.additional_data.get("scenario_tag"),
+                    "action_tag": node.metadata.additional_data.get("action_tag"),
+                }
+            )
+
+        results.sort(
+            key=lambda item: (
+                item["usage_count"],
+                item["type"] in {"COMMON", "SCENARIO", "WORKFLOW", "PAGE", "ACTION"},
+                item["name"],
+            ),
+            reverse=True,
+        )
+
+        return {
+            "success": True,
+            "preset": "common-usage-map",
+            "project_name": request.project_name,
+            "limit": request.limit,
+            "results": results[: request.limit],
+            "count": min(len(results), request.limit),
+            "total_available": len(results),
+        }
+
+    def similar_common_components(self, project_name: str, limit: int = 50) -> Dict[str, Any]:
+        """Find reusable scenario/common/action nodes with the same dependency shape."""
+        request = QueryPresetRequest(project_name=project_name, limit=limit)
+        graph_error = self._require_graph(request.project_name)
+        if graph_error:
+            return graph_error
+
+        graph = self.graphs[request.project_name]
+        comparable_types = {NodeType.COMMON, NodeType.SCENARIO, NodeType.WORKFLOW, NodeType.ACTION}
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+
+        for node in graph.nodes.values():
+            if node.type not in comparable_types:
+                continue
+
+            deps = []
+            for edge in graph.edges.values():
+                if edge.from_node != node.id:
+                    continue
+                target = graph.nodes.get(edge.to_node)
+                if not target:
+                    continue
+                deps.append(f"{target.type.value}:{target.name}")
+
+            if not deps:
+                continue
+
+            signature = "|".join(sorted(set(deps)))
+            groups.setdefault(signature, []).append(
+                {
+                    "id": node.id,
+                    "type": node.type.value,
+                    "name": node.name,
+                    "file_path": node.metadata.file_path,
+                    "line_number": node.metadata.line_number,
+                    "scenario_tag": node.metadata.additional_data.get("scenario_tag"),
+                    "action_tag": node.metadata.additional_data.get("action_tag"),
+                    "dependencies": sorted(set(deps)),
+                }
+            )
+
+        duplicate_groups = [
+            {
+                "signature": signature,
+                "component_count": len(nodes),
+                "components": nodes,
+            }
+            for signature, nodes in groups.items()
+            if len(nodes) > 1
+        ]
+        duplicate_groups.sort(key=lambda item: item["component_count"], reverse=True)
+
+        return {
+            "success": True,
+            "preset": "similar-common-components",
+            "project_name": request.project_name,
+            "limit": request.limit,
+            "results": duplicate_groups[: request.limit],
+            "count": min(len(duplicate_groups), request.limit),
+            "total_available": len(duplicate_groups),
+        }
 
     def get_failure_hotspots(self, project_name: str) -> Dict[str, Any]:
         analyzer_error = self._require_analyzer(project_name)
@@ -1641,12 +1770,4 @@ class KarateGraphAnalyzerTool:
         return None
 
     def _error_response(self, code: Any, category: str, message: str) -> Dict[str, Any]:
-        return {
-            "success": False,
-            "error": {
-                "code": str(code),
-                "category": category,
-                "message": message,
-                "timestamp": datetime.now().isoformat(),
-            },
-        }
+        return error_response(code=code, category=category, message=message)
