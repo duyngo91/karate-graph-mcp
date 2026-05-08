@@ -3,6 +3,32 @@
 var isFocused = false;
 var currentTab = 'HOTSPOTS';
 
+function getStatusTone(status) {
+    if (status === 'PASSED') {
+        return { klass: 'badge-passed', bg: '#e8f5e9', color: '#2e7d32', label: 'PASSED' };
+    }
+    if (status === 'FAILED') {
+        return { klass: 'badge-failed', bg: '#ffebee', color: '#c62828', label: 'FAILED' };
+    }
+    if (status === 'PARTIAL_FAIL') {
+        return { klass: 'badge-partial', bg: '#fff3e0', color: '#e65100', label: 'PARTIAL_FAIL' };
+    }
+    return { klass: 'badge-neutral', bg: '#eceff1', color: '#455a64', label: status || 'NEUTRAL' };
+}
+
+function classifyHotspot(hs) {
+    const node = nodeMetadata[hs.node_id];
+    const nodeType = hs.type || node?.type || '';
+    const lowered = String(nodeType).toUpperCase();
+    if (lowered === 'TEST_CASE' || lowered === 'SCENARIO' || lowered === 'ACTION') {
+        return { label: 'Failing Component', color: '#d32f2f', note: 'Directly involved in failed execution.' };
+    }
+    if (lowered === 'DATA' || lowered === 'LOCATOR' || lowered === 'FILE' || lowered === 'FOLDER') {
+        return { label: 'Supporting Asset', color: '#455a64', note: 'Used by failed tests, not a direct failure verdict.' };
+    }
+    return { label: 'Shared Dependency', color: '#f57c00', note: 'Shared path in failing tests. Investigate with context.' };
+}
+
 // --- SIDEBAR & TABS ---
 
 function jumpToNode(nodeId) {
@@ -102,9 +128,9 @@ function showDetails(nodeId) {
             <div class="detail-label">Type & Status</div>
             <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
                 ${data.badges.map(b => `<span class="impact-badge badge-type">${b}</span>`).join('')}
-                <span class="impact-badge ${data.status === 'PASSED' ? 'badge-passed' : 'badge-failed'}" 
-                      style="background: ${data.status === 'PASSED' ? '#e8f5e9' : '#ffebee'}; color: ${data.status === 'PASSED' ? '#2e7d32' : '#c62828'};">
-                    ${data.status}
+                <span class="impact-badge ${getStatusTone(data.status).klass}" 
+                      style="background: ${getStatusTone(data.status).bg}; color: ${getStatusTone(data.status).color};">
+                    ${getStatusTone(data.status).label}
                 </span>
             </div>
         </div>
@@ -240,7 +266,7 @@ function showDetails(nodeId) {
     }
 
     // Internal Failures (for hotspots)
-    if (data.status !== 'PASSED') {
+    if (data.status === 'FAILED' || data.status === 'PARTIAL_FAIL') {
         const failedChildren = [];
         edges.get().forEach(edge => {
             if (edge.from === nodeId) {
@@ -254,7 +280,7 @@ function showDetails(nodeId) {
         if (failedChildren.length > 0) {
             html += `
                 <div class="detail-section">
-                    <div class="detail-label" style="color: #d32f2f;"><i class="fas fa-search-location"></i> Failing Components Inside</div>
+                    <div class="detail-label" style="color: #d32f2f;"><i class="fas fa-search-location"></i> Related Failed Components</div>
                     <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
                         ${failedChildren.map(child => `
                             <div class="error-box" style="border-left: 4px solid #f44336; cursor: pointer; transition: 0.2s;" 
@@ -301,29 +327,35 @@ function renderDashboard() {
                 ? Math.round((failedCount / totalProjectFailures) * 100) 
                 : 0;
             
-            const isRootCause = contribution >= 50; // If responsible for half of failures
+            const isRootCause = contribution >= 50;
+            const profile = classifyHotspot(hs);
             
             return `
                 <div class="hotspot-item ${isRootCause ? 'pulse-fail' : ''}" onclick="focusOnNode('${hs.node_id}')" 
-                     style="border-left: 4px solid ${isRootCause ? '#d32f2f' : '#ffa000'};">
+                     style="border-left: 4px solid ${profile.color};">
                     <div class="hotspot-header">
                         <div style="font-weight: 800; font-size: 13px; color: #1a237e;">${hs.name}</div>
-                        <span class="impact-badge" style="background: ${isRootCause ? '#d32f2f' : '#ff9800'}; font-size: 10px;">
-                            ${contribution}% OF TOTAL FAILURES
+                        <span class="impact-badge" style="background: ${profile.color}; font-size: 10px;">
+                            ${profile.label}
                         </span>
                     </div>
                     <div style="margin-top: 8px; font-size: 11px; color: #444;">
-                        <i class="fas fa-exclamation-triangle" style="color: #f44336;"></i> 
-                        <b>${hs.failed_test_cases} / ${hs.total_test_cases}</b> tests failed in this path
+                        <i class="fas fa-exclamation-triangle" style="color: ${profile.color};"></i> 
+                        <b>${hs.failed_test_cases} / ${hs.total_test_cases}</b> tests failed along this path
                     </div>
-                    ${isRootCause ? '<div style="margin-top: 5px; font-size: 9px; font-weight: 900; color: #d32f2f; text-transform: uppercase;">🚩 CRITICAL ROOT CAUSE</div>' : ''}
+                                        <div style="margin-top: 5px; font-size: 10px; color: #555;">
+                        Impact signal: <b>${contribution}%</b> of failed tests
+                    </div>
+                    <div style="margin-top: 4px; font-size: 10px; color: #666;">
+                        ${profile.note}
+                    </div>
                 </div>
             `;
         }).join('');
     }
 
     // 2. Summary HUD
-    let total = 0, passed = 0, failed = 0;
+    let total = 0, passed = 0, failed = 0, partial = 0;
     for (const id in nodeMetadata) {
         const node = nodeMetadata[id];
         if (node.type === 'TEST_CASE') {
@@ -331,6 +363,7 @@ function renderDashboard() {
             if (node.execution_status === 'PASSED') passed++;
             else if (node.execution_status === 'FAILED') failed++;
         }
+        if (node.execution_status === 'PARTIAL_FAIL') partial++;
     }
 
     if (total > 0 && activeMode === 'EXECUTION') {
@@ -350,6 +383,10 @@ function renderDashboard() {
                     <div onclick="filterNodes('failed')" style="cursor: pointer;">
                         <div style="font-size: 10px; color: #f44336; font-weight: 800;">FAIL</div>
                         <div style="font-size: 18px; font-weight: 800; color: #c62828;">${failed}</div>
+                    </div>
+                    <div onclick="filterNodes('partial')" style="cursor: pointer;">
+                        <div style="font-size: 10px; color: #e65100; font-weight: 800;">PARTIAL</div>
+                        <div style="font-size: 18px; font-weight: 800; color: #e65100;">${partial}</div>
                     </div>
                     <div onclick="filterNodes('all')" style="cursor: pointer;">
                         <div style="font-size: 10px; color: #999; font-weight: 800;">TOTAL</div>
@@ -377,6 +414,8 @@ function filterNodes(status) {
             hidden = (metadata.execution_status !== 'FAILED');
         } else if (status === 'passed') {
             hidden = (metadata.execution_status !== 'PASSED');
+        } else if (status === 'partial') {
+            hidden = (metadata.execution_status !== 'PARTIAL_FAIL');
         }
         
         return { id: node.id, hidden: hidden };
@@ -484,18 +523,18 @@ function renderLegend() {
                 <span><b>File (Box)</b></span>
             </div>
 
-            <div style="font-weight: 700; color: #666; margin: 20px 0 15px 0; font-size: 11px; text-transform: uppercase;">Status Colors</div>
+            <div style="font-weight: 700; color: #666; margin: 20px 0 15px 0; font-size: 11px; text-transform: uppercase;">Execution Signals</div>
             <div style="display: flex; align-items: center; margin-bottom: 8px; font-size: 12px;">
                 <div style="width: 12px; height: 12px; background: #4caf50; border-radius: 2px; margin-right: 10px;"></div>
-                <span>Passed</span>
+                <span>Passed execution</span>
             </div>
             <div style="display: flex; align-items: center; margin-bottom: 8px; font-size: 12px;">
                 <div style="width: 12px; height: 12px; background: #f44336; border-radius: 2px; margin-right: 10px;"></div>
-                <span>Failed</span>
+                <span>Failed execution</span>
             </div>
             <div style="display: flex; align-items: center; margin-bottom: 8px; font-size: 12px;">
                 <div style="width: 12px; height: 12px; background: #ff9800; border-radius: 2px; margin-right: 10px;"></div>
-                <span>Impacted</span>
+                <span>Partial fail / affected by failed descendants</span>
             </div>
         </div>
     `;
@@ -539,3 +578,4 @@ window.onload = function() {
         }
     });
 };
+
