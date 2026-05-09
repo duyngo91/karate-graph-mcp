@@ -47,6 +47,8 @@ class NetworkXBuilder:
             NodeType.LOCATOR: "loc",
             NodeType.JAVA_CLASS: "java",
             NodeType.JAVA_METHOD: "jvm",
+            NodeType.JAVASCRIPT: "js",
+            NodeType.JS_FUNCTION: "jsfn",
         }
         prefix = prefix_map.get(node_type, "node")
         digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
@@ -270,6 +272,19 @@ class NetworkXBuilder:
         identity = "|".join([metadata.project_name, NodeType.JAVA_METHOD.value, name])
         node_id = self._generate_stable_node_id(NodeType.JAVA_METHOD, identity)
         return self._add_node_internal(node_id, NodeType.JAVA_METHOD, name, metadata)
+
+    def add_javascript_node(self, script_path: str, metadata: NodeMetadata) -> str:
+        """Add JavaScript helper/config node to graph."""
+        identity = "|".join([metadata.project_name, NodeType.JAVASCRIPT.value, script_path])
+        node_id = self._generate_stable_node_id(NodeType.JAVASCRIPT, identity)
+        return self._add_node_internal(node_id, NodeType.JAVASCRIPT, script_path, metadata)
+
+    def add_js_function_node(self, name: str, metadata: NodeMetadata) -> str:
+        """Add JavaScript function/export node to graph."""
+        identity = "|".join([metadata.project_name, NodeType.JS_FUNCTION.value, name])
+        node_id = self._generate_stable_node_id(NodeType.JS_FUNCTION, identity)
+        display_name = metadata.additional_data.get("function_name", name)
+        return self._add_node_internal(node_id, NodeType.JS_FUNCTION, display_name, metadata)
 
     def update_node_metadata(self, node_id: str, updates: Dict[str, Any]) -> None:
         """Update existing node's metadata (additional_data, variants, etc.)."""

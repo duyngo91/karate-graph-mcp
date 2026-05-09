@@ -616,7 +616,50 @@ function buildHotspotDashboardModel() {
         topError: errorGroups.length ? errorGroups[0][0] : 'N/A',
         rows: buildHotspotRows(visibleHotspots, totalProjectFailures),
         typeOptions: getHotspotTypeOptions(hotspots),
-        uniqueFailedCaseCount: getUniqueFailedTestCases(hotspots).size
+        uniqueFailedCaseCount: getUniqueFailedTestCases(hotspots).size,
+        insights: buildReportInsights(hotspots)
+    };
+}
+
+function buildReportInsights(hotspots) {
+    const values = Object.values(nodeMetadata || {});
+    const jsFileCount = values.filter(n => n && n.type === 'JAVASCRIPT').length;
+    const jsFunctionCount = values.filter(n => n && n.type === 'JS_FUNCTION').length;
+
+    const jsRelatedCaseIds = new Set();
+    const typeImpactMap = {};
+    const reasonCountMap = {};
+
+    hotspots.forEach(hs => {
+        const type = getHotspotType(hs);
+        typeImpactMap[type] = (typeImpactMap[type] || 0) + (hs.failed_test_cases || 0);
+        const failedCases = hs.affected_failed_test_cases || [];
+        failedCases.forEach(testCase => {
+            const caseId = testCase.node_id || testCase.id;
+            if (caseId && (type === 'JAVASCRIPT' || type === 'JS_FUNCTION')) {
+                jsRelatedCaseIds.add(caseId);
+            }
+            const reason = (testCase.reason || '').trim() || 'Unknown error';
+            reasonCountMap[reason] = (reasonCountMap[reason] || 0) + 1;
+        });
+    });
+
+    const topTypes = Object.entries(typeImpactMap)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([type, failedCount]) => ({ type, failedCount }));
+
+    const topReasons = Object.entries(reasonCountMap)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([reason, count]) => ({ reason, count }));
+
+    return {
+        jsFileCount,
+        jsFunctionCount,
+        jsRelatedFailedCases: jsRelatedCaseIds.size,
+        topTypes,
+        topReasons
     };
 }
 
@@ -636,11 +679,61 @@ function renderHotspotDashboard(model) {
             ${renderSummaryCard('Failed Test Cases', model.totalProjectFailures)}
             ${renderSummaryCard('Unique Failing Cases', model.uniqueFailedCaseCount)}
             ${renderSummaryCard('Hotspots', model.hotspots.length)}
+            ${renderSummaryCard('JS Files', model.insights.jsFileCount)}
+            ${renderSummaryCard('JS Functions', model.insights.jsFunctionCount)}
+            ${renderSummaryCard('JS-Related Failed Cases', model.insights.jsRelatedFailedCases)}
         </div>
+        ${renderReportInsights(model.insights)}
         <div class="hotspot-section-title">Hotspot Dashboard Table</div>
         ${renderHotspotFilters(model.typeOptions)}
         ${renderHotspotTable(model.rows)}
         ${renderHotspotAnalysis(model)}
+    `;
+}
+
+function renderReportInsights(insights) {
+    return `
+        <div class="report-insights-panel">
+            <div class="hotspot-section-title">Report Insights</div>
+            <div class="report-insights-grid">
+                <div class="report-insights-card">
+                    <div class="hotspot-section-subtitle">Top Hotspot Types (by failed cases)</div>
+                    ${renderTopTypes(insights.topTypes)}
+                </div>
+                <div class="report-insights-card">
+                    <div class="hotspot-section-subtitle">Top Error Reasons (global)</div>
+                    ${renderTopReasons(insights.topReasons)}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderTopTypes(rows) {
+    if (!rows.length) return '<div class="report-insights-empty">No type impact data.</div>';
+    return `
+        <div class="report-insights-list">
+            ${rows.map((row, idx) => `
+                <div class="report-insights-row">
+                    <span>#${idx + 1} ${escapeHtml(row.type)}</span>
+                    <b>${row.failedCount}</b>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+function renderTopReasons(rows) {
+    if (!rows.length) return '<div class="report-insights-empty">No error reasons in report.</div>';
+    return `
+        <div class="report-insights-list">
+            ${rows.map((row, idx) => `
+                <div class="report-insights-row">
+                    <span>#${idx + 1} ${escapeHtml(row.reason)}</span>
+                    <b>${row.count}</b>
+                </div>
+            `).join('')}
+        </div>
     `;
 }
 

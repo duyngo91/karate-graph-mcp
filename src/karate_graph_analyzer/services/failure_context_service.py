@@ -169,6 +169,8 @@ class FailureContextService:
             suggested_owner = "environment/backend"
         elif node.type in {NodeType.PAGE, NodeType.ACTION, NodeType.LOCATOR}:
             suggested_owner = "ui-automation"
+        elif node.type in {NodeType.JAVASCRIPT, NodeType.JS_FUNCTION}:
+            suggested_owner = "test-framework/javascript"
 
         next_steps = [
             "Open the source snippet and confirm the failing step maps to the current node.",
@@ -179,6 +181,8 @@ class FailureContextService:
             next_steps.insert(1, "Check the API method/path/status signal and backend correlation logs.")
         if category == "TIMEOUT":
             next_steps.insert(1, "Check environment latency, downstream service health, and retry behavior.")
+        if node.type in {NodeType.JAVASCRIPT, NodeType.JS_FUNCTION}:
+            next_steps.insert(1, "Inspect JS helper/config inputs, exported function shape, and call/read dependencies.")
 
         return {
             "suggested_owner": suggested_owner,

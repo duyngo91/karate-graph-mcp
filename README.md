@@ -1,47 +1,26 @@
-# 🚀 Karate Feature Graph Analyzer (MCP-Powered)
+# Karate Feature Graph Analyzer (MCP-Powered)
 
-A powerful **Model Context Protocol (MCP)** tool designed for AI agents (Claude, Antigravity, Cursor) to analyze Karate Framework feature files, manage multi-project dependencies, and generate interactive graphs.
+A Model Context Protocol (MCP) tool for AI agents to analyze Karate Framework projects, build dependency graphs, and generate interactive reports.
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
-[![MCP](https://img.shields.io/badge/Protocol-MCP-orange.svg)](https://modelcontextprotocol.io/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## Why use this with AI?
 
----
+- Impact analysis with dependency paths and source lines
+- Multi-project graph exploration
+- Search APIs, workflows, pages, Java/JS usages
+- Failure hotspot and flaky-risk prioritization
+- Reusable helper discovery before writing new code
 
-## ✨ Why use this with AI?
+## Quick Start
 
-Instead of running scripts manually, you can just **chat with your codebase**:
-- 🔍 **Impact Analysis**: Ask AI "What happens if I change this API?" and see the **exact lines** affected.
-- 📈 **Ecosystem View**: Merge multiple projects into one global graph via chat.
-- 📝 **Source Snippets**: View relevant code snippets around dependencies directly in AI search results.
-- 🎫 **Ticket tracking**: Automatically link Jira tags to code components.
-- 🩺 **Health Check**: Get AI-generated reports on cycles and redundant components.
+1. Install
 
----
-
-## 🚀 Quick Start
-### 1. Installation
-
-**Option A: Standard (Requires Internet)**
 ```bash
 git clone <repository-url>
 cd karate-feature-graph-analyzer
 pip install -e .
 ```
 
-**Option B: Offline / Vendor Mode (No Internet Required)**
-If your environment blocks external downloads, use the pre-packaged libraries in `python_libs`:
-```bash
-git clone <repository-url>
-cd karate-feature-graph-analyzer
-# Install all dependencies from local vendor folder
-pip install --no-index --find-links=python_libs -r requirements.txt
-# Install the project in editable mode
-pip install -e . --no-deps
-```
-
-### 2. Configure MCP Client
-Add the following to your AI client configuration (e.g., `claude_desktop_config.json`):
+2. Configure MCP client
 
 ```json
 {
@@ -57,89 +36,75 @@ Add the following to your AI client configuration (e.g., `claude_desktop_config.
   }
 }
 ```
-> [!IMPORTANT]
-> Replace `C:/path/to/repo` with the actual absolute path of this repository.
-> You can also use script entrypoint `karate-mcp-server` after `pip install -e .`.
 
-### 3. Start Analyzing via Chat
-Once connected, just ask your AI:
-- *"Register the project at `E:/my-karate-fw` and analyze it."*
-- *"Show me all test cases affected by a change in the `OrderManagement` page."*
-- *"Scan all my registered projects and give me a health summary."*
+3. Ask your AI to:
 
----
+- Register and analyze project
+- Show impact if a component changes
+- Find reusable helpers before creating new ones
 
-## 🤖 Available AI Tools
+## Available AI Tools
 
-| Tool | AI Command Example |
-|------|-------------------|
-| `register_project` | "Register my project at [path] as 'Core-Service'" |
-| `bulk_analyze` | "Scan all my projects and find any issues" |
-| `merge_projects` | "Merge project A and B to see cross-project dependencies" |
-| `impact_analysis` | "Which tests break if I modify the @AddPayment scenario?" |
-| `search_api` | "Find all POST endpoints in the checkout domain" |
-| `get_project_health`| "Give me a health report for project X" |
-| `export_graph` | "Export the graph of project Y to JSON" |
+- `register_project`
+- `analyze_project`
+- `bulk_analyze`
+- `impact_analysis`
+- `search_api`
+- `search_workflow`
+- `search_test_case`
+- `search_java_usage`
+- `search_js_usage`
+- `search_error_pattern`
+- `search_reusable_function`
+- `change_impact_preview`
+- `test_selection_suggestion`
+- `top_hotspots`
+- `prioritize_fix_queue`
+- `flaky_risk`
 
----
+## Reuse And Smart Retest
 
-## 📊 Visualizing Results
+### 1) Reuse search
 
-The analyzer generates interactive HTML graphs in the `output/` directory using a standardized **Visual Identity System**:
+`search_reusable_function(project_name, query, language, limit)` now returns:
 
-- **Shapes & Meanings**:
-  - ⭐ **Test Case (Star)**: Main entry points / End-to-End scenarios.
-  - 🟦 **Workflow/Common (Square)**: Reusable logic blocks and service files.
-  - ⬢ **API Group (Hexagon)**: Domain or path-based API groupings.
-  - ⬥ **API Endpoint (Diamond)**: Individual API calls.
-  - ⬭ **Page (Ellipse)**: UI Page Objects.
-  - 📐 **Action (Triangle)**: Specific UI interactions/locators.
-  - 🛢️ **Database (Cylinder)**: Database feature files.
-  - ⚪ **Query (Dot)**: Specific DB query scenarios.
-  - 📦 **Data (Box)**: External JSON/CSV data files.
+- `tags`
+- `aliases`
+- `usage_examples`
+- `stability_score`
 
-- **Interactive Features**:
-  - **Focus Mode**: Double-click any node to isolate its dependency chain.
-  - **AI Insights**: Click a node to see "Expert Analysis" and "Fix Suggestions" generated by AI.
-  - **Status Coloring**: Nodes turn 🔴 Red (Failed), 🟢 Green (Passed), or 🟠 Orange (Modified in Diff) based on context.
+This helps AI pick existing helpers with better confidence.
 
----
+### 2) Change impact preview
 
-## 🛠️ Advanced Usage (CLI)
+`change_impact_preview(project_name, changed_paths, limit)` maps changed files/components to impacted test cases via dependency paths.
 
-If you still prefer the terminal, you can use the built-in scanners:
+### 3) Test selection suggestion
 
-### Scan a single project
-```bash
-python scan_project.py <path_to_project> <output_name>
-```
+`test_selection_suggestion(project_name, changed_paths, limit)` suggests a compact high-signal rerun set.
 
-### Scan multiple projects at once
-```bash
-python scan_all_projects.py <path1> <path2> <parent_folder>
-```
+Current strategy:
 
----
+`priority = trigger_count * 10 - min_depth`
 
-## 📁 Project Structure
+## Visual Reports
 
-```
+Interactive HTML graph output is generated under each project `output/` folder.
+
+## Project Structure
+
+```text
 karate-feature-graph-analyzer/
 ├── src/karate_graph_analyzer/
-│   ├── mcp_server.py                # MCP Server Entry Point
-│   ├── mcp_interface/               # MCP Tool Logic
-│   ├── parser/                      # Karate/Gherkin Parser
-│   ├── graph/                       # Graph Construction
-│   └── visualization/               # HTML/Vis.js Generator
-├── python_libs/                     # [NEW] Offline python dependencies (.whl)
-├── requirements.txt                 # Dependency list for installation
-├── output/                          # Generated HTML/JSON files
-└── tests/                           # 300+ Unit & Integration tests
+│   ├── mcp_server.py
+│   ├── mcp_interface/
+│   ├── parser/
+│   ├── graph/
+│   └── visualization/
+├── output/
+└── tests/
 ```
 
----
+## License
 
-## 📝 License
-This project is licensed under the MIT License.
-
-**Built with ❤️ for the Karate Community.**
+MIT

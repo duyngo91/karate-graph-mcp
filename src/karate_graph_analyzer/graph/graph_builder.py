@@ -34,6 +34,8 @@ from karate_graph_analyzer.graph.core.path_classifier import PathClassifier
 from karate_graph_analyzer.graph.core.dependency_linker import DependencyLinker
 from karate_graph_analyzer.graph.core.incremental_updater import IncrementalUpdater
 from karate_graph_analyzer.graph.structural_builder import StructuralBuilder
+from karate_graph_analyzer.parser.extractors.call_read_extractor import CallReadExtractor
+from karate_graph_analyzer.parser.extractors.javascript_structure_extractor import JavaScriptStructureExtractor
 from karate_graph_analyzer.utils.path_resolver import PathResolver
 from karate_graph_analyzer.core.context import AnalysisContext
 
@@ -165,8 +167,10 @@ class GraphBuilder:
                     keys = [(norm_path, tag) for tag in scenario.tags] or [(norm_path, "")]
                     for k in keys: common_api_map[k] = api_deps
 
-        # Pass 2: Build all nodes and link dependencies
+        # Pass 2: Build reusable JavaScript structure before linking features.
+        # This lets feature dependencies point at both the JS file and callable export.
         node_map: Dict[Tuple, str] = {}
+        self._process_javascript_files(project, node_map)
         for ast in ast_list:
             self._process_ast_nodes(ast, parser, project, common_api_map, node_map)
 
@@ -214,6 +218,7 @@ class GraphBuilder:
                 
                 # Link dependencies
                 self._link_dependencies(scenario, ast, parser, project, node_id, common_map, node_map, context)
+                self._link_implicit_karate_config(project, node_id, node_map)
             except Exception as e:
                 logger.error(f"Error processing scenario {scenario.name} in {ast.file_path}: {e}", exc_info=True)
 
@@ -307,6 +312,8 @@ class GraphBuilder:
                 dep_id = self.dependency_linker.get_or_create_dependency_node(dep, project.name, node_map, context=context)
                 if dep_id:
                     self.nx_builder.add_dependency(node_id, dep_id, dep.type, line_number=dep.line_number)
+                    if dep.type == DependencyType.JAVASCRIPT:
+                        self._link_javascript_callable(node_id, dep_id, dep.line_number, dep.parameters.get("function_name"))
 
     def _link_common_dependency(self, node_id, dep, project_name, common_map, node_map, context):
         tag = dep.parameters.get("scenario_tag", "")
@@ -336,6 +343,197 @@ class GraphBuilder:
                 if not any(ex in path_parts for ex in exclude_dirs):
                     files.append(m)
         return sorted(set(files))
+
+    def _process_javascript_files(self, project: Project, node_map: Dict[Tuple, str]) -> None:
+        extractor = JavaScriptStructureExtractor()
+        structures = {}
+        for script_path in self._get_javascript_files(project):
+            norm_path = PathResolver.normalize_path(script_path)
+            if norm_path in getattr(self, "_ignored_files", set()):
+                continue
+
+            metadata = self._build_javascript_metadata(project, script_path, norm_path, line_number=1)
+            script_id = self.dependency_linker._get_or_create_node(
+                NodeType.JAVASCRIPT,
+                norm_path,
+                metadata,
+                node_map,
+                self.nx_builder.add_javascript_node,
+            )
+            if self.structural_builder:
+                self.structural_builder.link_to_functional_node(script_path, script_id)
+
+            try:
+                structure = extractor.parse_file(script_path)
+            except OSError as exc:
+                logger.warning(f"Failed to parse JavaScript file {script_path}: {exc}")
+                continue
+            structures[script_path] = structure
+
+            for function in structure.functions:
+                function_identity = f"{norm_path}#{function.name}:{function.line_number}"
+                function_metadata = self._build_javascript_metadata(
+                    project,
+                    script_path,
+                    norm_path,
+                    line_number=function.line_number,
+                    additional_data={
+                        "script_path": norm_path,
+                        "function_name": function.name,
+                        "function_kind": function.kind,
+                    },
+                )
+                function_id = self.dependency_linker._get_or_create_node(
+                    NodeType.JS_FUNCTION,
+                    function_identity,
+                    function_metadata,
+                    node_map,
+                    self.nx_builder.add_js_function_node,
+                )
+                self.nx_builder.add_dependency(script_id, function_id, DependencyType.CONTAINS)
+
+            default_function_id = self._resolve_default_js_function_id(norm_path, structure.functions, node_map)
+            if default_function_id and script_id in self.nx_builder.graph.nodes:
+                self.nx_builder.graph.nodes[script_id]["metadata"]["additional_data"][
+                    "default_function_node_id"
+                ] = default_function_id
+
+        dependency_extractor = CallReadExtractor(project.parser_config)
+        for script_path in structures:
+            norm_path = PathResolver.normalize_path(script_path)
+            script_id = node_map.get((NodeType.JAVASCRIPT, norm_path))
+            if not script_id:
+                continue
+            context = PathContext(script_path, project.root_path, project.parser_config)
+            for dep in self._extract_javascript_dependencies(script_path, dependency_extractor):
+                dep.parameters["source_language"] = "javascript"
+                dep_id = self.dependency_linker.get_or_create_dependency_node(
+                    dep,
+                    project.name,
+                    node_map,
+                    context=context,
+                )
+                if dep_id:
+                    self.nx_builder.add_dependency(script_id, dep_id, dep.type, line_number=dep.line_number)
+                    if dep.type == DependencyType.JAVASCRIPT:
+                        self._link_javascript_callable(script_id, dep_id, dep.line_number)
+
+    def _get_javascript_files(self, project: Project) -> List[str]:
+        from pathlib import Path
+        files = []
+        exclude_dirs = {"target", "build", "node_modules", ".git"}
+        for m in glob.glob(os.path.join(project.root_path, "**", "*.js"), recursive=True):
+            path_parts = [part.lower() for part in Path(m).parts]
+            if not any(ex in path_parts for ex in exclude_dirs):
+                files.append(m)
+        return sorted(set(files))
+
+    def _build_javascript_metadata(
+        self,
+        project: Project,
+        script_path: str,
+        norm_path: str,
+        line_number: int,
+        additional_data: Optional[Dict[str, Any]] = None,
+    ) -> NodeMetadata:
+        category = self.path_classifier.classify_component_category(script_path)
+        flow = self.path_classifier.resolve_flow(NodeType.JAVASCRIPT)
+        data = {
+            "file_path": norm_path,
+            "feature": self.path_classifier.detect_business_domain(script_path),
+        }
+        if additional_data:
+            data.update(additional_data)
+        return NodeMetadata(
+            file_path=script_path,
+            line_number=line_number,
+            jira_tags=[],
+            project_name=project.name,
+            category=category,
+            flow=flow,
+            additional_data=data,
+        )
+
+    def _extract_javascript_dependencies(
+        self,
+        script_path: str,
+        dependency_extractor: CallReadExtractor,
+    ) -> List[Any]:
+        dependencies = []
+        try:
+            with open(script_path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+        except UnicodeDecodeError:
+            with open(script_path, "r", encoding="utf-8", errors="ignore") as handle:
+                lines = handle.readlines()
+        except OSError as exc:
+            logger.warning(f"Failed to read JavaScript dependencies from {script_path}: {exc}")
+            return dependencies
+
+        for line_number, line in enumerate(lines, start=1):
+            if dependency_extractor.can_extract(line):
+                dependencies.extend(dependency_extractor.extract(line, line_number))
+        return dependencies
+
+    def _resolve_default_js_function_id(
+        self,
+        norm_path: str,
+        functions: List[Any],
+        node_map: Dict[Tuple, str],
+    ) -> Optional[str]:
+        if not functions:
+            return None
+
+        candidates = sorted(
+            functions,
+            key=lambda f: (
+                0 if f.kind == "module_exports_function" else 1,
+                0 if f.name == "fn" else 1,
+                0 if len(functions) == 1 else 1,
+                f.line_number,
+            ),
+        )
+        selected = candidates[0]
+        identity = f"{norm_path}#{selected.name}:{selected.line_number}"
+        return node_map.get((NodeType.JS_FUNCTION, identity))
+
+    def _link_javascript_callable(
+        self,
+        from_node_id: str,
+        script_node_id: str,
+        line_number: Optional[int],
+        function_name: Optional[str] = None,
+    ) -> None:
+        script_node = self.nx_builder.graph.nodes.get(script_node_id)
+        if not script_node:
+            return
+        function_id = None
+        if function_name:
+            for candidate_id in self.nx_builder.graph.successors(script_node_id):
+                candidate = self.nx_builder.graph.nodes.get(candidate_id)
+                if candidate and candidate.get("type") == NodeType.JS_FUNCTION and candidate.get("name") == function_name:
+                    function_id = candidate_id
+                    break
+        if not function_id:
+            function_id = script_node.get("metadata", {}).get("additional_data", {}).get("default_function_node_id")
+        if function_id and function_id in self.nx_builder.graph.nodes:
+            self.nx_builder.add_dependency(from_node_id, function_id, DependencyType.JAVASCRIPT, line_number=line_number)
+
+    def _link_implicit_karate_config(self, project: Project, from_node_id: str, node_map: Dict[Tuple, str]) -> None:
+        config_paths = [
+            os.path.join(project.root_path, "karate-config.js"),
+            os.path.join(project.root_path, "src", "test", "java", "karate-config.js"),
+            os.path.join(project.root_path, "src", "test", "resources", "karate-config.js"),
+        ]
+        for config_path in config_paths:
+            if not os.path.exists(config_path):
+                continue
+            norm_path = PathResolver.normalize_path(config_path)
+            script_id = node_map.get((NodeType.JAVASCRIPT, norm_path))
+            if script_id:
+                self.nx_builder.add_dependency(from_node_id, script_id, DependencyType.JAVASCRIPT)
+                self._link_javascript_callable(from_node_id, script_id, line_number=None)
+            return
 
     def _create_default_parser(self, project: Project):
         from karate_graph_analyzer.parser.feature_parser import FeatureFileParser

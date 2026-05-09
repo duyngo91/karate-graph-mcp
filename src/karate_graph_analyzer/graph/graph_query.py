@@ -283,7 +283,15 @@ class GraphQuery:
         return workflow_usage[:limit]
 
     def get_unused_components(self) -> Dict[str, List[Node]]:
-        unused = {"workflows": [], "pages": [], "apis": [], "scenarios": [], "actions": []}
+        unused = {
+            "workflows": [],
+            "pages": [],
+            "apis": [],
+            "scenarios": [],
+            "actions": [],
+            "javascript": [],
+            "js_functions": [],
+        }
 
         for node in self.graph.nodes.values():
             if node.type == NodeType.TEST_CASE:
@@ -301,6 +309,10 @@ class GraphQuery:
                 unused["scenarios"].append(node)
             elif node.type == NodeType.ACTION:
                 unused["actions"].append(node)
+            elif node.type == NodeType.JAVASCRIPT:
+                unused["javascript"].append(node)
+            elif node.type == NodeType.JS_FUNCTION:
+                unused["js_functions"].append(node)
 
         return unused
 

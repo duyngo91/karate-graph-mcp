@@ -305,11 +305,17 @@ class DependencyAnalyzer:
         # Key: (node_type, name) -> List[ComponentInstance]
         component_instances: Dict[tuple, List] = defaultdict(list)
         
-        # Collect all WORKFLOW, API, PAGE and COMMON nodes from all projects
+        # Collect reusable nodes from all projects
         for project_name, graph in project_graphs.items():
             for node_id, node in graph.nodes.items():
-                # Only consider WORKFLOW, API, PAGE and COMMON nodes
-                if node.type not in [NodeType.WORKFLOW, NodeType.API, NodeType.PAGE, NodeType.COMMON]:
+                if node.type not in [
+                    NodeType.WORKFLOW,
+                    NodeType.API,
+                    NodeType.PAGE,
+                    NodeType.COMMON,
+                    NodeType.JAVASCRIPT,
+                    NodeType.JS_FUNCTION,
+                ]:
                     continue
                 
                 # Create component key (type, stable project-relative identity)
@@ -363,7 +369,7 @@ class DependencyAnalyzer:
         """Return a cross-project identity for reusable components."""
         import os
 
-        if node.type in [NodeType.WORKFLOW, NodeType.COMMON, NodeType.PAGE]:
+        if node.type in [NodeType.WORKFLOW, NodeType.COMMON, NodeType.PAGE, NodeType.JAVASCRIPT]:
             raw_path = node.metadata.file_path or node.name
             if raw_path and project_root:
                 try:

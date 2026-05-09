@@ -7,6 +7,7 @@ from karate_graph_analyzer.services.export_service import ExportService
 from karate_graph_analyzer.services.fingerprint_service import FingerprintService
 from karate_graph_analyzer.services.graph_cache_service import GraphCacheService
 from karate_graph_analyzer.services.query_service import QueryService
+from karate_graph_analyzer.services.reusable_function_search_service import ReusableFunctionSearchService
 from karate_graph_analyzer.services.report_service import ReportService
 from karate_graph_analyzer.services.runtime_graph_store import RuntimeGraphStore
 
@@ -18,6 +19,7 @@ __all__ = [
     "FingerprintService",
     "GraphCacheService",
     "QueryService",
+    "ReusableFunctionSearchService",
     "ReportService",
     "RuntimeGraphStore",
 ]

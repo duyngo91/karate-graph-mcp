@@ -59,6 +59,7 @@ class DependencyType(str, Enum):
     DATABASE = "DATABASE"
     LOCATOR = "LOCATOR"
     JAVA = "JAVA"
+    JAVASCRIPT = "JAVASCRIPT"
     SETUP = "SETUP"
     DATA = "DATA"
     CONTAINS = "CONTAINS"
@@ -82,6 +83,8 @@ class NodeType(str, Enum):
     FILE = "FILE"
     JAVA_CLASS = "JAVA_CLASS"
     JAVA_METHOD = "JAVA_METHOD"
+    JAVASCRIPT = "JAVASCRIPT"
+    JS_FUNCTION = "JS_FUNCTION"
 
 
 class FlowType(str, Enum):

@@ -251,8 +251,10 @@ class FeatureFileParser:
         """Orchestrate dependency extraction across steps, merging background context."""
         from karate_graph_analyzer.parser.extractors.api_extractor import ApiExtractor
         from karate_graph_analyzer.parser.extractors.java_extractor import JavaExtractor
+        from karate_graph_analyzer.parser.extractors.javascript_usage_extractor import JavaScriptUsageExtractor
         api_extractor = self.orchestrator.get_extractor_by_type(ApiExtractor)
         java_extractor = self.orchestrator.get_extractor_by_type(JavaExtractor)
+        javascript_extractor = JavaScriptUsageExtractor(self.config)
         http_method = (api_extractor.extract_http_method(scenario.steps) if api_extractor else "GET") or "GET"
 
         # Resolve scoped config for this specific file
@@ -278,6 +280,7 @@ class FeatureFileParser:
             # 1.1 Local Java Aliases
             if java_extractor:
                 java_extractor.extract_local_aliases(step.text)
+            javascript_extractor.extract_aliases(step.text)
 
         # 2. Finalize API dependencies
         dependencies.extend(tracker.finalize(scenario.line_number, scenario, http_method))
@@ -306,6 +309,21 @@ class FeatureFileParser:
                         "scenario_tags": scenario.tags
                     }
                 ))
+
+        # 2.2 Finalize JavaScript helper function usages
+        for usage in javascript_extractor.extract_function_usages(all_steps):
+            dependencies.append(Dependency(
+                type=DependencyType.JAVASCRIPT,
+                target=str(usage["script_path"]),
+                line_number=int(usage["line_number"]),
+                parameters={
+                    "script_path": usage["script_path"],
+                    "function_name": usage["function_name"],
+                    "alias": usage["alias"],
+                    "scenario_name": scenario.name,
+                    "scenario_tags": scenario.tags,
+                }
+            ))
 
         # 3. Add @setup dependency if present
         if scenario.setup_scenario:
