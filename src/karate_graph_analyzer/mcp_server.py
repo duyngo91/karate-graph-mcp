@@ -381,6 +381,182 @@ def test_selection_suggestion(
     return analyzer_tool.test_selection_suggestion(project_name, changed_paths, limit)
 
 @mcp.tool()
+def feature_intent_index(
+    project_name: str,
+    query: Optional[str] = None,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """
+    Build/search scenario intent summaries from feature files.
+
+    Args:
+        project_name: Name of the registered project.
+        query: Optional keyword filter for scenario intent.
+        limit: Maximum scenario summaries to return.
+    """
+    return analyzer_tool.feature_intent_index(project_name, query, limit)
+
+@mcp.tool()
+def variable_data_flow_trace(
+    project_name: str,
+    feature_path: Optional[str] = None,
+    scenario_tag: Optional[str] = None,
+    scenario_name: Optional[str] = None,
+    node_id: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Trace variables in feature scenarios from definition/source to usage.
+
+    Args:
+        project_name: Name of the registered project.
+        feature_path: Optional feature path or path fragment.
+        scenario_tag: Optional scenario tag such as @TC-103.
+        scenario_name: Optional scenario name fragment.
+        node_id: Optional graph node id.
+        limit: Maximum traces to return.
+    """
+    return analyzer_tool.variable_data_flow_trace(
+        project_name, feature_path, scenario_tag, scenario_name, node_id, limit
+    )
+
+@mcp.tool()
+def assertion_map(
+    project_name: str,
+    query: Optional[str] = None,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """
+    Index status/match/assert steps across feature files.
+
+    Args:
+        project_name: Name of the registered project.
+        query: Optional assertion keyword filter.
+        limit: Maximum assertions to return.
+    """
+    return analyzer_tool.assertion_map(project_name, query, limit)
+
+@mcp.tool()
+def call_read_deep_context(
+    project_name: str,
+    feature_path: Optional[str] = None,
+    scenario_tag: Optional[str] = None,
+    scenario_name: Optional[str] = None,
+    node_id: Optional[str] = None,
+    max_depth: int = 2,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Return nested call/read context for selected feature scenarios.
+
+    Args:
+        project_name: Name of the registered project.
+        feature_path: Optional feature path or path fragment.
+        scenario_tag: Optional scenario tag such as @TC-103.
+        scenario_name: Optional scenario name fragment.
+        node_id: Optional graph node id.
+        max_depth: Nested call/read depth.
+        limit: Maximum contexts to return.
+    """
+    return analyzer_tool.call_read_deep_context(
+        project_name, feature_path, scenario_tag, scenario_name, node_id, max_depth, limit
+    )
+
+@mcp.tool()
+def ai_feature_context_pack(
+    project_name: str,
+    feature_path: Optional[str] = None,
+    scenario_tag: Optional[str] = None,
+    scenario_name: Optional[str] = None,
+    node_id: Optional[str] = None,
+    max_call_depth: int = 2,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    Build AI-ready feature context: intent, variables, assertions, call/read chain, graph context.
+
+    Args:
+        project_name: Name of the registered project.
+        feature_path: Optional feature path or path fragment.
+        scenario_tag: Optional scenario tag such as @TC-103.
+        scenario_name: Optional scenario name fragment.
+        node_id: Optional graph node id.
+        max_call_depth: Nested call/read depth.
+        limit: Maximum packs to return.
+    """
+    return analyzer_tool.ai_feature_context_pack(
+        project_name, feature_path, scenario_tag, scenario_name, node_id, max_call_depth, limit
+    )
+
+@mcp.tool()
+def feature_behavior_map(
+    project_name: str,
+    feature_path: Optional[str] = None,
+    scenario_tag: Optional[str] = None,
+    scenario_name: Optional[str] = None,
+    node_id: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Build scenario behavior maps for AI: preconditions, actions, expectations.
+
+    Args:
+        project_name: Name of the registered project.
+        feature_path: Optional feature path or path fragment.
+        scenario_tag: Optional scenario tag such as @TC-103.
+        scenario_name: Optional scenario name fragment.
+        node_id: Optional graph node id.
+        limit: Maximum scenarios to return.
+    """
+    return analyzer_tool.feature_behavior_map(
+        project_name, feature_path, scenario_tag, scenario_name, node_id, limit
+    )
+
+@mcp.tool()
+def scenario_similarity_map(
+    project_name: str,
+    query: Optional[str] = None,
+    limit: int = 50,
+    top_k: int = 3,
+) -> Dict[str, Any]:
+    """
+    Find similar scenarios based on intent keywords for AI reuse and suggestion.
+
+    Args:
+        project_name: Name of the registered project.
+        query: Optional keyword filter for anchor scenarios.
+        limit: Maximum anchor scenarios to return.
+        top_k: Maximum similar scenarios per anchor.
+    """
+    return analyzer_tool.scenario_similarity_map(project_name, query, limit, top_k)
+
+@mcp.tool()
+def feature_reuse_advisor(
+    project_name: str,
+    min_group_size: int = 2,
+    min_flow_length: int = 3,
+    limit: int = 50,
+    include_low_signal: bool = False,
+) -> Dict[str, Any]:
+    """
+    Find duplicate feature steps/flows and return AI-safe refactor suggestions.
+
+    Args:
+        project_name: Name of the registered project.
+        min_group_size: Minimum duplicate locations.
+        min_flow_length: Minimum duplicate flow length.
+        limit: Maximum groups to return.
+        include_low_signal: Include generic Karate grammar steps such as status/method/url.
+    """
+    return analyzer_tool.feature_reuse_advisor(
+        project_name,
+        min_group_size,
+        min_flow_length,
+        limit,
+        include_low_signal,
+    )
+
+@mcp.tool()
 def flaky_risk(project_name: str, limit: int = 10) -> Dict[str, Any]:
     """
     Preset query: test cases with mixed pass/fail history (flaky risk).
