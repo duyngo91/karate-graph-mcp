@@ -5,7 +5,7 @@ Provides search/query methods that can be exposed via MCP.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from karate_graph_analyzer.graph.graph_query import GraphQuery
 from karate_graph_analyzer.models import DependencyGraph, Node
@@ -42,6 +42,60 @@ class SearchTools:
             self.query_apis[project_name] = GraphQuery(self.graphs[project_name])
         
         return self.query_apis[project_name]
+
+    def _error_response(self, code: str, message: str) -> Dict[str, Any]:
+        return {
+            "success": False,
+            "error": {
+                "code": code,
+                "message": message
+            }
+        }
+
+    def _project_not_found(self, project_name: str) -> Dict[str, Any]:
+        return self._error_response("7001", f"Project '{project_name}' not found")
+
+    def _query_error(self, operation: str, error: Exception) -> Dict[str, Any]:
+        logger.error(f"Error in {operation}: {error}", exc_info=True)
+        return self._error_response("7002", str(error))
+
+    def _run_project_query(
+        self,
+        project_name: str,
+        operation: str,
+        handler: Callable[[GraphQuery], Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Run a query method with consistent project lookup and error handling."""
+        try:
+            query_api = self._get_query_api(project_name)
+            if not query_api:
+                return self._project_not_found(project_name)
+            return handler(query_api)
+        except Exception as e:
+            return self._query_error(operation, e)
+
+    def _results_response(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return {
+            "success": True,
+            "results": results,
+            "count": len(results)
+        }
+
+    def _api_matches_pattern(self, node: Node, pattern: str) -> bool:
+        data = node.metadata.additional_data
+        candidates = [
+            node.name,
+            data.get("full_url", ""),
+            data.get("path", ""),
+            data.get("path_template", ""),
+        ]
+        return any(pattern.lower() in candidate.lower() for candidate in candidates)
+
+    def _find_api_nodes_by_pattern(self, query_api: GraphQuery, pattern: str) -> List[Node]:
+        return [
+            node for node in query_api.graph.nodes.values()
+            if node.type.value == "API" and self._api_matches_pattern(node, pattern)
+        ]
     
     def search_api(
         self,
@@ -61,17 +115,7 @@ class SearchTools:
         Returns:
             Dictionary with search results
         """
-        try:
-            query_api = self._get_query_api(project_name)
-            if not query_api:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "7001",
-                        "message": f"Project '{project_name}' not found"
-                    }
-                }
-            
+        def query(query_api: GraphQuery) -> Dict[str, Any]:
             results = []
             
             # Search by method and path
@@ -92,36 +136,12 @@ class SearchTools:
             
             # Search by path pattern
             elif path:
-                api_nodes = []
-                for node in query_api.graph.nodes.values():
-                    if node.type.value != "API":
-                        continue
-                    data = node.metadata.additional_data
-                    candidates = [
-                        node.name,
-                        data.get("full_url", ""),
-                        data.get("path", ""),
-                        data.get("path_template", ""),
-                    ]
-                    if any(path.lower() in candidate.lower() for candidate in candidates):
-                        api_nodes.append(node)
+                api_nodes = self._find_api_nodes_by_pattern(query_api, path)
                 results = [self._node_to_dict(n, query_api) for n in api_nodes]
             
-            return {
-                "success": True,
-                "results": results,
-                "count": len(results)
-            }
-        
-        except Exception as e:
-            logger.error(f"Error in search_api: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": {
-                    "code": "7002",
-                    "message": str(e)
-                }
-            }
+            return self._results_response(results)
+
+        return self._run_project_query(project_name, "search_api", query)
     
     def search_workflow(
         self,
@@ -140,17 +160,7 @@ class SearchTools:
         Returns:
             Dictionary with search results
         """
-        try:
-            query_api = self._get_query_api(project_name)
-            if not query_api:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "7001",
-                        "message": f"Project '{project_name}' not found"
-                    }
-                }
-            
+        def query(query_api: GraphQuery) -> Dict[str, Any]:
             results = []
             
             # Search by keyword
@@ -180,21 +190,9 @@ class SearchTools:
                     ]
                     results.append(result)
             
-            return {
-                "success": True,
-                "results": results,
-                "count": len(results)
-            }
-        
-        except Exception as e:
-            logger.error(f"Error in search_workflow: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": {
-                    "code": "7002",
-                    "message": str(e)
-                }
-            }
+            return self._results_response(results)
+
+        return self._run_project_query(project_name, "search_workflow", query)
     
     def search_page(
         self,
@@ -212,17 +210,7 @@ class SearchTools:
         Returns:
             Dictionary with search results
         """
-        try:
-            query_api = self._get_query_api(project_name)
-            if not query_api:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "7001",
-                        "message": f"Project '{project_name}' not found"
-                    }
-                }
-            
+        def query(query_api: GraphQuery) -> Dict[str, Any]:
             results = []
             
             # Search by action tag
@@ -247,21 +235,9 @@ class SearchTools:
                     ]
                     results.append(result)
             
-            return {
-                "success": True,
-                "results": results,
-                "count": len(results)
-            }
-        
-        except Exception as e:
-            logger.error(f"Error in search_page: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": {
-                    "code": "7002",
-                    "message": str(e)
-                }
-            }
+            return self._results_response(results)
+
+        return self._run_project_query(project_name, "search_page", query)
     
     def search_test_case(
         self,
@@ -283,17 +259,7 @@ class SearchTools:
         Returns:
             Dictionary with search results
         """
-        try:
-            query_api = self._get_query_api(project_name)
-            if not query_api:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "7001",
-                        "message": f"Project '{project_name}' not found"
-                    }
-                }
-            
+        def query(query_api: GraphQuery) -> Dict[str, Any]:
             results = []
             
             # Search by Jira tag
@@ -310,19 +276,9 @@ class SearchTools:
             # Search by API usage
             elif uses_api:
                 # Find API node first
-                for api_node in query_api.graph.nodes.values():
-                    if api_node.type.value != "API":
-                        continue
-                    data = api_node.metadata.additional_data
-                    candidates = [
-                        api_node.name,
-                        data.get("full_url", ""),
-                        data.get("path", ""),
-                        data.get("path_template", ""),
-                    ]
-                    if any(uses_api.lower() in candidate.lower() for candidate in candidates):
-                        test_cases = query_api.find_test_cases_using_api(api_node)
-                        results.extend([self._node_to_dict(tc, query_api) for tc in test_cases])
+                for api_node in self._find_api_nodes_by_pattern(query_api, uses_api):
+                    test_cases = query_api.find_test_cases_using_api(api_node)
+                    results.extend([self._node_to_dict(tc, query_api) for tc in test_cases])
             
             # Search by workflow usage
             elif uses_workflow:
@@ -331,21 +287,9 @@ class SearchTools:
                     test_cases = query_api.find_test_cases_using_workflow(workflow_node)
                     results = [self._node_to_dict(tc, query_api) for tc in test_cases]
             
-            return {
-                "success": True,
-                "results": results,
-                "count": len(results)
-            }
-        
-        except Exception as e:
-            logger.error(f"Error in search_test_case: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": {
-                    "code": "7002",
-                    "message": str(e)
-                }
-            }
+            return self._results_response(results)
+
+        return self._run_project_query(project_name, "search_test_case", query)
     
     def get_usage_stats(
         self,
@@ -361,26 +305,10 @@ class SearchTools:
         Returns:
             Dictionary with usage statistics
         """
-        try:
-            query_api = self._get_query_api(project_name)
-            if not query_api:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "7001",
-                        "message": f"Project '{project_name}' not found"
-                    }
-                }
-            
+        def query(query_api: GraphQuery) -> Dict[str, Any]:
             node = query_api.find_node_by_id(node_id)
             if not node:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "7003",
-                        "message": f"Node '{node_id}' not found"
-                    }
-                }
+                return self._error_response("7003", f"Node '{node_id}' not found")
             
             stats = query_api.get_usage_stats(node)
             
@@ -388,16 +316,8 @@ class SearchTools:
                 "success": True,
                 "stats": stats
             }
-        
-        except Exception as e:
-            logger.error(f"Error in get_usage_stats: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": {
-                    "code": "7002",
-                    "message": str(e)
-                }
-            }
+
+        return self._run_project_query(project_name, "get_usage_stats", query)
     
     def get_most_used_components(
         self,
@@ -415,29 +335,16 @@ class SearchTools:
         Returns:
             Dictionary with most used components
         """
-        try:
-            query_api = self._get_query_api(project_name)
-            if not query_api:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "7001",
-                        "message": f"Project '{project_name}' not found"
-                    }
-                }
-            
+        def query(query_api: GraphQuery) -> Dict[str, Any]:
             if component_type.lower() == 'api':
                 components = query_api.get_most_used_apis(limit)
             elif component_type.lower() == 'workflow':
                 components = query_api.get_most_used_workflows(limit)
             else:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "7004",
-                        "message": f"Invalid component_type: {component_type}. Must be 'api' or 'workflow'"
-                    }
-                }
+                return self._error_response(
+                    "7004",
+                    f"Invalid component_type: {component_type}. Must be 'api' or 'workflow'"
+                )
             
             results = [
                 {
@@ -447,21 +354,9 @@ class SearchTools:
                 for node, count in components
             ]
             
-            return {
-                "success": True,
-                "results": results,
-                "count": len(results)
-            }
-        
-        except Exception as e:
-            logger.error(f"Error in get_most_used_components: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": {
-                    "code": "7002",
-                    "message": str(e)
-                }
-            }
+            return self._results_response(results)
+
+        return self._run_project_query(project_name, "get_most_used_components", query)
     
     def find_unused_components(
         self,
@@ -475,17 +370,7 @@ class SearchTools:
         Returns:
             Dictionary with unused components by type
         """
-        try:
-            query_api = self._get_query_api(project_name)
-            if not query_api:
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "7001",
-                        "message": f"Project '{project_name}' not found"
-                    }
-                }
-            
+        def query(query_api: GraphQuery) -> Dict[str, Any]:
             unused = query_api.get_unused_components()
             
             results = {}
@@ -502,16 +387,8 @@ class SearchTools:
                 "unused_components": results,
                 "total_count": total_count
             }
-        
-        except Exception as e:
-            logger.error(f"Error in find_unused_components: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": {
-                    "code": "7002",
-                    "message": str(e)
-                }
-            }
+
+        return self._run_project_query(project_name, "find_unused_components", query)
     
     def _node_to_dict(self, node: Node, query_api: GraphQuery) -> Dict[str, Any]:
         """Convert node to dictionary with usage info.

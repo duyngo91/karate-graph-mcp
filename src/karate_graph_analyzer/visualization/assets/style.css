@@ -144,11 +144,233 @@ body, html {
     align-items: flex-start;
     margin-bottom: 8px;
 }
+.hotspot-item-selected {
+    border-color: #1976d2;
+    box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.12);
+}
 .impact-badge {
     padding: 2px 8px;
     border-radius: 12px;
     font-size: 11px;
     font-weight: 800;
+}
+.dashboard-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.dashboard-summary-card {
+    background: #fafbff;
+    border: 1px solid #e8eaf6;
+    border-radius: 8px;
+    padding: 10px;
+}
+.summary-label {
+    font-size: 10px;
+    color: #5c6b7a;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+.summary-value {
+    font-size: 20px;
+    color: #1a237e;
+    font-weight: 800;
+    margin-top: 4px;
+}
+.hotspot-section-title {
+    font-size: 11px;
+    color: #555;
+    font-weight: 800;
+    text-transform: uppercase;
+    margin: 12px 0 8px 0;
+}
+.hotspot-toolbar {
+    margin-bottom: 8px;
+}
+.hotspot-filter-group {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.hotspot-filter-btn {
+    border: 1px solid #cfd8dc;
+    background: #fff;
+    color: #455a64;
+    border-radius: 999px;
+    font-size: 10px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-weight: 700;
+}
+.hotspot-filter-btn.active {
+    background: #1a237e;
+    color: #fff;
+    border-color: #1a237e;
+}
+.hotspot-table-wrap {
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    overflow: auto;
+    max-height: 380px;
+    background: #fff;
+}
+.hotspot-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+}
+.hotspot-table thead th {
+    position: sticky;
+    top: 0;
+    background: #f6f8fb;
+    color: #455a64;
+    text-align: left;
+    padding: 8px;
+    border-bottom: 1px solid #dde5ee;
+    cursor: pointer;
+    font-weight: 800;
+    white-space: nowrap;
+}
+.hotspot-table tbody td {
+    border-bottom: 1px solid #eef2f6;
+    padding: 8px;
+    color: #263238;
+    vertical-align: top;
+}
+.hotspot-table tbody tr {
+    cursor: pointer;
+}
+.hotspot-table tbody tr:hover {
+    background: #f8fbff;
+}
+.hotspot-table tbody tr.selected {
+    background: #e8f0ff;
+}
+.hotspot-name-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 220px;
+}
+.hotspot-color-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+    flex: 0 0 auto;
+}
+.hotspot-section-subtitle {
+    font-size: 10px;
+    color: #666;
+    font-weight: 800;
+    text-transform: uppercase;
+    margin: 10px 0 6px 0;
+}
+.hotspot-analysis-panel {
+    border: 1px solid #e0e7ff;
+    border-radius: 8px;
+    background: #fbfcff;
+    padding: 10px;
+    margin-top: 10px;
+}
+.hotspot-analysis-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+}
+.hotspot-analysis-name {
+    font-size: 13px;
+    font-weight: 800;
+    color: #1a237e;
+}
+.hotspot-analysis-kpis {
+    margin-top: 8px;
+    display: grid;
+    gap: 4px;
+    font-size: 11px;
+    color: #444;
+}
+.hotspot-error-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.hotspot-error-group {
+    display: grid;
+    grid-template-columns: 36px 1fr;
+    gap: 8px;
+    align-items: start;
+    background: #fff;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    padding: 8px;
+}
+.hotspot-error-count {
+    font-size: 11px;
+    font-weight: 800;
+    color: #b71c1c;
+}
+.hotspot-error-text {
+    font-size: 11px;
+    color: #4a4a4a;
+    word-break: break-word;
+}
+.hotspot-case-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.hotspot-case-item {
+    background: #fff;
+    border: 1px solid #eceff1;
+    border-left: 3px solid #f44336;
+    border-radius: 6px;
+    padding: 8px;
+    cursor: pointer;
+}
+.hotspot-case-item:hover {
+    background: #fff8f8;
+}
+.hotspot-case-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1f2937;
+}
+.hotspot-case-meta {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 10px;
+    color: #5f6b77;
+    margin-top: 4px;
+}
+.hotspot-case-error {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #b71c1c;
+    font-weight: 600;
+    word-break: break-word;
+}
+.hotspot-case-step {
+    margin-top: 4px;
+    font-size: 10px;
+    color: #444;
+}
+.hotspot-case-path {
+    margin-top: 4px;
+    font-size: 10px;
+    color: #546e7a;
+    word-break: break-word;
+}
+.empty-hotspot {
+    border: 1px dashed #d7dce2;
+    background: #fafafa;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 12px;
+    color: #607080;
 }
 
 /* History Dots */
@@ -194,17 +416,6 @@ body, html {
     z-index: 500;
 }
 #top-hud > div { pointer-events: auto; }
-
-#node-details-side {
-    position: absolute;
-    top: 20px;
-    right: 20px;
-    width: 380px;
-    max-height: calc(100vh - 40px);
-    overflow-y: auto;
-    display: none;
-    z-index: 1000;
-}
 
 /* Glass Detail Section */
 .detail-section {

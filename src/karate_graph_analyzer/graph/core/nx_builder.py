@@ -52,6 +52,18 @@ class NetworkXBuilder:
         digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
         return f"{prefix}_{digest}"
 
+    def _metadata_payload(self, metadata: NodeMetadata) -> Dict[str, Any]:
+        return {
+            "file_path": metadata.file_path,
+            "line_number": metadata.line_number,
+            "jira_tags": metadata.jira_tags,
+            "project_name": metadata.project_name,
+            "category": metadata.category,
+            "flow": metadata.flow,
+            "environment_variants": metadata.environment_variants,
+            "additional_data": metadata.additional_data,
+        }
+
     def _add_node_internal(self, node_id: str, node_type: NodeType, name: str, metadata: NodeMetadata, extra_data: Dict[str, Any] = None) -> str:
         """Centralized method to add a node to the graph with consistent data structure.
         Handles merging if node already exists.
@@ -71,16 +83,7 @@ class NetworkXBuilder:
                     "type": node_type,
                     "name": name,
                     "tags": tags,
-                    "metadata": {
-                        "file_path": metadata.file_path,
-                        "line_number": metadata.line_number,
-                        "jira_tags": metadata.jira_tags,
-                        "project_name": metadata.project_name,
-                        "category": metadata.category,
-                        "flow": metadata.flow,
-                        "environment_variants": metadata.environment_variants,
-                        "additional_data": metadata.additional_data,
-                    }
+                    "metadata": self._metadata_payload(metadata)
                 })
                 return node_id
 
@@ -105,16 +108,7 @@ class NetworkXBuilder:
             "type": node_type,
             "name": name,
             "tags": tags,
-            "metadata": {
-                "file_path": metadata.file_path,
-                "line_number": metadata.line_number,
-                "jira_tags": metadata.jira_tags,
-                "project_name": metadata.project_name,
-                "category": metadata.category,
-                "flow": metadata.flow,
-                "environment_variants": metadata.environment_variants,
-                "additional_data": metadata.additional_data,
-            }
+            "metadata": self._metadata_payload(metadata)
         }
         
         if extra_data:

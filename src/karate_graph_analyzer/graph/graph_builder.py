@@ -225,15 +225,7 @@ class GraphBuilder:
         # to ensure consistency with 'call read' dependencies
         if node_type in [NodeType.WORKFLOW, NodeType.COMMON, NodeType.DATABASE, NodeType.DATA]:
             rel_path = PathResolver.normalize_path(scenario.file_path)
-            
-            # Map node type to builder method
-            builder_methods = {
-                NodeType.WORKFLOW: self.nx_builder.add_workflow_node,
-                NodeType.COMMON: self.nx_builder.add_common_node,
-                NodeType.DATABASE: self.nx_builder.add_database_node,
-                NodeType.DATA: self.nx_builder.add_data_node,
-            }
-            create_func = builder_methods.get(node_type, self.nx_builder.add_test_case)
+            create_func = self._builder_for_node_type(node_type)
 
             # Create/get the file node
             file_node_id = self.dependency_linker._get_or_create_node(
@@ -241,20 +233,14 @@ class GraphBuilder:
             )
             
             # Use primary tag for subnode identity
-            primary_tag = ""
-            if self.context and self.context.tag_manager:
-                primary_tag = self.context.tag_manager.get_primary_tag(scenario.tags)
+            primary_tag = self._get_primary_tag(scenario)
             
             if primary_tag:
                 display_name = self.path_classifier.build_scenario_display_name(scenario, node_type)
-                dep_type = DependencyType.WORKFLOW
-                if node_type == NodeType.COMMON: dep_type = DependencyType.COMMON
-                elif node_type == NodeType.DATABASE: dep_type = DependencyType.DATABASE
-                elif node_type == NodeType.DATA: dep_type = DependencyType.DATA
                 
                 return self.dependency_linker._handle_tag_subnode(
                     file_node_id, node_type, rel_path, primary_tag, metadata, node_map, 
-                    dep_type, display_name=display_name
+                    self._dependency_type_for_node_type(node_type), display_name=display_name
                 )
             
             # Fallback to file node if no tags
@@ -267,6 +253,27 @@ class GraphBuilder:
             self.structural_builder.link_to_functional_node(scenario.file_path, node_id)
         return node_id
 
+    def _builder_for_node_type(self, node_type: NodeType):
+        return {
+            NodeType.WORKFLOW: self.nx_builder.add_workflow_node,
+            NodeType.COMMON: self.nx_builder.add_common_node,
+            NodeType.DATABASE: self.nx_builder.add_database_node,
+            NodeType.DATA: self.nx_builder.add_data_node,
+        }.get(node_type, self.nx_builder.add_test_case)
+
+    def _dependency_type_for_node_type(self, node_type: NodeType) -> DependencyType:
+        return {
+            NodeType.COMMON: DependencyType.COMMON,
+            NodeType.DATABASE: DependencyType.DATABASE,
+            NodeType.DATA: DependencyType.DATA,
+            NodeType.PAGE: DependencyType.PAGE,
+        }.get(node_type, DependencyType.WORKFLOW)
+
+    def _get_primary_tag(self, scenario: Scenario) -> str:
+        if self.context and self.context.tag_manager:
+            return self.context.tag_manager.get_primary_tag(scenario.tags)
+        return ""
+
     def _handle_page_and_action(self, scenario: Scenario, metadata: NodeMetadata, node_map: Dict) -> str:
         rel_path = PathResolver.normalize_path(scenario.file_path)
         file_node_id = self.dependency_linker._get_or_create_node(
@@ -274,9 +281,7 @@ class GraphBuilder:
         )
         
         # Identity tag
-        primary_tag = ""
-        if self.context and self.context.tag_manager:
-            primary_tag = self.context.tag_manager.get_primary_tag(scenario.tags)
+        primary_tag = self._get_primary_tag(scenario)
         
         # Display name
         display_name = self.path_classifier.build_scenario_display_name(scenario, NodeType.PAGE)
@@ -285,7 +290,8 @@ class GraphBuilder:
         tag_to_use = primary_tag or display_name
         
         res_id = self.dependency_linker._handle_tag_subnode(
-            file_node_id, NodeType.PAGE, rel_path, tag_to_use, metadata, node_map, DependencyType.PAGE,
+            file_node_id, NodeType.PAGE, rel_path, tag_to_use, metadata, node_map,
+            self._dependency_type_for_node_type(NodeType.PAGE),
             display_name=display_name
         )
         if self.structural_builder:

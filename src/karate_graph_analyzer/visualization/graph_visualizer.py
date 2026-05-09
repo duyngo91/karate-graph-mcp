@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -73,7 +74,7 @@ class GraphVisualizer:
         "DATA":         {"shape": "box",      "color": "#00bcd4", "size": 20, "eco": "Data Flow"},
         
         # 6. Structural Flow (Hierarchy)
-        "FOLDER":       {"shape": "hexagon",  "color": "#fbc02d", "size": 35, "eco": "Structural"},
+        "FOLDER":       {"shape": "hexagon",  "color": "#00897b", "size": 35, "eco": "Structural"},
         "FILE":         {"shape": "box",      "color": "#78909c", "size": 25, "eco": "Structural"},
         
         # Infrastructure
@@ -199,173 +200,175 @@ class GraphVisualizer:
 
     def _add_graph_elements(self, net: Any):
         """Add nodes and edges from the dependency graph using mode-specific coloring."""
-        # 1. Add Nodes
         for node in self.graph.nodes.values():
-            # Resolve reg_key directly from NodeType
-            # This is the "One Layer Decides" principle: Trust the analyzer's classification.
-            reg_key = node.type.value if hasattr(node.type, 'value') else str(node.type)
-            
-            # Special case: Database sub-nodes (Queries) should use DB_QUERY shape
-            if reg_key == "DATABASE" and node.metadata.additional_data.get("scenario_tag"):
-                reg_key = "DB_QUERY"
-                
-            # Fallback for sub-types or legacy types not in registry
-            if reg_key not in self.COMPONENT_REGISTRY:
-                if reg_key in ["ACTION", "SCENARIO", "WORKFLOW"]:
-                    reg_key = "TEST_CASE"
-                else:
-                    reg_key = "SCENARIO" # Extreme fallback
-            
-            # Get configuration from Registry
-            config = self.COMPONENT_REGISTRY.get(reg_key)
-            
-            shape = config["shape"]
-            base_color = config["color"]
-            size = config["size"]
-            ecosystem = config["eco"]
-            
-            # Prepare UI Display Data (The "One Layer Decides" payload)
-            # Create a clean copy of additional_data to avoid circular references
-            details_copy = node.metadata.additional_data.copy()
-            details_copy.pop("display_data", None)
-            
-            display_data = {
-                "id": node.id,
-                "name": node.name,
-                "type_label": reg_key,
-                "flow": ecosystem,
-                "file_path": node.metadata.file_path,
-                "line_number": node.metadata.line_number,
-                "status": node.execution_status or "NEUTRAL",
-                "badges": [ecosystem, reg_key],
-                "jira_tags": node.metadata.jira_tags,
-                "expert_notes": node.metadata.expert_notes,
-                "suggestions": node.metadata.suggestions,
-                "execution_history": node.metadata.execution_history,
-                "details": details_copy
-            }
-            
-            domain = node.metadata.additional_data.get('domain')
-            if domain: display_data["badges"].append(domain)
-            
-            # Store unified display data
-            node.metadata.additional_data["display_data"] = display_data
-            node.metadata.additional_data["reg_key"] = reg_key
-            node.metadata.additional_data["eco"] = ecosystem
-            
-            mass = 5 if ecosystem == "Infrastructure" else 1
-            is_terminal = reg_key in {"TEST_CASE", "SCENARIO", "ACTION", "API", "DATABASE"}
+            model = self._build_visual_node_model(node)
+            net.add_node(node.id, **self._build_node_attrs(node, model))
 
-            # Status & Failure Propagation
-            fail_count = node.execution_details.get("failed_count", 0)
-            status_color = self.STATUS_COLORS.get(node.execution_status, base_color)
-            
-            border_width = 1
-            border_color = "#2c3e50"
-            background_color = base_color
-
-            if is_terminal:
-                background_color = status_color
-                border_color = status_color
-                border_width = 2
-            else:
-                # Structural nodes (Infrastructure/Library): White background, status-colored border
-                background_color = "#ffffff"
-                border_color = status_color
-                border_width = 4 if node.execution_status != 'PASSED' else 2
-                
-            
-
-
-            display_label = node.name
-            label_font_size = 14
-            
-            # Only show [X FAIL] on the actual failure points, not the parents
-            if fail_count > 0 and is_terminal:
-                display_label = f"[{fail_count} FAIL]\n{node.name}"
-                label_font_size = 14 + min(fail_count, 15)
-
-            node_attrs = {
-                "label": display_label,
-                "shape": shape,
-                "color": {
-                    "background": background_color,
-                    "border": border_color,
-                    "highlight": {"background": background_color, "border": border_color},
-                },
-                "borderWidth": border_width,
-                "size": size,
-                "font": {
-                    "size": label_font_size,
-                    "color": "#2c3e50",
-                    "face": "Inter, system-ui",
-                    "multi": True,
-                    "bold": node.execution_status != 'PASSED'
-                },
-                "mass": mass,
-                "title": self._build_tooltip(node)
-            }
-
-            # Add scaling by failure impact
-            if fail_count > 0:
-                node_attrs["value"] = 10 + (fail_count * 5)
-
-            net.add_node(node.id, **node_attrs)
-
-        # 2. Add Edges with Sync Colors (Idea #1 & #2 "Full Path")
         for edge in self.graph.edges.values():
+            self._add_graph_edge(net, edge)
+
+        self._highlight_cycles(net)
+
+    def _resolve_registry_key(self, node: Any) -> str:
+        reg_key = node.type.value if hasattr(node.type, 'value') else str(node.type)
+
+        if reg_key == "DATABASE" and node.metadata.additional_data.get("scenario_tag"):
+            return "DB_QUERY"
+
+        if reg_key in self.COMPONENT_REGISTRY:
+            return reg_key
+        if reg_key in ["ACTION", "SCENARIO", "WORKFLOW"]:
+            return "TEST_CASE"
+        return "SCENARIO"
+
+    def _build_visual_node_model(self, node: Any) -> Dict[str, Any]:
+        reg_key = self._resolve_registry_key(node)
+        config = self.COMPONENT_REGISTRY[reg_key]
+        ecosystem = config["eco"]
+
+        details_copy = node.metadata.additional_data.copy()
+        details_copy.pop("display_data", None)
+
+        display_data = {
+            "id": node.id,
+            "name": node.name,
+            "type_label": reg_key,
+            "flow": ecosystem,
+            "file_path": node.metadata.file_path,
+            "line_number": node.metadata.line_number,
+            "status": node.execution_status or "NEUTRAL",
+            "badges": [ecosystem, reg_key],
+            "jira_tags": node.metadata.jira_tags,
+            "expert_notes": node.metadata.expert_notes,
+            "suggestions": node.metadata.suggestions,
+            "execution_history": node.metadata.execution_history,
+            "details": details_copy
+        }
+
+        domain = node.metadata.additional_data.get('domain')
+        if domain:
+            display_data["badges"].append(domain)
+
+        node.metadata.additional_data["display_data"] = display_data
+        node.metadata.additional_data["reg_key"] = reg_key
+        node.metadata.additional_data["eco"] = ecosystem
+
+        return {
+            "reg_key": reg_key,
+            "config": config,
+            "ecosystem": ecosystem,
+        }
+
+    def _is_terminal_visual_node(self, reg_key: str) -> bool:
+        return reg_key in {"TEST_CASE", "SCENARIO", "ACTION", "API", "DATABASE"}
+
+    def _status_node_style(self, node: Any, reg_key: str, base_color: str) -> Dict[str, Any]:
+        status_color = self.STATUS_COLORS.get(node.execution_status, base_color)
+        if self._is_terminal_visual_node(reg_key):
+            return {
+                "background": status_color,
+                "border": status_color,
+                "border_width": 2,
+            }
+
+        return {
+            "background": "#ffffff",
+            "border": status_color,
+            "border_width": 4 if node.execution_status != 'PASSED' else 2,
+        }
+
+    def _build_node_attrs(self, node: Any, model: Dict[str, Any]) -> Dict[str, Any]:
+        reg_key = model["reg_key"]
+        config = model["config"]
+        style = self._status_node_style(node, reg_key, config["color"])
+        fail_count = node.execution_details.get("failed_count", 0)
+        is_terminal = self._is_terminal_visual_node(reg_key)
+
+        display_label = node.name
+        label_font_size = 14
+        if fail_count > 0 and is_terminal:
+            display_label = f"[{fail_count} FAIL]\n{node.name}"
+            label_font_size = 14 + min(fail_count, 15)
+
+        node_attrs = {
+            "label": display_label,
+            "shape": config["shape"],
+            "color": {
+                "background": style["background"],
+                "border": style["border"],
+                "highlight": {"background": style["background"], "border": style["border"]},
+            },
+            "borderWidth": style["border_width"],
+            "size": config["size"],
+            "font": {
+                "size": label_font_size,
+                "color": "#2c3e50",
+                "face": "Inter, system-ui",
+                "multi": True,
+                "bold": node.execution_status != 'PASSED'
+            },
+            "mass": 5 if model["ecosystem"] == "Infrastructure" else 1,
+            "title": self._build_tooltip(node)
+        }
+
+        if fail_count > 0:
+            node_attrs["value"] = 10 + (fail_count * 5)
+
+        return node_attrs
+
+    def _edge_style(self, edge: Edge) -> Dict[str, Any]:
+        color = "#808080"
+        width = 1
+        dashes = False
+
+        if self.mode == VisualizationMode.EXECUTION:
             to_node = self.graph.nodes.get(edge.to_node)
-            from_node = self.graph.nodes.get(edge.from_node)
-            
-            color = "#808080" # Default grey line
-            width = 1
-            dashes = False
-            
-            if self.mode == VisualizationMode.EXECUTION:
-                # Line color follows the result of the source/target context
-                if to_node and to_node.execution_status == "FAILED":
-                    color = self.STATUS_COLORS["FAILED"]
-                    width = 4 # Significantly thicker
-                elif to_node and to_node.execution_status == "PASSED":
-                    color = self.STATUS_COLORS["PASSED"]
-                    width = 3 # Thicker than default
-                else:
-                    color = self.STATUS_COLORS["NEUTRAL"]
-                    width = 1
-            
-            elif self.mode == VisualizationMode.DIFF:
-                if edge.diff_status == DiffStatus.ADDED:
-                    color = self.STATUS_COLORS["ADDED"]
-                    width = 3
-                elif edge.diff_status == DiffStatus.REMOVED:
-                    color = self.STATUS_COLORS["REMOVED"]
-                    width = 3
-                    dashes = True
-                else:
-                    color = self.STATUS_COLORS["NEUTRAL"]
-                    width = 1
-            
-            else: # DEFAULT Mode
-                edge_type_colors = {"WORKFLOW": "#2196F3", "API": "#FF9800", "PAGE": "#9C27B0", "DATABASE": "#F44336"}
-                color = edge_type_colors.get(edge.type.value, "#808080")
-
-            if edge.from_node in net.get_nodes() and edge.to_node in net.get_nodes():
-                net.add_edge(edge.from_node, edge.to_node, color=color, width=width, arrows="to", dashes=dashes)
+            if to_node and to_node.execution_status == "FAILED":
+                color = self.STATUS_COLORS["FAILED"]
+                width = 4
+            elif to_node and to_node.execution_status == "PASSED":
+                color = self.STATUS_COLORS["PASSED"]
+                width = 3
             else:
-                logger.warning(f"Skipping edge {edge.from_node} -> {edge.to_node}: One or both nodes missing in visualizer")
+                color = self.STATUS_COLORS["NEUTRAL"]
 
+        elif self.mode == VisualizationMode.DIFF:
+            if edge.diff_status == DiffStatus.ADDED:
+                color = self.STATUS_COLORS["ADDED"]
+                width = 3
+            elif edge.diff_status == DiffStatus.REMOVED:
+                color = self.STATUS_COLORS["REMOVED"]
+                width = 3
+                dashes = True
+            else:
+                color = self.STATUS_COLORS["NEUTRAL"]
+
+        else:
+            edge_type_colors = {
+                "WORKFLOW": "#2196F3",
+                "API": "#FF9800",
+                "PAGE": "#9C27B0",
+                "DATABASE": "#F44336"
+            }
+            color = edge_type_colors.get(edge.type.value, "#808080")
+
+        return {"color": color, "width": width, "dashes": dashes}
+
+    def _add_graph_edge(self, net: Any, edge: Edge):
+        if edge.from_node not in net.get_nodes() or edge.to_node not in net.get_nodes():
+            logger.warning(f"Skipping edge {edge.from_node} -> {edge.to_node}: One or both nodes missing in visualizer")
+            return
+
+        style = self._edge_style(edge)
+        net.add_edge(edge.from_node, edge.to_node, arrows="to", **style)
+
+    def _highlight_cycles(self, net: Any):
         for cycle in self.graph.cycles:
             for i in range(len(cycle)):
                 from_n, to_n = cycle[i], cycle[(i + 1) % len(cycle)]
                 for edge in net.edges:
                     if edge["from"] == from_n and edge["to"] == to_n:
-                        edge.update({"color": "#FF0000", "width": 3, "title": "⚠️ CYCLE DETECTED"})
-
-    def _get_display_label(self, name: str) -> str:
-        if len(name) > 30 and ("/" in name or "\\" in name):
-            parts = name.replace("\\", "/").split("/")
-            return ".../" + "/".join(parts[-2:]) if len(parts) > 2 else name
-        return name
+                        edge.update({"color": "#FF0000", "width": 3, "title": "CYCLE DETECTED"})
 
     def _build_tooltip(self, node: Any) -> str:
         # Get pre-calculated identity from loop
@@ -403,15 +406,24 @@ class GraphVisualizer:
 
     def _post_process_html(self, output_file: Path):
         """Transform generated HTML into a Professional Command Center."""
-        import json
-        import re
         from karate_graph_analyzer.visualization.templates import (
             LAYOUT_TEMPLATE,
             GRAPH_STYLE,
             GRAPH_JS_SCRIPT
         )
 
-        # 1. Prepare Node Meta-Data for JS
+        raw_content = output_file.read_text(encoding='utf-8')
+        payload = self._extract_pyvis_payload(raw_content)
+        final_html = self._assemble_command_center_html(
+            LAYOUT_TEMPLATE,
+            GRAPH_STYLE,
+            GRAPH_JS_SCRIPT,
+            payload,
+        )
+
+        output_file.write_text(final_html, encoding='utf-8')
+
+    def _build_js_metadata(self) -> Dict[str, Any]:
         js_data = {}
         for node_id, node in self.graph.nodes.items():
             js_data[node_id] = {
@@ -423,47 +435,55 @@ class GraphVisualizer:
                 "additional_data": node.metadata.additional_data,
                 "environment_variants": node.metadata.environment_variants
             }
+        return js_data
 
-        # 2. Extract Pyvis data from the generated file
-        with open(output_file, 'r', encoding='utf-8') as f:
-            raw_content = f.read()
-
-        # Robust regex to find the JSON arrays
+    def _extract_pyvis_payload(self, raw_content: str) -> Dict[str, str]:
         nodes_match = re.search(r'nodes = new vis\.DataSet\(\s*(\[.*?\])\s*\);', raw_content, re.DOTALL)
         edges_match = re.search(r'edges = new vis\.DataSet\(\s*(\[.*?\])\s*\);', raw_content, re.DOTALL)
         options_match = re.search(r'var options = (\{.*?\});', raw_content, re.DOTALL)
-        
-        nodes_json = nodes_match.group(1) if nodes_match else "[]"
-        edges_json = edges_match.group(1) if edges_match else "[]"
-        options_json = options_match.group(1) if options_match else "{}"
 
-        # 3. Get configuration
-        jira_url = ""
+        return {
+            "nodes": nodes_match.group(1) if nodes_match else "[]",
+            "edges": edges_match.group(1) if edges_match else "[]",
+            "options": options_match.group(1) if options_match else "{}",
+        }
+
+    def _build_global_vars(self) -> Dict[str, Any]:
         global_vars = {}
+        if not (hasattr(self.graph, 'config') and self.graph.config):
+            return global_vars
+
+        global_vars = self.graph.config.base_url_mapping or {}
+        if self.graph.config.env_url_mapping:
+            for env, mapping in self.graph.config.env_url_mapping.items():
+                for k, v in mapping.items():
+                    global_vars[f"{env}:{k}"] = v
+
+        return global_vars
+
+    def _get_jira_base_url(self) -> str:
         if hasattr(self.graph, 'config') and self.graph.config:
-            jira_url = self.graph.config.jira_base_url or ""
-            global_vars = self.graph.config.base_url_mapping or {}
-            # Merge with env-specific mapping if available
-            if self.graph.config.env_url_mapping:
-                for env, mapping in self.graph.config.env_url_mapping.items():
-                    for k, v in mapping.items():
-                        global_vars[f"{env}:{k}"] = v
+            return self.graph.config.jira_base_url or ""
+        return ""
 
-        # 4. Assemble the final Command Center (Direct injection to avoid formatting issues)
-        final_html = LAYOUT_TEMPLATE.replace("{{STYLE_INJECTION}}", GRAPH_STYLE)
-        final_html = final_html.replace("{{SCRIPT_INJECTION}}", GRAPH_JS_SCRIPT)
-        final_html = final_html.replace("{{GRAPH_NODES}}", nodes_json)
-        final_html = final_html.replace("{{GRAPH_EDGES}}", edges_json)
-        final_html = final_html.replace("{{METADATA}}", json.dumps(js_data))
+    def _assemble_command_center_html(
+        self,
+        layout_template: str,
+        graph_style: str,
+        graph_script: str,
+        pyvis_payload: Dict[str, str],
+    ) -> str:
+        final_html = layout_template.replace("{{STYLE_INJECTION}}", graph_style)
+        final_html = final_html.replace("{{SCRIPT_INJECTION}}", graph_script)
+        final_html = final_html.replace("{{GRAPH_NODES}}", pyvis_payload["nodes"])
+        final_html = final_html.replace("{{GRAPH_EDGES}}", pyvis_payload["edges"])
+        final_html = final_html.replace("{{METADATA}}", json.dumps(self._build_js_metadata()))
         final_html = final_html.replace("{{HOTSPOTS}}", json.dumps(getattr(self, 'hotspots', [])))
-        final_html = final_html.replace("{{ENV_VARS}}", json.dumps(global_vars))
+        final_html = final_html.replace("{{ENV_VARS}}", json.dumps(self._build_global_vars()))
         final_html = final_html.replace("{{MODE}}", self.mode.value)
-        final_html = final_html.replace("{{JIRA_URL}}", jira_url)
-        final_html = final_html.replace("{{OPTIONS}}", options_json)
-
-        # 5. Overwrite the file
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(final_html)
+        final_html = final_html.replace("{{JIRA_URL}}", self._get_jira_base_url())
+        final_html = final_html.replace("{{OPTIONS}}", pyvis_payload["options"])
+        return final_html
 
     # _add_legend is now handled in _post_process_html
 

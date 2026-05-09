@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -49,7 +50,7 @@ class ExecutionReportParser:
                     content = f.read(100)
                     if content.strip().startswith('['):
                         json_files.append(str(p))
-            except:
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
                 
         return json_files
@@ -127,109 +128,114 @@ class ExecutionReportParser:
 
     def _process_feature(self, feature: Dict[str, Any]) -> bool:
         """Processes a feature object from Karate JSON report."""
-        # Feature name and relative path
-        feature_name = feature.get("name")
         feature_uri = feature.get("uri") or feature.get("relativePath") or feature.get("prefixedPath") or ""
-        
-        scenarios = feature.get("elements", [])
-        if not scenarios:
-            # Check for alternate summary format or karate-json format
-            scenarios = feature.get("scenarios", []) or feature.get("scenarioResults", [])
-            
         applied = False
-        for scenario_data in scenarios:
-            # In karate-json, 'type' might be missing, but 'name' or 'executorName' is present
-            if not scenario_data.get("name") and scenario_data.get("type") != "scenario":
-                continue
-                
-            scenario_name = scenario_data.get("name")
-            
-            # Status detection logic (handles standard JSON and karate-json)
-            passed = True
-            if "failed" in scenario_data:
-                passed = not scenario_data.get("failed")
-            elif "passed" in scenario_data:
-                passed = scenario_data.get("passed")
-            elif "status" in scenario_data:
-                passed = scenario_data.get("status") == "passed"
-            elif "result" in scenario_data:
-                passed = scenario_data.get("result", {}).get("status") == "passed"
-            else:
-                # Aggregate from steps
-                steps = scenario_data.get("steps", [])
-                for step in steps:
-                    res = step.get("result", {})
-                    if res.get("status") == "failed":
-                        passed = False
-                        # Capture the error message for AI summary
-                        error_msg = res.get("error_message")
-                        if error_msg:
-                            # We can't easily pass it back here without changing signature, 
-                            # but we'll find a way or just handle it in _update_node_status
-                            scenario_data["error"] = error_msg 
-                        break
 
-            status = "PASSED" if passed else "FAILED"
-            
-            # Map to graph nodes
-            # We match by:
-            # 1. Exact match of scenario name
-            # 2. Case-insensitive partial match (e.g., "@Tag - Scenario Name" matches "Scenario Name")
-            
+        for scenario_data in self._extract_scenarios(feature):
+            scenario_name = self._get_scenario_name(scenario_data)
+            if not scenario_name:
+                continue
+
+            status = self._detect_scenario_status(scenario_data)
             matched = False
             for node in self.graph.nodes.values():
-                if node.type not in [NodeType.SCENARIO, NodeType.TEST_CASE]:
+                if not self._node_matches_scenario(node, scenario_name, feature_uri):
                     continue
-                
-                # Check if it's the right file and right scenario
-                node_file = node.metadata.file_path or ""
-                
-                # Normalize names for comparison
-                import re
-                n_name_raw = node.name.lower()
-                n_name = re.sub(r'^\[[^\]]+\]\s*', '', n_name_raw).lower()
-                s_name = scenario_name.lower()
-                
-                # Try exact match first on cleaned name, then fallback to partial
-                name_match = (s_name == n_name) or (s_name in n_name) or (n_name in s_name)
-                
-                logger.debug(f"Comparing scenario '{s_name}' with node '{n_name}' (type: {node.type}): match={name_match}")
-                
-                if name_match:
-                    # If we have URI info, try to use it for better precision
-                    # Feature URI usually looks like 'api/order.feature'
-                    # Node file usually looks like 'e:/path/to/api/order.feature'
-                    if feature_uri:
-                        norm_uri = feature_uri.replace("\\", "/")
-                        norm_node_file = node_file.replace("\\", "/")
-                        uri_match = (norm_uri in norm_node_file) or (norm_node_file in norm_uri)
-                        
-                        logger.debug(f"Comparing URI '{norm_uri}' with node file '{norm_node_file}': match={uri_match}")
-                        
-                        if not uri_match:
-                            # Only skip if we have a strong URI mismatch
-                            # But be lenient if one of them is empty
-                            if norm_uri and norm_node_file:
-                                continue
-                        
-                    details = None
-                    if not passed:
-                        error_msg = scenario_data.get("error") or scenario_data.get("error_message") or "Unknown error"
-                        details = {
-                            "error": error_msg,
-                            "failed_step": self._find_failed_step(scenario_data)
-                        }
-                        # Also store in metadata as a backup
-                        node.metadata.additional_data["last_error"] = error_msg
-                        
-                    self._update_node_status(node.id, status, details)
-                    matched = True
-                    applied = True
+
+                details = self._extract_failure_details(scenario_data) if status == "FAILED" else None
+                if details:
+                    node.metadata.additional_data["last_error"] = details["error"]
+
+                self._update_node_status(node.id, status, details)
+                matched = True
+                applied = True
             
             if not matched:
                 logger.debug(f"Could not map scenario '{scenario_name}' in '{feature_uri}' to any graph node")
                 
         return applied
+
+    def _extract_scenarios(self, feature: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Handle the common Karate/Cucumber report shapes."""
+        return (
+            feature.get("elements", [])
+            or feature.get("scenarios", [])
+            or feature.get("scenarioResults", [])
+        )
+
+    def _get_scenario_name(self, scenario_data: Dict[str, Any]) -> Optional[str]:
+        if scenario_data.get("name") or scenario_data.get("executorName"):
+            return scenario_data.get("name") or scenario_data.get("executorName")
+        if scenario_data.get("type") == "scenario":
+            return scenario_data.get("name")
+        return None
+
+    def _detect_scenario_status(self, scenario_data: Dict[str, Any]) -> str:
+        """Detect status across standard Cucumber JSON and Karate JSON variants."""
+        if "failed" in scenario_data:
+            passed = not scenario_data.get("failed")
+        elif "passed" in scenario_data:
+            passed = scenario_data.get("passed")
+        elif "status" in scenario_data:
+            passed = scenario_data.get("status") == "passed"
+        elif "result" in scenario_data:
+            passed = scenario_data.get("result", {}).get("status") == "passed"
+        else:
+            passed = self._all_steps_passed(scenario_data)
+
+        return "PASSED" if passed else "FAILED"
+
+    def _all_steps_passed(self, scenario_data: Dict[str, Any]) -> bool:
+        for step in scenario_data.get("steps", []):
+            result = step.get("result", {})
+            if result.get("status") == "failed":
+                error_msg = result.get("error_message")
+                if error_msg:
+                    scenario_data["error"] = error_msg
+                return False
+        return True
+
+    def _extract_failure_details(self, scenario_data: Dict[str, Any]) -> Dict[str, Optional[str]]:
+        error_msg = scenario_data.get("error") or scenario_data.get("error_message") or "Unknown error"
+        return {
+            "error": error_msg,
+            "failed_step": self._find_failed_step(scenario_data)
+        }
+
+    def _node_matches_scenario(self, node, scenario_name: str, feature_uri: str) -> bool:
+        if node.type not in [NodeType.SCENARIO, NodeType.TEST_CASE]:
+            return False
+
+        node_name = self._normalize_scenario_name(node.name)
+        report_name = scenario_name.lower()
+        name_match = (
+            report_name == node_name
+            or report_name in node_name
+            or node_name in report_name
+        )
+
+        logger.debug(
+            f"Comparing scenario '{report_name}' with node '{node_name}' "
+            f"(type: {node.type}): match={name_match}"
+        )
+        if not name_match:
+            return False
+
+        return self._uri_matches(feature_uri, node.metadata.file_path or "")
+
+    def _normalize_scenario_name(self, name: str) -> str:
+        return re.sub(r'^\[[^\]]+\]\s*', '', name.lower()).lower()
+
+    def _uri_matches(self, feature_uri: str, node_file: str) -> bool:
+        if not feature_uri:
+            return True
+
+        norm_uri = feature_uri.replace("\\", "/")
+        norm_node_file = node_file.replace("\\", "/")
+        uri_match = (norm_uri in norm_node_file) or (norm_node_file in norm_uri)
+
+        logger.debug(f"Comparing URI '{norm_uri}' with node file '{norm_node_file}': match={uri_match}")
+        return uri_match or not (norm_uri and norm_node_file)
 
     def _find_failed_step(self, scenario_data: Dict[str, Any]) -> Optional[str]:
         """Extract the name of the step that failed."""
