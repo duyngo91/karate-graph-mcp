@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from karate_graph_analyzer.utils.path_resolver import PathResolver
 
 logger = logging.getLogger(__name__)
@@ -379,88 +379,74 @@ class KarateConfigParser:
             Flattened dictionary
         """
         result = {}
-        
-        # Track brace depth to handle nested objects
         i = 0
         while i < len(content):
-            # Skip whitespace
-            while i < len(content) and content[i].isspace():
-                i += 1
-            
+            i = self._skip_whitespace(content, i)
             if i >= len(content):
                 break
-            
-            # Try to match a key-value pair
-            # Pattern: 'key' : 'value' or 'key' : { nested }
-            key_match = re.match(r"['\"](\w+)['\"]", content[i:])
-            if not key_match:
+
+            key, i = self._read_object_key(content, i)
+            if not key:
                 i += 1
                 continue
-            
-            key = key_match.group(1)
-            i += key_match.end()
-            
-            # Skip to colon
-            while i < len(content) and content[i] != ':':
-                i += 1
-            i += 1  # Skip colon
-            
-            # Skip whitespace after colon
-            while i < len(content) and content[i].isspace():
-                i += 1
-            
+
+            i = self._skip_whitespace(content, self._advance_to_colon(content, i))
             if i >= len(content):
                 break
-            
-            # Check if value is a nested object or a string
+
             if content[i] == '{':
-                # Nested object - find matching closing brace
-                brace_count = 1
-                start = i + 1
-                i += 1
-                
-                while i < len(content) and brace_count > 0:
-                    if content[i] == '{':
-                        brace_count += 1
-                    elif content[i] == '}':
-                        brace_count -= 1
-                    i += 1
-                
-                nested_content = content[start:i-1]
-                full_key = f"{parent_key}.{key}"
-                
-                # Recursively parse nested object
-                nested_result = self._parse_object_content(nested_content, full_key)
-                result.update(nested_result)
-                
+                nested_content, i = self._read_nested_object(content, i)
+                result.update(self._parse_object_content(nested_content, f"{parent_key}.{key}"))
             elif content[i] in ['"', "'"]:
-                # String value
-                quote = content[i]
-                i += 1
-                start = i
-                
-                # Find closing quote
-                while i < len(content) and content[i] != quote:
-                    if content[i] == '\\':
-                        i += 2  # Skip escaped character
-                    else:
-                        i += 1
-                
-                value = content[start:i]
-                i += 1  # Skip closing quote
-                
-                # Only add if it's a URL or path
+                value, i = self._read_quoted_value(content, i)
                 if self._is_url_or_path_variable(key, value):
-                    full_key = f"{parent_key}.{key}"
-                    result[full_key] = value
-            
-            # Skip to next comma or end
-            while i < len(content) and content[i] not in [',', '}']:
-                i += 1
-            if i < len(content) and content[i] == ',':
-                i += 1
-        
+                    result[f"{parent_key}.{key}"] = value
+
+            i = self._advance_to_next_object_entry(content, i)
         return result
+
+    def _skip_whitespace(self, content: str, index: int) -> int:
+        while index < len(content) and content[index].isspace():
+            index += 1
+        return index
+
+    def _read_object_key(self, content: str, index: int) -> Tuple[Optional[str], int]:
+        key_match = re.match(r"['\"](\w+)['\"]", content[index:])
+        if not key_match:
+            return None, index
+        return key_match.group(1), index + key_match.end()
+
+    def _advance_to_colon(self, content: str, index: int) -> int:
+        while index < len(content) and content[index] != ':':
+            index += 1
+        return index + 1
+
+    def _read_nested_object(self, content: str, index: int) -> Tuple[str, int]:
+        brace_count = 1
+        start = index + 1
+        index += 1
+        while index < len(content) and brace_count > 0:
+            if content[index] == '{':
+                brace_count += 1
+            elif content[index] == '}':
+                brace_count -= 1
+            index += 1
+        return content[start:index - 1], index
+
+    def _read_quoted_value(self, content: str, index: int) -> Tuple[str, int]:
+        quote = content[index]
+        index += 1
+        start = index
+        while index < len(content) and content[index] != quote:
+            index += 2 if content[index] == '\\' else 1
+        return content[start:index], index + 1
+
+    def _advance_to_next_object_entry(self, content: str, index: int) -> int:
+        while index < len(content) and content[index] not in [',', '}']:
+            index += 1
+        if index < len(content) and content[index] == ',':
+            index += 1
+        return index
 
 
 def auto_detect_config(project_root: str) -> Dict[str, str]:

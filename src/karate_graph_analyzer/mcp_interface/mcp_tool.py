@@ -9,7 +9,7 @@ import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import networkx as nx
 
@@ -21,6 +21,7 @@ from karate_graph_analyzer.exporters import ExporterFactory
 from karate_graph_analyzer.mcp_interface.responses import error_response
 from karate_graph_analyzer.mcp_interface.search_tools import SearchTools
 from karate_graph_analyzer.services.graph_cache_service import GraphCacheService
+from karate_graph_analyzer.services.fix_priority_service import FixPriorityService
 from karate_graph_analyzer.services.failure_context_service import FailureContextService
 from karate_graph_analyzer.services.project_lifecycle_service import ProjectLifecycleService
 from karate_graph_analyzer.services.query_service import QueryService
@@ -28,6 +29,7 @@ from karate_graph_analyzer.services.report_service import ReportService
 from karate_graph_analyzer.services.reusable_function_search_service import (
     ReusableFunctionSearchService,
 )
+from karate_graph_analyzer.services.retest_selection_service import RetestSelectionService
 from karate_graph_analyzer.services.runtime_graph_store import RuntimeGraphStore
 from karate_graph_analyzer.models import (
     DependencyGraph,
@@ -1439,28 +1441,6 @@ class KarateGraphAnalyzerTool:
             "total_available": len(flaky_items),
         }
 
-    def _match_changed_nodes(
-        self,
-        graph: DependencyGraph,
-        changed_paths: List[str],
-    ) -> List[Any]:
-        """Resolve changed path patterns to graph nodes."""
-        patterns = [p.strip().replace("\\", "/").lower() for p in changed_paths if p and p.strip()]
-        if not patterns:
-            return []
-
-        matched = []
-        seen: Set[str] = set()
-        for node in graph.nodes.values():
-            file_path = (node.metadata.file_path or "").replace("\\", "/").lower()
-            name = (node.name or "").replace("\\", "/").lower()
-            haystacks = [file_path, name]
-            if any(pattern in h for pattern in patterns for h in haystacks if h):
-                if node.id not in seen:
-                    matched.append(node)
-                    seen.add(node.id)
-        return matched
-
     def change_impact_preview(
         self,
         project_name: str,
@@ -1483,58 +1463,18 @@ class KarateGraphAnalyzerTool:
             if analyzer_error:
                 return analyzer_error
 
-            graph = self.graphs[request.project_name]
-            analyzer = self.analyzers[request.project_name]
-            matched_nodes = self._match_changed_nodes(graph, request.changed_paths)
-
-            impacted_map: Dict[str, Dict[str, Any]] = {}
-            for changed in matched_nodes:
-                impact = analyzer.impact_analysis(changed.id)
-                for affected in impact.affected_test_cases:
-                    existing = impacted_map.get(affected.node_id)
-                    candidate = {
-                        "node_id": affected.node_id,
-                        "name": affected.name,
-                        "jira_tags": affected.jira_tags,
-                        "min_depth": affected.depth,
-                        "change_triggers": [changed.name],
-                        "paths": [affected.dependency_path],
-                    }
-                    if not existing:
-                        impacted_map[affected.node_id] = candidate
-                        continue
-                    existing["min_depth"] = min(existing.get("min_depth", affected.depth), affected.depth)
-                    if changed.name not in existing["change_triggers"]:
-                        existing["change_triggers"].append(changed.name)
-                    if affected.dependency_path not in existing["paths"]:
-                        existing["paths"].append(affected.dependency_path)
-
-            impacted = list(impacted_map.values())
-            impacted.sort(
-                key=lambda item: (
-                    -len(item.get("change_triggers", [])),
-                    item.get("min_depth", 9999),
-                    item.get("name", ""),
-                )
+            service = RetestSelectionService(
+                self.graphs[request.project_name],
+                self.analyzers[request.project_name],
             )
+            preview = service.change_impact_preview(request.changed_paths, request.limit)
 
             return {
                 "success": True,
                 "preset": "change-impact-preview",
                 "project_name": request.project_name,
                 "changed_paths": request.changed_paths,
-                "matched_changed_nodes": [
-                    {
-                        "id": node.id,
-                        "type": node.type.value,
-                        "name": node.name,
-                        "file_path": node.metadata.file_path,
-                    }
-                    for node in matched_nodes
-                ],
-                "impacted_test_cases": impacted[: request.limit],
-                "count": min(len(impacted), request.limit),
-                "total_available": len(impacted),
+                **preview,
             }
 
         except Exception as e:
@@ -1555,47 +1495,26 @@ class KarateGraphAnalyzerTool:
                 limit=limit,
             )
 
-            preview = self.change_impact_preview(
-                request.project_name,
-                request.changed_paths,
-                limit=500,
-            )
-            if not preview.get("success"):
-                return preview
+            graph_error = self._require_graph(request.project_name)
+            if graph_error:
+                return graph_error
 
-            impacted = preview.get("impacted_test_cases", [])
-            selected = []
-            for item in impacted:
-                priority_score = (len(item.get("change_triggers", [])) * 10) - item.get("min_depth", 0)
-                selected.append(
-                    {
-                        "node_id": item.get("node_id"),
-                        "name": item.get("name"),
-                        "jira_tags": item.get("jira_tags", []),
-                        "priority_score": priority_score,
-                        "reason": f"triggered_by={len(item.get('change_triggers', []))}, min_depth={item.get('min_depth')}",
-                        "change_triggers": item.get("change_triggers", []),
-                    }
-                )
+            analyzer_error = self._require_analyzer(request.project_name)
+            if analyzer_error:
+                return analyzer_error
 
-            selected.sort(
-                key=lambda x: (
-                    x.get("priority_score", 0),
-                    len(x.get("change_triggers", [])),
-                    x.get("name", ""),
-                ),
-                reverse=True,
+            service = RetestSelectionService(
+                self.graphs[request.project_name],
+                self.analyzers[request.project_name],
             )
+            suggestion = service.test_selection_suggestion(request.changed_paths, request.limit)
 
             return {
                 "success": True,
                 "preset": "test-selection-suggestion",
                 "project_name": request.project_name,
                 "changed_paths": request.changed_paths,
-                "selection_strategy": "priority = trigger_count*10 - min_depth",
-                "suggested_tests": selected[: request.limit],
-                "count": min(len(selected), request.limit),
-                "total_available": len(selected),
+                **suggestion,
             }
 
         except Exception as e:
@@ -1614,97 +1533,12 @@ class KarateGraphAnalyzerTool:
         if graph_error:
             return graph_error
 
-        graph = self.graphs[request.project_name]
-        analyzer = self.analyzers.get(request.project_name)
-
-        impacted_by_node: Dict[str, Dict[str, Any]] = {}
-        for hotspot in hotspots_result.get("hotspots", []):
-            hotspot_node_id = hotspot.get("node_id")
-            if hotspot_node_id:
-                impacted_by_node[hotspot_node_id] = {
-                    "score": hotspot.get("failure_impact_score", 0),
-                    "failure_rate": hotspot.get("failure_percentage", 0),
-                    "hotspot_name": hotspot.get("name"),
-                    "hotspot_type": hotspot.get("type"),
-                }
-            for tc in hotspot.get("affected_failed_test_cases", []):
-                tc_id = tc.get("node_id") or tc.get("id")
-                if not tc_id:
-                    continue
-                existing = impacted_by_node.get(tc_id)
-                candidate = {
-                    "score": hotspot.get("failure_impact_score", 0),
-                    "failure_rate": hotspot.get("failure_percentage", 0),
-                    "hotspot_name": hotspot.get("name"),
-                    "hotspot_type": hotspot.get("type"),
-                }
-                if not existing or candidate["score"] > existing["score"]:
-                    impacted_by_node[tc_id] = candidate
-
-        ranked: List[Dict[str, Any]] = []
-        for node_id, hotspot_info in impacted_by_node.items():
-            node = graph.nodes.get(node_id)
-            if not node:
-                continue
-
-            history = self.failure_context_service.build_history_payload(node)
-            fail_count = history.get("fail_count", 0)
-            total_runs = history.get("total_runs", 0)
-            failure_rate = history.get("failure_rate", 0.0)
-            flaky_score = history.get("flaky_score", 0.0)
-            impact_score = hotspot_info.get("score", 0)
-
-            # Weighted score favoring blast radius first, then severity, then instability.
-            priority_score = (
-                (impact_score * 10.0)
-                + (failure_rate * 100.0)
-                + (flaky_score * 20.0)
-            )
-
-            reason_parts = []
-            reason_parts.append(f"impact={impact_score}")
-            reason_parts.append(f"failure_rate={round(failure_rate * 100, 1)}%")
-            if total_runs > 1:
-                reason_parts.append(f"runs={total_runs}")
-            if flaky_score > 0:
-                reason_parts.append(f"flaky={round(flaky_score, 3)}")
-
-            top_fp = (history.get("failure_fingerprints") or [])
-            top_fingerprint = top_fp[0]["fingerprint"] if top_fp else None
-
-            ranked.append(
-                {
-                    "node_id": node.id,
-                    "name": node.name,
-                    "type": node.type.value,
-                    "status": node.execution_status,
-                    "file_path": node.metadata.file_path,
-                    "line_number": node.metadata.line_number,
-                    "priority_score": round(priority_score, 3),
-                    "impact_score": impact_score,
-                    "failure_rate": failure_rate,
-                    "fail_count": fail_count,
-                    "total_runs": total_runs,
-                    "flaky_score": flaky_score,
-                    "failure_category": node.metadata.additional_data.get("failure_category"),
-                    "top_fingerprint": top_fingerprint,
-                    "linked_hotspot": {
-                        "name": hotspot_info.get("hotspot_name"),
-                        "type": hotspot_info.get("hotspot_type"),
-                        "failure_rate": hotspot_info.get("failure_rate"),
-                    },
-                    "why_now": ", ".join(reason_parts),
-                }
-            )
-
-        ranked.sort(
-            key=lambda item: (
-                item["priority_score"],
-                item["impact_score"],
-                item["failure_rate"],
-                item["fail_count"],
-            ),
-            reverse=True,
+        priority = FixPriorityService(
+            self.graphs[request.project_name],
+            self.failure_context_service,
+        ).prioritize(
+            hotspots_result.get("hotspots", []),
+            request.limit,
         )
 
         return {
@@ -1712,13 +1546,7 @@ class KarateGraphAnalyzerTool:
             "preset": "prioritize-fix-queue",
             "project_name": request.project_name,
             "limit": request.limit,
-            "results": ranked[: request.limit],
-            "count": min(len(ranked), request.limit),
-            "total_available": len(ranked),
-            "scoring": {
-                "formula": "priority = impact*10 + failure_rate*100 + flaky_score*20",
-                "weights": {"impact": 10, "failure_rate": 100, "flaky_score": 20},
-            },
+            **priority,
         }
 
     def get_project_health(self, project_name: str) -> Dict[str, Any]:
@@ -2009,56 +1837,12 @@ class KarateGraphAnalyzerTool:
         if not suggestions_result.get("success"):
             return suggestions_result
 
-        checklist: List[Dict[str, Any]] = []
-
         smart = suggestions_result.get("smart_suggestion") or {}
-        if isinstance(smart, dict) and smart and not smart.get("error"):
-            checklist.append(
-                {
-                    "step": 1,
-                    "source": "smart",
-                    "title": f"Validate root cause: {smart.get('root_cause', 'Unknown')}",
-                    "action": smart.get("suggestion", "Inspect the failing component logic."),
-                    "confidence": smart.get("confidence", 0.0),
-                    "details": {
-                        "node_name": smart.get("node_name"),
-                        "node_type": smart.get("node_type"),
-                        "error_summary": smart.get("error_summary"),
-                        "file_path": smart.get("file_path"),
-                    },
-                }
-            )
-
         historical_suggestions = suggestions_result.get("historical_suggestions", [])
-        for index, item in enumerate(historical_suggestions[: request.max_historical], start=1):
-            checklist.append(
-                {
-                    "step": len(checklist) + 1,
-                    "source": "historical",
-                    "title": f"Apply historical fix pattern #{index}",
-                    "action": item.get("description", "Reuse previous successful remediation."),
-                    "confidence": item.get("confidence", 0.0),
-                    "details": {
-                        "solution": item.get("solution"),
-                        "error_pattern": item.get("error_pattern"),
-                        "times_used": item.get("success_count", item.get("times_used")),
-                        "last_used": item.get("timestamp", item.get("last_used")),
-                    },
-                }
-            )
-
-        checklist.append(
-            {
-                "step": len(checklist) + 1,
-                "source": "workflow",
-                "title": "Re-run impacted scope",
-                "action": "Execute impacted tests first, then full regression for this project.",
-                "confidence": 1.0,
-                "details": {
-                    "project_name": request.project_name,
-                    "node_id": request.node_id,
-                },
-            }
+        checklist = self._build_auto_fix_checklist(
+            request,
+            smart,
+            historical_suggestions,
         )
 
         return {
@@ -2071,6 +1855,77 @@ class KarateGraphAnalyzerTool:
             "count": len(checklist),
             "smart_suggestion_available": bool(smart and not smart.get("error")),
             "historical_suggestions_available": len(historical_suggestions),
+        }
+
+    def _build_auto_fix_checklist(
+        self,
+        request: AutoFixHintPackRequest,
+        smart: Dict[str, Any],
+        historical_suggestions: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        checklist: List[Dict[str, Any]] = []
+        smart_item = self._smart_checklist_item(smart)
+        if smart_item:
+            checklist.append(smart_item)
+
+        for index, item in enumerate(historical_suggestions[: request.max_historical], start=1):
+            checklist.append(self._historical_checklist_item(item, index, len(checklist) + 1))
+
+        checklist.append(self._rerun_scope_checklist_item(request, len(checklist) + 1))
+        return checklist
+
+    def _smart_checklist_item(self, smart: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(smart, dict) or not smart or smart.get("error"):
+            return None
+        return {
+            "step": 1,
+            "source": "smart",
+            "title": f"Validate root cause: {smart.get('root_cause', 'Unknown')}",
+            "action": smart.get("suggestion", "Inspect the failing component logic."),
+            "confidence": smart.get("confidence", 0.0),
+            "details": {
+                "node_name": smart.get("node_name"),
+                "node_type": smart.get("node_type"),
+                "error_summary": smart.get("error_summary"),
+                "file_path": smart.get("file_path"),
+            },
+        }
+
+    def _historical_checklist_item(
+        self,
+        item: Dict[str, Any],
+        index: int,
+        step: int,
+    ) -> Dict[str, Any]:
+        return {
+            "step": step,
+            "source": "historical",
+            "title": f"Apply historical fix pattern #{index}",
+            "action": item.get("description", "Reuse previous successful remediation."),
+            "confidence": item.get("confidence", 0.0),
+            "details": {
+                "solution": item.get("solution"),
+                "error_pattern": item.get("error_pattern"),
+                "times_used": item.get("success_count", item.get("times_used")),
+                "last_used": item.get("timestamp", item.get("last_used")),
+            },
+        }
+
+    def _rerun_scope_checklist_item(
+        self,
+        request: AutoFixHintPackRequest,
+        step: int,
+    ) -> Dict[str, Any]:
+        return {
+            "step": step,
+            "source": "workflow",
+            "title": "Re-run impacted scope",
+            "action": "Execute impacted tests first, then full regression for this project.",
+            "confidence": 1.0,
+            "details": {
+                "project_name": request.project_name,
+                "node_id": request.node_id,
+            },
         }
 
     def get_failure_history(self, project_name: str, node_id: str) -> Dict[str, Any]:

@@ -250,67 +250,99 @@ class FeatureFileParser:
     ) -> List[Dependency]:
         """Orchestrate dependency extraction across steps, merging background context."""
         from karate_graph_analyzer.parser.extractors.api_extractor import ApiExtractor
-        from karate_graph_analyzer.parser.extractors.java_extractor import JavaExtractor
         from karate_graph_analyzer.parser.extractors.javascript_usage_extractor import JavaScriptUsageExtractor
+
         api_extractor = self.orchestrator.get_extractor_by_type(ApiExtractor)
         java_extractor = self.orchestrator.get_extractor_by_type(JavaExtractor)
         javascript_extractor = JavaScriptUsageExtractor(self.config)
         http_method = (api_extractor.extract_http_method(scenario.steps) if api_extractor else "GET") or "GET"
 
-        # Resolve scoped config for this specific file
         original_mapping = self.config.base_url_mapping
         self.config.base_url_mapping = self.config.get_config_for_path(scenario.file_path)
 
-        tracker = ApiContextTracker(api_extractor)
+        try:
+            all_steps = background_steps + scenario.steps
+            tracker = ApiContextTracker(api_extractor)
+            dependencies = self._extract_step_dependencies(
+                scenario,
+                all_steps,
+                tracker,
+                http_method,
+                java_extractor,
+                javascript_extractor,
+            )
+            dependencies.extend(tracker.finalize(scenario.line_number, scenario, http_method))
+            dependencies.extend(self._extract_java_dependencies(scenario, all_steps, java_extractor))
+            dependencies.extend(
+                self._extract_javascript_dependencies(scenario, all_steps, javascript_extractor)
+            )
+            setup_dependency = self._build_setup_dependency(scenario)
+            if setup_dependency:
+                dependencies.append(setup_dependency)
+            return self._dedupe_dependencies(dependencies, validate_paths)
+        finally:
+            self.config.base_url_mapping = original_mapping
+
+    def _extract_step_dependencies(
+        self,
+        scenario: Scenario,
+        all_steps: List[Step],
+        tracker: ApiContextTracker,
+        http_method: str,
+        java_extractor: Optional[JavaExtractor],
+        javascript_extractor,
+    ) -> List[Dependency]:
         dependencies: List[Dependency] = []
-        
-        # 1. Process ALL steps sequentially
-        all_steps = background_steps + scenario.steps
         for step in all_steps:
             deps = self.orchestrator.extract_from_step(step.text, step.line_number)
-            for d in deps:
-                if not tracker.process_dependency(d, scenario, http_method):
-                    # Non-API dependency
-                    d.parameters.update({
+            for dep in deps:
+                if not tracker.process_dependency(dep, scenario, http_method):
+                    dep.parameters.update({
                         "scenario_name": scenario.name,
-                        "scenario_tags": scenario.tags
+                        "scenario_tags": scenario.tags,
                     })
-                    dependencies.append(d)
-            
-            # 1.1 Local Java Aliases
+                    dependencies.append(dep)
+
             if java_extractor:
                 java_extractor.extract_local_aliases(step.text)
             javascript_extractor.extract_aliases(step.text)
+        return dependencies
 
-        # 2. Finalize API dependencies
-        dependencies.extend(tracker.finalize(scenario.line_number, scenario, http_method))
-        
-        # 2.1 Finalize Java dependencies
-        if java_extractor:
-            # Merge global aliases from config with local ones
-            all_java_aliases = self.config.java_aliases.copy()
-            all_java_aliases.update(java_extractor.local_aliases)
-            
-            used_java_usages = java_extractor.extract_java_usages(all_steps, all_java_aliases)
-            for usage in used_java_usages:
-                java_class = usage["class_path"]
-                method_name = usage["method_name"]
-                
-                # Create a specific target for method-level tracking if needed
-                # For now, we'll keep the class as the target but add the method to parameters
-                dependencies.append(Dependency(
-                    type=DependencyType.JAVA,
-                    target=java_class,
-                    line_number=scenario.line_number,
-                    parameters={
-                        "class_path": java_class,
-                        "method_name": method_name,
-                        "scenario_name": scenario.name,
-                        "scenario_tags": scenario.tags
-                    }
-                ))
+    def _extract_java_dependencies(
+        self,
+        scenario: Scenario,
+        all_steps: List[Step],
+        java_extractor: Optional[JavaExtractor],
+    ) -> List[Dependency]:
+        if not java_extractor:
+            return []
 
-        # 2.2 Finalize JavaScript helper function usages
+        all_java_aliases = self.config.java_aliases.copy()
+        all_java_aliases.update(java_extractor.local_aliases)
+        dependencies: List[Dependency] = []
+        for usage in java_extractor.extract_java_usages(all_steps, all_java_aliases):
+            java_class = usage["class_path"]
+            method_name = usage["method_name"]
+            dependencies.append(Dependency(
+                type=DependencyType.JAVA,
+                target=java_class,
+                line_number=scenario.line_number,
+                parameters={
+                    "class_path": java_class,
+                    "method_name": method_name,
+                    "scenario_name": scenario.name,
+                    "scenario_tags": scenario.tags,
+                },
+            ))
+        return dependencies
+
+    def _extract_javascript_dependencies(
+        self,
+        scenario: Scenario,
+        all_steps: List[Step],
+        javascript_extractor,
+    ) -> List[Dependency]:
+        dependencies: List[Dependency] = []
         for usage in javascript_extractor.extract_function_usages(all_steps):
             dependencies.append(Dependency(
                 type=DependencyType.JAVASCRIPT,
@@ -322,43 +354,44 @@ class FeatureFileParser:
                     "alias": usage["alias"],
                     "scenario_name": scenario.name,
                     "scenario_tags": scenario.tags,
-                }
+                },
             ))
+        return dependencies
 
-        # 3. Add @setup dependency if present
-        if scenario.setup_scenario:
-            dependencies.append(Dependency(
-                type=DependencyType.SETUP,
-                target=scenario.setup_scenario,
-                line_number=scenario.line_number,
-                parameters={
-                    "file_path": scenario.file_path,
-                    "setup_line_number": scenario.setup_line_number
-                }
-            ))
+    def _build_setup_dependency(self, scenario: Scenario) -> Optional[Dependency]:
+        if not scenario.setup_scenario:
+            return None
+        return Dependency(
+            type=DependencyType.SETUP,
+            target=scenario.setup_scenario,
+            line_number=scenario.line_number,
+            parameters={
+                "file_path": scenario.file_path,
+                "setup_line_number": scenario.setup_line_number,
+            },
+        )
 
-        # 4. Final Deduplication
+    def _dedupe_dependencies(
+        self,
+        dependencies: List[Dependency],
+        validate_paths: bool = False,
+    ) -> List[Dependency]:
         unique_deps: List[Dependency] = []
         seen = set()
-        for d in dependencies:
-            # Key: type + target + line_number (as requested by user)
-            key = (d.type, d.target, d.line_number)
+        for dep in dependencies:
+            key = (dep.type, dep.target, dep.line_number)
             if key not in seen:
-                if validate_paths and d.type in {
+                if validate_paths and dep.type in {
                     DependencyType.WORKFLOW,
                     DependencyType.COMMON,
                     DependencyType.PAGE,
                     DependencyType.LOCATOR,
-                } and not d.target.strip():
+                } and not dep.target.strip():
                     logger.warning(
-                        "Dependency target at line %s is empty or whitespace", d.line_number
+                        "Dependency target at line %s is empty or whitespace", dep.line_number
                     )
-                unique_deps.append(d)
+                unique_deps.append(dep)
                 seen.add(key)
-        
-        # Restore original mapping
-        self.config.base_url_mapping = original_mapping
-        
         return unique_deps
 
     def resolve_path(self, call_statement: str, context: PathContext) -> str:

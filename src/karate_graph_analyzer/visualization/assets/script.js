@@ -861,6 +861,15 @@ function renderFailedCaseItem(testCase) {
     `;
 }
 
+function renderStatusMetric(label, value, color, status) {
+    return `
+        <div onclick="filterNodes('${status}')" style="cursor: pointer;">
+            <div style="font-size: 10px; color: ${color}; font-weight: 800;">${label}</div>
+            <div style="font-size: 18px; font-weight: 800; color: ${color};">${value}</div>
+        </div>
+    `;
+}
+
 function renderStatusSummary() {
     let total = 0, passed = 0, failed = 0, partial = 0;
     for (const id in nodeMetadata) {
@@ -883,22 +892,10 @@ function renderStatusSummary() {
                     <div style="font-size: 32px; font-weight: 900; color: ${rate >= 90 ? '#4caf50' : '#f44336'};">${rate}%</div>
                 </div>
                 <div style="display: flex; gap: 20px; text-align: right;">
-                    <div onclick="filterNodes('passed')" style="cursor: pointer;">
-                        <div style="font-size: 10px; color: #4caf50; font-weight: 800;">PASS</div>
-                        <div style="font-size: 18px; font-weight: 800; color: #2e7d32;">${passed}</div>
-                    </div>
-                    <div onclick="filterNodes('failed')" style="cursor: pointer;">
-                        <div style="font-size: 10px; color: #f44336; font-weight: 800;">FAIL</div>
-                        <div style="font-size: 18px; font-weight: 800; color: #c62828;">${failed}</div>
-                    </div>
-                    <div onclick="filterNodes('partial')" style="cursor: pointer;">
-                        <div style="font-size: 10px; color: #e65100; font-weight: 800;">PARTIAL</div>
-                        <div style="font-size: 18px; font-weight: 800; color: #e65100;">${partial}</div>
-                    </div>
-                    <div onclick="filterNodes('all')" style="cursor: pointer;">
-                        <div style="font-size: 10px; color: #999; font-weight: 800;">TOTAL</div>
-                        <div style="font-size: 18px; font-weight: 800; color: #444;">${total}</div>
-                    </div>
+                    ${renderStatusMetric('PASS', passed, '#2e7d32', 'passed')}
+                    ${renderStatusMetric('FAIL', failed, '#c62828', 'failed')}
+                    ${renderStatusMetric('PARTIAL', partial, '#e65100', 'partial')}
+                    ${renderStatusMetric('TOTAL', total, '#444', 'all')}
                     <div onclick="switchTab('legend')" style="cursor: pointer; border-left: 1px solid #ddd; padding-left: 15px; margin-left: 5px;">
                         <div style="font-size: 10px; color: #1976d2; font-weight: 800;">LEGEND</div>
                         <div style="font-size: 18px; font-weight: 800; color: #1976d2;">📖</div>
