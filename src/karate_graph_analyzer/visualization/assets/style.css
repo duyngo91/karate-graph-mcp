@@ -388,6 +388,92 @@ body, html {
 .dot.pass { background: var(--success); }
 .dot.fail { background: var(--error); }
 
+.failure-context-section {
+    background: #fff8f8;
+    border: 1px solid #ffebee;
+    border-radius: 8px;
+    padding: 12px;
+    margin: 8px 0;
+}
+.failure-context-grid,
+.execution-trend-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+}
+.failure-context-grid div,
+.execution-trend-row div {
+    background: #ffffff;
+    border: 1px solid #eef1f4;
+    border-radius: 6px;
+    padding: 8px;
+    min-width: 0;
+}
+.failure-context-grid span,
+.execution-trend-row span {
+    display: block;
+    color: #7a8692;
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+.failure-context-grid b,
+.execution-trend-row b {
+    display: block;
+    color: #263238;
+    font-size: 11px;
+    margin-top: 3px;
+    word-break: break-word;
+}
+.failure-context-line {
+    margin-top: 8px;
+    font-size: 11px;
+    color: #4a5560;
+}
+.failure-fingerprint {
+    margin-top: 8px;
+    padding: 8px;
+    border-radius: 6px;
+    background: #263238;
+    color: #ffffff;
+    font-family: monospace;
+    font-size: 10px;
+    line-height: 1.4;
+    word-break: break-word;
+}
+.run-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+}
+.run-history-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    border-left: 3px solid #cfd8dc;
+    background: #fafafa;
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 11px;
+}
+.run-history-item.pass { border-left-color: var(--success); }
+.run-history-item.fail { border-left-color: var(--error); }
+.run-history-item span {
+    display: block;
+    color: #7a8692;
+    font-size: 10px;
+    margin-top: 2px;
+    word-break: break-word;
+}
+.run-history-item em {
+    color: #b71c1c;
+    font-style: normal;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
 /* Pulse Animation */
 @keyframes pulse-red {
     0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.4); }

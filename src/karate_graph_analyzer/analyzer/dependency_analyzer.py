@@ -218,10 +218,14 @@ class DependencyAnalyzer:
                 results.append(self.graph.nodes[did])
         return results
 
-    def apply_execution_report(self, report_data: List[Dict[str, Any]]) -> int:
+    def apply_execution_report(
+        self,
+        report_data: List[Dict[str, Any]],
+        run_context: Optional[Dict[str, Any]] = None,
+    ) -> int:
         """Apply execution results from Karate JSON report to the graph."""
         from karate_graph_analyzer.parser.execution_parser import ExecutionReportParser
-        parser = ExecutionReportParser(self.graph)
+        parser = ExecutionReportParser(self.graph, run_context=run_context)
         return parser.apply_report_data(report_data)
 
     def process_execution_directory(self, directory_path: str) -> Dict[str, Any]:
