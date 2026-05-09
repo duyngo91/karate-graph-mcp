@@ -283,6 +283,17 @@ def flaky_risk(project_name: str, limit: int = 10) -> Dict[str, Any]:
     return analyzer_tool.flaky_risk(project_name, limit)
 
 @mcp.tool()
+def prioritize_fix_queue(project_name: str, limit: int = 10) -> Dict[str, Any]:
+    """
+    Preset query: rank failures/components to fix first by impact and risk.
+
+    Args:
+        project_name: Name of the analyzed project.
+        limit: Maximum number of ranked items to return.
+    """
+    return analyzer_tool.prioritize_fix_queue(project_name, limit)
+
+@mcp.tool()
 def record_fix(project_name: str, node_id: str, error_message: str, solution: str, description: str) -> Dict[str, Any]:
     """
     Record a successful fix for a component and error pattern.
