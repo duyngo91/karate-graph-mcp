@@ -330,6 +330,44 @@ def auto_fix_hint_pack(
     )
 
 @mcp.tool()
+def get_failure_history(project_name: str, node_id: str) -> Dict[str, Any]:
+    """
+    Return execution history, flaky score, and failure fingerprint trend for a node.
+
+    Args:
+        project_name: Name of the analyzed project.
+        node_id: ID of the failing or flaky node.
+    """
+    return analyzer_tool.get_failure_history(project_name, node_id)
+
+@mcp.tool()
+def get_failure_debug_context(
+    project_name: str,
+    node_id: str,
+    error_message: Optional[str] = None,
+    radius: int = 2,
+    max_historical: int = 3,
+) -> Dict[str, Any]:
+    """
+    Build an AI-ready debug pack: failure fingerprint, run history, local dependency graph,
+    related hotspots, source snippet, and fix checklist.
+
+    Args:
+        project_name: Name of the analyzed project.
+        node_id: ID of the failing node.
+        error_message: Optional current error message override.
+        radius: Dependency context radius around the node.
+        max_historical: Maximum historical fix hints to include.
+    """
+    return analyzer_tool.get_failure_debug_context(
+        project_name,
+        node_id,
+        error_message,
+        radius,
+        max_historical,
+    )
+
+@mcp.tool()
 def get_subgraph(node_id: str, radius: int = 2) -> Dict[str, Any]:
     """
     Extract a local subgraph for AI context.

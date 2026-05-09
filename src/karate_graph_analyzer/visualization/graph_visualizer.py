@@ -242,6 +242,11 @@ class GraphVisualizer:
             "expert_notes": node.metadata.expert_notes,
             "suggestions": node.metadata.suggestions,
             "execution_history": node.metadata.execution_history,
+            "execution_runs": node.metadata.additional_data.get("execution_runs", []),
+            "failure_fingerprint": node.metadata.additional_data.get("failure_fingerprint"),
+            "failure_category": node.metadata.additional_data.get("failure_category"),
+            "last_run": node.metadata.additional_data.get("last_run"),
+            "last_artifacts": node.metadata.additional_data.get("last_artifacts", []),
             "details": details_copy
         }
 

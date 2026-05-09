@@ -1,21 +1,57 @@
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from karate_graph_analyzer.models import DependencyGraph, NodeType, DependencyType
+from karate_graph_analyzer.utils.failure_signature import (
+    build_failure_fingerprint,
+    classify_failure,
+    extract_http_status_signal,
+)
 
 logger = logging.getLogger(__name__)
 
 class ExecutionReportParser:
     """Parses Karate execution reports and maps results to graph nodes."""
 
-    def __init__(self, graph: DependencyGraph):
+    def __init__(self, graph: DependencyGraph, run_context: Optional[Dict[str, Any]] = None):
         self.graph = graph
+        self.run_context = run_context or self._default_run_context()
 
-    def apply_report_data(self, data: Any) -> int:
+    def _default_run_context(self) -> Dict[str, Any]:
+        applied_at = datetime.now(timezone.utc).isoformat()
+        return {
+            "run_id": f"manual:{applied_at}",
+            "applied_at": applied_at,
+        }
+
+    def _merge_run_context(self, run_context: Dict[str, Any]) -> Dict[str, Any]:
+        merged = self._default_run_context()
+        merged.update(run_context)
+        if not merged.get("run_id"):
+            merged["run_id"] = f"manual:{merged['applied_at']}"
+        return merged
+
+    def _report_run_context(self, report_path: Path) -> Dict[str, Any]:
+        resolved = report_path.resolve()
+        stat = report_path.stat()
+        applied_at = datetime.now(timezone.utc).isoformat()
+        return {
+            "run_id": f"{report_path.stem}:{stat.st_mtime_ns}",
+            "report_path": str(resolved),
+            "report_file": report_path.name,
+            "report_mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+            "applied_at": applied_at,
+        }
+
+    def apply_report_data(self, data: Any, run_context: Optional[Dict[str, Any]] = None) -> int:
         """Apply already loaded report data to the graph nodes."""
+        if run_context:
+            self.run_context = self._merge_run_context(run_context)
+
         features = data if isinstance(data, list) else [data]
         applied_count = 0
         
@@ -114,6 +150,7 @@ class ExecutionReportParser:
             logger.warning(f"Report file not found: {report_path}")
             return False
 
+        self.run_context = self._report_run_context(path)
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
@@ -143,10 +180,16 @@ class ExecutionReportParser:
                     continue
 
                 details = self._extract_failure_details(scenario_data) if status == "FAILED" else None
+                execution_record = self._build_execution_record(
+                    status,
+                    scenario_data,
+                    feature_uri,
+                    details,
+                )
                 if details:
                     node.metadata.additional_data["last_error"] = details["error"]
 
-                self._update_node_status(node.id, status, details)
+                self._update_node_status(node.id, status, details, execution_record)
                 matched = True
                 applied = True
             
@@ -197,9 +240,95 @@ class ExecutionReportParser:
 
     def _extract_failure_details(self, scenario_data: Dict[str, Any]) -> Dict[str, Optional[str]]:
         error_msg = scenario_data.get("error") or scenario_data.get("error_message") or "Unknown error"
+        failed_step = self._find_failed_step(scenario_data)
         return {
             "error": error_msg,
-            "failed_step": self._find_failed_step(scenario_data)
+            "failed_step": failed_step,
+            "failure_fingerprint": build_failure_fingerprint(error_msg, failed_step),
+            "failure_category": classify_failure(error_msg, failed_step),
+            "http_status": extract_http_status_signal(error_msg),
+            "artifacts": self._extract_artifacts(scenario_data),
+            "run_context": self.run_context,
+        }
+
+    def _build_execution_record(
+        self,
+        status: str,
+        scenario_data: Dict[str, Any],
+        feature_uri: str,
+        details: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        error = (details or {}).get("error")
+        failed_step = (details or {}).get("failed_step")
+        return {
+            "run_id": self.run_context.get("run_id"),
+            "status": status,
+            "feature_uri": feature_uri,
+            "scenario_name": self._get_scenario_name(scenario_data),
+            "duration_ms": self._extract_duration_ms(scenario_data),
+            "error": error,
+            "failed_step": failed_step,
+            "failure_fingerprint": (details or {}).get("failure_fingerprint"),
+            "failure_category": (details or {}).get("failure_category"),
+            "http_status": (details or {}).get("http_status"),
+            "artifacts": (details or {}).get("artifacts", []),
+            "run_context": self.run_context,
+        }
+
+    def _extract_duration_ms(self, scenario_data: Dict[str, Any]) -> Optional[float]:
+        for key in ("duration", "duration_ms", "durationMillis"):
+            if scenario_data.get(key) is not None:
+                return scenario_data.get(key)
+
+        total = 0
+        found = False
+        for step in scenario_data.get("steps", []):
+            result = step.get("result", {})
+            duration = result.get("duration") or result.get("duration_ms") or result.get("durationMillis")
+            if duration is not None:
+                found = True
+                total += duration
+        return total if found else None
+
+    def _extract_artifacts(self, scenario_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        artifacts: List[Dict[str, Any]] = []
+
+        def collect(container: Dict[str, Any], scope: str):
+            for key in ("embeddings", "attachments", "artifacts", "output"):
+                raw_items = container.get(key)
+                if not raw_items:
+                    continue
+                items = raw_items if isinstance(raw_items, list) else [raw_items]
+                for item in items:
+                    artifacts.append(self._artifact_summary(item, scope, key))
+
+        collect(scenario_data, "scenario")
+        for index, step in enumerate(scenario_data.get("steps", []), start=1):
+            collect(step, f"step:{index}")
+            result = step.get("result", {})
+            if isinstance(result, dict):
+                collect(result, f"step:{index}:result")
+
+        return artifacts
+
+    def _artifact_summary(self, item: Any, scope: str, source_key: str) -> Dict[str, Any]:
+        if isinstance(item, dict):
+            data = item.get("data")
+            text = item.get("text") or item.get("content")
+            return {
+                "scope": scope,
+                "source": source_key,
+                "name": item.get("name") or item.get("fileName") or item.get("filename"),
+                "mime_type": item.get("mime_type") or item.get("mimeType") or item.get("mediaType"),
+                "path": item.get("path") or item.get("file") or item.get("url"),
+                "size": len(data) if isinstance(data, str) else item.get("size"),
+                "preview": str(text or data or "")[:300] if (text or data) else None,
+            }
+
+        return {
+            "scope": scope,
+            "source": source_key,
+            "preview": str(item)[:300],
         }
 
     def _node_matches_scenario(self, node, scenario_name: str, feature_uri: str) -> bool:
@@ -246,7 +375,13 @@ class ExecutionReportParser:
                 return f"{step.get('keyword', '')} {step.get('name', '')}"
         return None
 
-    def _update_node_status(self, node_id: str, status: str, details: Optional[Dict] = None):
+    def _update_node_status(
+        self,
+        node_id: str,
+        status: str,
+        details: Optional[Dict] = None,
+        execution_record: Optional[Dict[str, Any]] = None,
+    ):
         """Update current status, append to execution history, and maintain counts."""
         node = self.graph.nodes.get(node_id)
         if not node:
@@ -263,19 +398,56 @@ class ExecutionReportParser:
             
         if details is not None:
             node.execution_details.update(details)
+            node.metadata.additional_data["failure_fingerprint"] = details.get("failure_fingerprint")
+            node.metadata.additional_data["failure_category"] = details.get("failure_category")
+            node.metadata.additional_data["last_http_status"] = details.get("http_status")
+            node.metadata.additional_data["last_artifacts"] = details.get("artifacts", [])
             
             # AI Fix Intelligence: Generate suggestions based on error
             if status == "FAILED":
                 error_msg = str(details.get("error", "")).lower()
                 node.suggestions = self._generate_suggestions(error_msg)
             
-        # Maintain rolling history
+        if execution_record:
+            node.metadata.additional_data["last_run"] = execution_record
+            runs = node.metadata.additional_data.setdefault("execution_runs", [])
+            run_id = execution_record.get("run_id")
+            if run_id:
+                runs[:] = [run for run in runs if run.get("run_id") != run_id]
+                runs.append(execution_record)
+            else:
+                runs.append(execution_record)
+
+            self._dedupe_execution_runs(runs)
+            if len(runs) > 20:
+                del runs[:-20]
+
+            node.metadata.execution_history = [
+                run.get("status")
+                for run in runs
+                if run.get("status")
+            ][-10:]
+            return
+
+        # Maintain rolling history when no rich execution record is available.
         if not hasattr(node.metadata, 'execution_history'):
             node.metadata.execution_history = []
-            
+
         node.metadata.execution_history.append(status)
         if len(node.metadata.execution_history) > 10:
             node.metadata.execution_history.pop(0)
+
+    def _dedupe_execution_runs(self, runs: List[Dict[str, Any]]) -> None:
+        seen = set()
+        deduped = []
+        for run in reversed(runs):
+            run_id = run.get("run_id")
+            dedupe_key = run_id or (run.get("status"), run.get("scenario_name"), run.get("feature_uri"))
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            deduped.append(run)
+        runs[:] = list(reversed(deduped))
 
     def _propagate_status_to_parents(self, node_id: str):
         """Propagate status up and aggregate failure counts for structural nodes."""

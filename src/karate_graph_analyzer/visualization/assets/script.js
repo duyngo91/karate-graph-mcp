@@ -321,6 +321,7 @@ function renderNodeDetails(model) {
     const sections = [
         renderNodeIdentitySection(model),
         renderNodeStatusSection(model.data),
+        renderNodeFailureContextSection(model.data),
         renderNodeSourceSection(model.data),
         renderNodeExecutionHistory(model.data),
         renderNodeTechnicalDetails(model.data),
@@ -359,6 +360,32 @@ function renderNodeStatusSection(data) {
     `;
 }
 
+function renderNodeFailureContextSection(data) {
+    const details = data.details || {};
+    const fingerprint = data.failure_fingerprint || details.failure_fingerprint;
+    const category = data.failure_category || details.failure_category;
+    const failedStep = details.last_run?.failed_step || details.last_run?.failedStep || details.last_failed_step;
+    const lastRun = data.last_run || details.last_run || {};
+    const runContext = lastRun.run_context || details.run_context || {};
+    const artifacts = data.last_artifacts || details.last_artifacts || [];
+
+    if (!fingerprint && !category && !runContext.run_id && !artifacts.length) return '';
+
+    return `
+        <div class="detail-section failure-context-section">
+            <div class="detail-label">Failure Context</div>
+            <div class="failure-context-grid">
+                ${category ? `<div><span>Category</span><b>${escapeHtml(category)}</b></div>` : ''}
+                ${runContext.run_id ? `<div><span>Run ID</span><b>${escapeHtml(runContext.run_id)}</b></div>` : ''}
+                ${runContext.report_file ? `<div><span>Report</span><b>${escapeHtml(runContext.report_file)}</b></div>` : ''}
+                ${artifacts.length ? `<div><span>Artifacts</span><b>${artifacts.length}</b></div>` : ''}
+            </div>
+            ${failedStep ? `<div class="failure-context-line"><b>Failed Step:</b> ${escapeHtml(failedStep)}</div>` : ''}
+            ${fingerprint ? `<div class="failure-fingerprint">${escapeHtml(fingerprint)}</div>` : ''}
+        </div>
+    `;
+}
+
 function renderNodeSourceSection(data) {
     if (!data.file_path) return '';
     const location = `${data.file_path}${data.line_number ? `:${data.line_number}` : ''}`;
@@ -374,16 +401,49 @@ function renderNodeSourceSection(data) {
 
 function renderNodeExecutionHistory(data) {
     const history = Array.isArray(data.execution_history) ? data.execution_history.slice(-10) : [];
-    if (!history.length) return '';
+    const runs = Array.isArray(data.execution_runs) ? data.execution_runs.slice(-5).reverse() : [];
+    if (!history.length && !runs.length) return '';
+
+    const runStatuses = runs.map(run => run.status).filter(Boolean);
+    const trendStatuses = runStatuses.length ? runStatuses : history;
+    const passCount = trendStatuses.filter(status => status === 'PASSED').length;
+    const failCount = trendStatuses.filter(status => status === 'FAILED').length;
+    const total = passCount + failCount;
+    const failRate = total ? Math.round((failCount / total) * 100) : 0;
 
     return `
         <div class="detail-section">
             <div class="detail-label">Execution History (Last 10)</div>
+            <div class="execution-trend-row">
+                <div><span>Runs</span><b>${total}</b></div>
+                <div><span>Pass</span><b>${passCount}</b></div>
+                <div><span>Fail</span><b>${failCount}</b></div>
+                <div><span>Fail Rate</span><b>${failRate}%</b></div>
+            </div>
             <div class="history-timeline">
                 ${history.map(status => `
                     <div class="dot ${status === 'PASSED' ? 'pass' : 'fail'}" title="${escapeHtml(status)}"></div>
                 `).join('')}
             </div>
+            ${runs.length ? `
+                <div class="run-history-list">
+                    ${runs.map(renderExecutionRunItem).join('')}
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+function renderExecutionRunItem(run) {
+    const context = run.run_context || {};
+    const statusClass = run.status === 'PASSED' ? 'pass' : 'fail';
+    return `
+        <div class="run-history-item ${statusClass}">
+            <div>
+                <b>${escapeHtml(run.status || 'UNKNOWN')}</b>
+                <span>${escapeHtml(context.report_file || context.run_id || 'manual run')}</span>
+            </div>
+            ${run.failure_category ? `<em>${escapeHtml(run.failure_category)}</em>` : ''}
         </div>
     `;
 }

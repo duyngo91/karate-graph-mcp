@@ -7,6 +7,7 @@ Provides MCP protocol interface for graph analyzer.
 import json
 import logging
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +21,7 @@ from karate_graph_analyzer.exporters import ExporterFactory
 from karate_graph_analyzer.mcp_interface.responses import error_response
 from karate_graph_analyzer.mcp_interface.search_tools import SearchTools
 from karate_graph_analyzer.services.graph_cache_service import GraphCacheService
+from karate_graph_analyzer.services.failure_context_service import FailureContextService
 from karate_graph_analyzer.services.project_lifecycle_service import ProjectLifecycleService
 from karate_graph_analyzer.services.query_service import QueryService
 from karate_graph_analyzer.services.report_service import ReportService
@@ -213,6 +215,23 @@ class AutoFixHintPackRequest(BaseModel):
         default=3, ge=1, le=20, description="Max historical suggestions included"
     )
 
+
+class FailureDebugContextRequest(BaseModel):
+    """Request model for AI failure debug context."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the analyzed project")
+    node_id: str = Field(..., min_length=1, description="Failing node id")
+    error_message: Optional[str] = Field(default=None, description="Optional current error message override")
+    radius: int = Field(default=2, ge=0, le=5, description="Dependency context radius")
+    max_historical: int = Field(default=3, ge=0, le=20, description="Max historical fix hints")
+
+
+class FailureHistoryRequest(BaseModel):
+    """Request model for failure history lookup."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the analyzed project")
+    node_id: str = Field(..., min_length=1, description="Node id")
+
 class KarateGraphAnalyzerTool:
     """MCP protocol interface for graph analyzer."""
 
@@ -254,6 +273,7 @@ class KarateGraphAnalyzerTool:
         self.lifecycle_service = ProjectLifecycleService(self.registry, self.graph_cache)
         self.query_service = QueryService()
         self.report_service = ReportService()
+        self.failure_context_service = FailureContextService()
 
         # Load existing projects from storage
         try:
@@ -383,6 +403,26 @@ class KarateGraphAnalyzerTool:
         """Load JSON content from disk."""
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
+
+    def _build_report_run_context(self, report_path: str) -> Dict[str, Any]:
+        path = Path(report_path)
+        applied_at = datetime.now(timezone.utc).isoformat()
+        if path.exists():
+            stat = path.stat()
+            return {
+                "run_id": f"{path.stem}:{stat.st_mtime_ns}",
+                "report_path": str(path.resolve()),
+                "report_file": path.name,
+                "report_mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                "applied_at": applied_at,
+            }
+
+        return {
+            "run_id": f"{path.stem}:{applied_at}",
+            "report_path": str(path),
+            "report_file": path.name,
+            "applied_at": applied_at,
+        }
 
     def _serialize_node_metadata(self, node: Any) -> Dict[str, Any]:
         """Serialize node metadata in a consistent shape."""
@@ -1031,7 +1071,10 @@ class KarateGraphAnalyzerTool:
 
             report_data = self._load_json_file(request.report_path)
 
-            analyzer.apply_execution_report(report_data)
+            analyzer.apply_execution_report(
+                report_data,
+                run_context=self._build_report_run_context(request.report_path),
+            )
 
             self._save_graph_state(project_name, analyzer.graph)
 
@@ -1573,8 +1616,8 @@ class KarateGraphAnalyzerTool:
                     "details": {
                         "solution": item.get("solution"),
                         "error_pattern": item.get("error_pattern"),
-                        "times_used": item.get("times_used"),
-                        "last_used": item.get("last_used"),
+                        "times_used": item.get("success_count", item.get("times_used")),
+                        "last_used": item.get("timestamp", item.get("last_used")),
                     },
                 }
             )
@@ -1604,6 +1647,101 @@ class KarateGraphAnalyzerTool:
             "smart_suggestion_available": bool(smart and not smart.get("error")),
             "historical_suggestions_available": len(historical_suggestions),
         }
+
+    def get_failure_history(self, project_name: str, node_id: str) -> Dict[str, Any]:
+        """Return execution history and fingerprint trend for one node."""
+        try:
+            request = FailureHistoryRequest(project_name=project_name, node_id=node_id)
+            graph_error = self._require_graph(request.project_name)
+            if graph_error:
+                return graph_error
+
+            graph = self.graphs[request.project_name]
+            node = graph.nodes.get(request.node_id)
+            if not node:
+                return self._error_response(
+                    4001, "QUERY_ERROR", f"Node '{request.node_id}' not found"
+                )
+
+            return {
+                "success": True,
+                "project_name": request.project_name,
+                "node_id": request.node_id,
+                "node": self.failure_context_service.build_node_payload(node),
+                "failure": self.failure_context_service.build_failure_payload(node),
+                "history": self.failure_context_service.build_history_payload(node),
+            }
+        except Exception as e:
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def get_failure_debug_context(
+        self,
+        project_name: str,
+        node_id: str,
+        error_message: Optional[str] = None,
+        radius: int = 2,
+        max_historical: int = 3,
+    ) -> Dict[str, Any]:
+        """Build an AI-ready context pack for debugging one failure."""
+        try:
+            request = FailureDebugContextRequest(
+                project_name=project_name,
+                node_id=node_id,
+                error_message=error_message,
+                radius=radius,
+                max_historical=max_historical,
+            )
+
+            graph_error = self._require_graph(request.project_name)
+            if graph_error:
+                return graph_error
+            analyzer_error = self._require_analyzer(request.project_name)
+            if analyzer_error:
+                return analyzer_error
+
+            graph = self.graphs[request.project_name]
+            analyzer = self.analyzers[request.project_name]
+            if request.node_id not in graph.nodes:
+                return self._error_response(
+                    4001, "QUERY_ERROR", f"Node '{request.node_id}' not found"
+                )
+
+            context = self.failure_context_service.build_debug_context(
+                graph,
+                analyzer,
+                request.node_id,
+                request.error_message,
+                request.radius,
+            )
+
+            resolved_error = context["failure"].get("error_message") or request.error_message or ""
+            fix_guidance = (
+                self.auto_fix_hint_pack(
+                    request.project_name,
+                    request.node_id,
+                    resolved_error,
+                    request.max_historical,
+                )
+                if resolved_error
+                else {
+                    "success": True,
+                    "preset": "auto-fix-hint-pack",
+                    "checklist": [],
+                    "count": 0,
+                    "message": "No error message available for fix hint generation.",
+                }
+            )
+
+            return {
+                "success": True,
+                "tool": "get_failure_debug_context",
+                "project_name": request.project_name,
+                "node_id": request.node_id,
+                **context,
+                "fix_guidance": fix_guidance,
+            }
+        except Exception as e:
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def get_subgraph(self, node_id: str, radius: int = 2) -> Dict[str, Any]:
         try:
