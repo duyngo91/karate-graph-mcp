@@ -1365,6 +1365,125 @@ class KarateGraphAnalyzerTool:
             "total_available": len(flaky_items),
         }
 
+    def prioritize_fix_queue(self, project_name: str, limit: int = 10) -> Dict[str, Any]:
+        """Preset: rank components to fix first by impact + risk."""
+        request = QueryPresetRequest(project_name=project_name, limit=limit)
+
+        hotspots_result = self.get_failure_hotspots(request.project_name)
+        if not hotspots_result.get("success"):
+            return hotspots_result
+
+        graph_error = self._require_graph(request.project_name)
+        if graph_error:
+            return graph_error
+
+        graph = self.graphs[request.project_name]
+        analyzer = self.analyzers.get(request.project_name)
+
+        impacted_by_node: Dict[str, Dict[str, Any]] = {}
+        for hotspot in hotspots_result.get("hotspots", []):
+            hotspot_node_id = hotspot.get("node_id")
+            if hotspot_node_id:
+                impacted_by_node[hotspot_node_id] = {
+                    "score": hotspot.get("failure_impact_score", 0),
+                    "failure_rate": hotspot.get("failure_percentage", 0),
+                    "hotspot_name": hotspot.get("name"),
+                    "hotspot_type": hotspot.get("type"),
+                }
+            for tc in hotspot.get("affected_failed_test_cases", []):
+                tc_id = tc.get("node_id") or tc.get("id")
+                if not tc_id:
+                    continue
+                existing = impacted_by_node.get(tc_id)
+                candidate = {
+                    "score": hotspot.get("failure_impact_score", 0),
+                    "failure_rate": hotspot.get("failure_percentage", 0),
+                    "hotspot_name": hotspot.get("name"),
+                    "hotspot_type": hotspot.get("type"),
+                }
+                if not existing or candidate["score"] > existing["score"]:
+                    impacted_by_node[tc_id] = candidate
+
+        ranked: List[Dict[str, Any]] = []
+        for node_id, hotspot_info in impacted_by_node.items():
+            node = graph.nodes.get(node_id)
+            if not node:
+                continue
+
+            history = self.failure_context_service.build_history_payload(node)
+            fail_count = history.get("fail_count", 0)
+            total_runs = history.get("total_runs", 0)
+            failure_rate = history.get("failure_rate", 0.0)
+            flaky_score = history.get("flaky_score", 0.0)
+            impact_score = hotspot_info.get("score", 0)
+
+            # Weighted score favoring blast radius first, then severity, then instability.
+            priority_score = (
+                (impact_score * 10.0)
+                + (failure_rate * 100.0)
+                + (flaky_score * 20.0)
+            )
+
+            reason_parts = []
+            reason_parts.append(f"impact={impact_score}")
+            reason_parts.append(f"failure_rate={round(failure_rate * 100, 1)}%")
+            if total_runs > 1:
+                reason_parts.append(f"runs={total_runs}")
+            if flaky_score > 0:
+                reason_parts.append(f"flaky={round(flaky_score, 3)}")
+
+            top_fp = (history.get("failure_fingerprints") or [])
+            top_fingerprint = top_fp[0]["fingerprint"] if top_fp else None
+
+            ranked.append(
+                {
+                    "node_id": node.id,
+                    "name": node.name,
+                    "type": node.type.value,
+                    "status": node.execution_status,
+                    "file_path": node.metadata.file_path,
+                    "line_number": node.metadata.line_number,
+                    "priority_score": round(priority_score, 3),
+                    "impact_score": impact_score,
+                    "failure_rate": failure_rate,
+                    "fail_count": fail_count,
+                    "total_runs": total_runs,
+                    "flaky_score": flaky_score,
+                    "failure_category": node.metadata.additional_data.get("failure_category"),
+                    "top_fingerprint": top_fingerprint,
+                    "linked_hotspot": {
+                        "name": hotspot_info.get("hotspot_name"),
+                        "type": hotspot_info.get("hotspot_type"),
+                        "failure_rate": hotspot_info.get("failure_rate"),
+                    },
+                    "why_now": ", ".join(reason_parts),
+                }
+            )
+
+        ranked.sort(
+            key=lambda item: (
+                item["priority_score"],
+                item["impact_score"],
+                item["failure_rate"],
+                item["fail_count"],
+            ),
+            reverse=True,
+        )
+
+        return {
+            "success": True,
+            "preset": "prioritize-fix-queue",
+            "project_name": request.project_name,
+            "limit": request.limit,
+            "results": ranked[: request.limit],
+            "count": min(len(ranked), request.limit),
+            "total_available": len(ranked),
+            "scoring": {
+                "formula": "priority = impact*10 + failure_rate*100 + flaky_score*20",
+                "weights": {"impact": 10, "failure_rate": 100, "flaky_score": 20},
+            },
+        }
+
     def get_project_health(self, project_name: str) -> Dict[str, Any]:
         analyzer_error = self._require_analyzer(project_name)
         if analyzer_error:
