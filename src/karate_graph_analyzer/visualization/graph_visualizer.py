@@ -32,6 +32,8 @@ class GraphVisualizer:
         NodeType.DATABASE: "#F44336",     # Red
         NodeType.DATA: "#795548",         # Brown (Data files)
         NodeType.LOCATOR: "#9E9E9E",      # Grey
+        NodeType.JAVASCRIPT: "#F7DF1E",   # JavaScript
+        NodeType.JS_FUNCTION: "#F0B429",  # JavaScript function
     }
     NODE_SHAPES = {
         NodeType.TEST_CASE: "star",
@@ -47,6 +49,8 @@ class GraphVisualizer:
         NodeType.LOCATOR: "dot",
         NodeType.FOLDER: "hexagon",
         NodeType.FILE: "box",
+        NodeType.JAVASCRIPT: "box",
+        NodeType.JS_FUNCTION: "dot",
     }
 
     # --- COMPONENT_REGISTRY (Flow-based mapping) ---
@@ -72,8 +76,12 @@ class GraphVisualizer:
         
         # 5. DATA Flow (Boxes)
         "DATA":         {"shape": "box",      "color": "#00bcd4", "size": 20, "eco": "Data Flow"},
+
+        # 6. Script Flow (Karate JS helpers/config)
+        "JAVASCRIPT":   {"shape": "box",      "color": "#f7df1e", "size": 24, "eco": "Script Flow"},
+        "JS_FUNCTION":  {"shape": "dot",      "color": "#f0b429", "size": 16, "eco": "Script Flow"},
         
-        # 6. Structural Flow (Hierarchy)
+        # 7. Structural Flow (Hierarchy)
         "FOLDER":       {"shape": "hexagon",  "color": "#00897b", "size": 35, "eco": "Structural"},
         "FILE":         {"shape": "box",      "color": "#78909c", "size": 25, "eco": "Structural"},
         

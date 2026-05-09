@@ -42,6 +42,13 @@ class HealerExpert:
             if java_suggestion:
                 analysis.update(java_suggestion)
 
+        elif node.type in [NodeType.JAVASCRIPT, NodeType.JS_FUNCTION]:
+            analysis.update({
+                "root_cause": "JavaScript helper/config failure",
+                "suggestion": "Inspect the JS source snippet, exported function name, parameters passed from Karate, and any karate.read/callSingle dependencies.",
+                "confidence": 0.6,
+            })
+
         # 2. Handle API-specific failures
         elif node.type == NodeType.API:
             api_suggestion = self._analyze_api_failure(node, error_message)

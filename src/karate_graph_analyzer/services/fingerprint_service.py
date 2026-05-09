@@ -17,7 +17,7 @@ class FingerprintService:
         self, project: Project, include_structural_nodes: bool
     ) -> str:
         file_entries = []
-        for file_path in self.collect_feature_files(project):
+        for file_path in self.collect_project_files(project):
             path_obj = Path(file_path)
             try:
                 stat = path_obj.stat()
@@ -43,7 +43,8 @@ class FingerprintService:
         encoded = json.dumps(fingerprint_source, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-    def collect_feature_files(self, project: Project) -> list[str]:
+    def collect_project_files(self, project: Project) -> list[str]:
+        """Collect graph inputs that should invalidate the cached project graph."""
         feature_files: list[str] = []
         for pattern in project.feature_file_patterns:
             full_pattern = str(Path(project.root_path) / pattern)
@@ -58,4 +59,16 @@ class FingerprintService:
 
             feature_files.extend(filtered_matches)
 
+        js_pattern = str(Path(project.root_path) / "**" / "*.js")
+        js_files = glob.glob(js_pattern, recursive=True)
+        exclude_dirs = {"target", "build", "node_modules", ".git", ".karate_cache"}
+        for match in js_files:
+            path_parts = [part.lower() for part in Path(match).parts]
+            if not any(excluded in path_parts for excluded in exclude_dirs):
+                feature_files.append(match)
+
         return sorted(set(feature_files))
+
+    def collect_feature_files(self, project: Project) -> list[str]:
+        """Backward-compatible name for callers that need graph input files."""
+        return self.collect_project_files(project)

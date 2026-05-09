@@ -207,6 +207,72 @@ def search_test_case(
     return analyzer_tool.search_test_case(project_name, jira_tag, name_pattern)
 
 @mcp.tool()
+def search_java_usage(
+    project_name: str,
+    query: str,
+    include_methods: bool = True,
+) -> Dict[str, Any]:
+    """
+    Search Java class/method usage and the test cases that call them.
+
+    Args:
+        project_name: Name of the analyzed project.
+        query: Java class or method keyword/pattern.
+        include_methods: Include JAVA_METHOD nodes in results.
+    """
+    return analyzer_tool.search_java_usage(project_name, query, include_methods)
+
+@mcp.tool()
+def search_js_usage(
+    project_name: str,
+    query: str = "",
+    include_functions: bool = True,
+) -> Dict[str, Any]:
+    """
+    Search JavaScript file/function usage and the test cases that call them.
+
+    Args:
+        project_name: Name of the analyzed project.
+        query: JavaScript file/function keyword or path.
+        include_functions: Include JS_FUNCTION nodes in results.
+    """
+    return analyzer_tool.search_js_usage(project_name, query, include_functions)
+
+@mcp.tool()
+def search_error_pattern(
+    project_name: str,
+    pattern: str,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Search failed nodes by error text, fingerprint, or failed-step pattern.
+
+    Args:
+        project_name: Name of the analyzed project.
+        pattern: Error/fingerprint text pattern.
+        limit: Maximum number of matched nodes to return.
+    """
+    return analyzer_tool.search_error_pattern(project_name, pattern, limit)
+
+@mcp.tool()
+def search_reusable_function(
+    project_name: str,
+    query: str,
+    language: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Search Java/JavaScript source for reusable helper functions before adding new code.
+
+    Args:
+        project_name: Name of the analyzed project.
+        query: Function intent or keyword, e.g. "random string" or "uuid".
+        language: Optional language filter: "java", "javascript", "js", or "all".
+        limit: Maximum number of candidates to return.
+    """
+    return analyzer_tool.search_reusable_function(project_name, query, language, limit)
+
+@mcp.tool()
 def get_project_health(project_name: str) -> Dict[str, Any]:
     """
     Get an architectural health report (cycles, orphans, complexity).
@@ -261,6 +327,17 @@ def common_usage_map(project_name: str, limit: int = 50) -> Dict[str, Any]:
     return analyzer_tool.common_usage_map(project_name, limit)
 
 @mcp.tool()
+def javascript_structure_map(project_name: str, limit: int = 100) -> Dict[str, Any]:
+    """
+    Return JavaScript files, exported/helper functions, dependencies, and test usage.
+
+    Args:
+        project_name: Name of the analyzed project.
+        limit: Maximum number of JavaScript files to return.
+    """
+    return analyzer_tool.javascript_structure_map(project_name, limit)
+
+@mcp.tool()
 def similar_common_components(project_name: str, limit: int = 50) -> Dict[str, Any]:
     """
     Find common/scenario/action components that share the same dependency shape.
@@ -270,6 +347,38 @@ def similar_common_components(project_name: str, limit: int = 50) -> Dict[str, A
         limit: Maximum number of duplicate-like groups to return.
     """
     return analyzer_tool.similar_common_components(project_name, limit)
+
+@mcp.tool()
+def change_impact_preview(
+    project_name: str,
+    changed_paths: List[str],
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Preset query: preview impacted test cases from changed files/components.
+
+    Args:
+        project_name: Name of the analyzed project.
+        changed_paths: Changed file paths or path keywords.
+        limit: Maximum impacted test cases to return.
+    """
+    return analyzer_tool.change_impact_preview(project_name, changed_paths, limit)
+
+@mcp.tool()
+def test_selection_suggestion(
+    project_name: str,
+    changed_paths: List[str],
+    limit: int = 30,
+) -> Dict[str, Any]:
+    """
+    Preset query: suggest smallest high-signal test subset to rerun after change.
+
+    Args:
+        project_name: Name of the analyzed project.
+        changed_paths: Changed file paths or path keywords.
+        limit: Maximum suggested test cases to return.
+    """
+    return analyzer_tool.test_selection_suggestion(project_name, changed_paths, limit)
 
 @mcp.tool()
 def flaky_risk(project_name: str, limit: int = 10) -> Dict[str, Any]:

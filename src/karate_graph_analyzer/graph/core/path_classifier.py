@@ -74,6 +74,8 @@ class PathClassifier:
             "SCENARIO": FlowType.TEST,
             "WORKFLOW": FlowType.TEST,
             "DATA": FlowType.DATA,
+            "JAVASCRIPT": FlowType.INFRASTRUCTURE,
+            "JS_FUNCTION": FlowType.INFRASTRUCTURE,
         }
         return mapping.get(type_str, FlowType.UNKNOWN)
 

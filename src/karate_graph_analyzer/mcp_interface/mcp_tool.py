@@ -9,7 +9,7 @@ import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import networkx as nx
 
@@ -25,6 +25,9 @@ from karate_graph_analyzer.services.failure_context_service import FailureContex
 from karate_graph_analyzer.services.project_lifecycle_service import ProjectLifecycleService
 from karate_graph_analyzer.services.query_service import QueryService
 from karate_graph_analyzer.services.report_service import ReportService
+from karate_graph_analyzer.services.reusable_function_search_service import (
+    ReusableFunctionSearchService,
+)
 from karate_graph_analyzer.services.runtime_graph_store import RuntimeGraphStore
 from karate_graph_analyzer.models import (
     DependencyGraph,
@@ -231,6 +234,26 @@ class FailureHistoryRequest(BaseModel):
 
     project_name: str = Field(..., min_length=1, description="Name of the analyzed project")
     node_id: str = Field(..., min_length=1, description="Node id")
+
+
+class ChangeImpactPreviewRequest(BaseModel):
+    """Request model for change impact preview."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the analyzed project")
+    changed_paths: List[str] = Field(
+        ..., min_length=1, description="List of changed file paths or path keywords"
+    )
+    limit: int = Field(default=50, ge=1, le=500, description="Max impacted test cases")
+
+
+class TestSelectionSuggestionRequest(BaseModel):
+    """Request model for suggested rerun test selection."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the analyzed project")
+    changed_paths: List[str] = Field(
+        ..., min_length=1, description="List of changed file paths or path keywords"
+    )
+    limit: int = Field(default=30, ge=1, le=500, description="Max suggested test cases")
 
 class KarateGraphAnalyzerTool:
     """MCP protocol interface for graph analyzer."""
@@ -1247,6 +1270,57 @@ class KarateGraphAnalyzerTool:
                 project_name, jira_tag, name_pattern, uses_api, uses_workflow
             )
         )
+
+    def search_java_usage(
+        self,
+        project_name: str,
+        query: str,
+        include_methods: bool = True,
+    ) -> Dict[str, Any]:
+        return self._with_search_tools(
+            lambda tools: tools.search_java_usage(project_name, query, include_methods)
+        )
+
+    def search_js_usage(
+        self,
+        project_name: str,
+        query: str = "",
+        include_functions: bool = True,
+    ) -> Dict[str, Any]:
+        return self._with_search_tools(
+            lambda tools: tools.search_js_usage(project_name, query, include_functions)
+        )
+
+    def search_error_pattern(
+        self,
+        project_name: str,
+        pattern: str,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        return self._with_search_tools(
+            lambda tools: tools.search_error_pattern(project_name, pattern, limit)
+        )
+
+    def search_reusable_function(
+        self,
+        project_name: str,
+        query: str,
+        language: Optional[str] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        graph_error = self._require_graph(project_name)
+        if graph_error:
+            return graph_error
+
+        project = self.registry.get(project_name)
+        project_root = project.root_path if project else None
+        graph = self.graphs[project_name]
+        service = ReusableFunctionSearchService()
+
+        def _action(query_api: Any) -> Dict[str, Any]:
+            return service.search(project_root, graph, query_api, query, language, limit)
+
+        return self._with_query_api(project_name, _action)
     
     def get_usage_stats(self, project_name: str, node_id: str) -> Dict[str, Any]:
         return self._with_search_tools(
@@ -1364,6 +1438,169 @@ class KarateGraphAnalyzerTool:
             "count": min(len(flaky_items), request.limit),
             "total_available": len(flaky_items),
         }
+
+    def _match_changed_nodes(
+        self,
+        graph: DependencyGraph,
+        changed_paths: List[str],
+    ) -> List[Any]:
+        """Resolve changed path patterns to graph nodes."""
+        patterns = [p.strip().replace("\\", "/").lower() for p in changed_paths if p and p.strip()]
+        if not patterns:
+            return []
+
+        matched = []
+        seen: Set[str] = set()
+        for node in graph.nodes.values():
+            file_path = (node.metadata.file_path or "").replace("\\", "/").lower()
+            name = (node.name or "").replace("\\", "/").lower()
+            haystacks = [file_path, name]
+            if any(pattern in h for pattern in patterns for h in haystacks if h):
+                if node.id not in seen:
+                    matched.append(node)
+                    seen.add(node.id)
+        return matched
+
+    def change_impact_preview(
+        self,
+        project_name: str,
+        changed_paths: List[str],
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Preview impacted test cases from changed files/components."""
+        try:
+            request = ChangeImpactPreviewRequest(
+                project_name=project_name,
+                changed_paths=changed_paths,
+                limit=limit,
+            )
+
+            graph_error = self._require_graph(request.project_name)
+            if graph_error:
+                return graph_error
+
+            analyzer_error = self._require_analyzer(request.project_name)
+            if analyzer_error:
+                return analyzer_error
+
+            graph = self.graphs[request.project_name]
+            analyzer = self.analyzers[request.project_name]
+            matched_nodes = self._match_changed_nodes(graph, request.changed_paths)
+
+            impacted_map: Dict[str, Dict[str, Any]] = {}
+            for changed in matched_nodes:
+                impact = analyzer.impact_analysis(changed.id)
+                for affected in impact.affected_test_cases:
+                    existing = impacted_map.get(affected.node_id)
+                    candidate = {
+                        "node_id": affected.node_id,
+                        "name": affected.name,
+                        "jira_tags": affected.jira_tags,
+                        "min_depth": affected.depth,
+                        "change_triggers": [changed.name],
+                        "paths": [affected.dependency_path],
+                    }
+                    if not existing:
+                        impacted_map[affected.node_id] = candidate
+                        continue
+                    existing["min_depth"] = min(existing.get("min_depth", affected.depth), affected.depth)
+                    if changed.name not in existing["change_triggers"]:
+                        existing["change_triggers"].append(changed.name)
+                    if affected.dependency_path not in existing["paths"]:
+                        existing["paths"].append(affected.dependency_path)
+
+            impacted = list(impacted_map.values())
+            impacted.sort(
+                key=lambda item: (
+                    -len(item.get("change_triggers", [])),
+                    item.get("min_depth", 9999),
+                    item.get("name", ""),
+                )
+            )
+
+            return {
+                "success": True,
+                "preset": "change-impact-preview",
+                "project_name": request.project_name,
+                "changed_paths": request.changed_paths,
+                "matched_changed_nodes": [
+                    {
+                        "id": node.id,
+                        "type": node.type.value,
+                        "name": node.name,
+                        "file_path": node.metadata.file_path,
+                    }
+                    for node in matched_nodes
+                ],
+                "impacted_test_cases": impacted[: request.limit],
+                "count": min(len(impacted), request.limit),
+                "total_available": len(impacted),
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to build change impact preview: {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def test_selection_suggestion(
+        self,
+        project_name: str,
+        changed_paths: List[str],
+        limit: int = 30,
+    ) -> Dict[str, Any]:
+        """Suggest minimal high-signal tests to rerun after changes."""
+        try:
+            request = TestSelectionSuggestionRequest(
+                project_name=project_name,
+                changed_paths=changed_paths,
+                limit=limit,
+            )
+
+            preview = self.change_impact_preview(
+                request.project_name,
+                request.changed_paths,
+                limit=500,
+            )
+            if not preview.get("success"):
+                return preview
+
+            impacted = preview.get("impacted_test_cases", [])
+            selected = []
+            for item in impacted:
+                priority_score = (len(item.get("change_triggers", [])) * 10) - item.get("min_depth", 0)
+                selected.append(
+                    {
+                        "node_id": item.get("node_id"),
+                        "name": item.get("name"),
+                        "jira_tags": item.get("jira_tags", []),
+                        "priority_score": priority_score,
+                        "reason": f"triggered_by={len(item.get('change_triggers', []))}, min_depth={item.get('min_depth')}",
+                        "change_triggers": item.get("change_triggers", []),
+                    }
+                )
+
+            selected.sort(
+                key=lambda x: (
+                    x.get("priority_score", 0),
+                    len(x.get("change_triggers", [])),
+                    x.get("name", ""),
+                ),
+                reverse=True,
+            )
+
+            return {
+                "success": True,
+                "preset": "test-selection-suggestion",
+                "project_name": request.project_name,
+                "changed_paths": request.changed_paths,
+                "selection_strategy": "priority = trigger_count*10 - min_depth",
+                "suggested_tests": selected[: request.limit],
+                "count": min(len(selected), request.limit),
+                "total_available": len(selected),
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to suggest test selection: {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def prioritize_fix_queue(self, project_name: str, limit: int = 10) -> Dict[str, Any]:
         """Preset: rank components to fix first by impact + risk."""
@@ -1527,6 +1764,8 @@ class KarateGraphAnalyzerTool:
             NodeType.API,
             NodeType.DATA,
             NodeType.DATABASE,
+            NodeType.JAVASCRIPT,
+            NodeType.JS_FUNCTION,
         }
 
         results: List[Dict[str, Any]] = []
@@ -1566,6 +1805,73 @@ class KarateGraphAnalyzerTool:
         return {
             "success": True,
             "preset": "common-usage-map",
+            "project_name": request.project_name,
+            "limit": request.limit,
+            "results": results[: request.limit],
+            "count": min(len(results), request.limit),
+            "total_available": len(results),
+        }
+
+    def javascript_structure_map(self, project_name: str, limit: int = 100) -> Dict[str, Any]:
+        """Return JavaScript files, exported functions, dependencies, and test usage."""
+        request = QueryPresetRequest(project_name=project_name, limit=limit)
+        graph_error = self._require_graph(request.project_name)
+        if graph_error:
+            return graph_error
+
+        from karate_graph_analyzer.graph.graph_query import GraphQuery
+
+        graph = self.graphs[request.project_name]
+        query = GraphQuery(graph)
+        results: List[Dict[str, Any]] = []
+
+        for node in graph.nodes.values():
+            if node.type != NodeType.JAVASCRIPT:
+                continue
+
+            stats = query.get_usage_stats(node)
+            functions = []
+            dependencies = []
+            for edge in graph.edges.values():
+                if edge.from_node != node.id:
+                    continue
+                target = graph.nodes.get(edge.to_node)
+                if not target:
+                    continue
+                item = {
+                    "id": target.id,
+                    "type": target.type.value,
+                    "name": target.name,
+                    "file_path": target.metadata.file_path,
+                    "line_number": target.metadata.line_number,
+                }
+                if target.type == NodeType.JS_FUNCTION:
+                    item["function_kind"] = target.metadata.additional_data.get("function_kind")
+                    item["usage_count"] = query.get_usage_stats(target).get("usage_count", 0)
+                    functions.append(item)
+                else:
+                    item["dependency_type"] = edge.type.value
+                    dependencies.append(item)
+
+            results.append(
+                {
+                    "id": node.id,
+                    "type": node.type.value,
+                    "name": node.name,
+                    "file_path": node.metadata.file_path,
+                    "line_number": node.metadata.line_number,
+                    "default_function_node_id": node.metadata.additional_data.get("default_function_node_id"),
+                    "usage_count": stats.get("usage_count", 0),
+                    "used_by_test_cases": stats.get("used_by_test_cases", []),
+                    "functions": sorted(functions, key=lambda item: (item.get("line_number") or 0, item["name"])),
+                    "dependencies": sorted(dependencies, key=lambda item: (item["type"], item["name"])),
+                }
+            )
+
+        results.sort(key=lambda item: (item["usage_count"], item["name"]), reverse=True)
+        return {
+            "success": True,
+            "preset": "javascript-structure-map",
             "project_name": request.project_name,
             "limit": request.limit,
             "results": results[: request.limit],

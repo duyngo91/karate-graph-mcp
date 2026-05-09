@@ -48,7 +48,9 @@ class AnalysisExpert:
             NodeType.DATABASE,
             NodeType.LOCATOR,
             NodeType.JAVA_CLASS,
-            NodeType.JAVA_METHOD
+            NodeType.JAVA_METHOD,
+            NodeType.JAVASCRIPT,
+            NodeType.JS_FUNCTION
         }
         
         for node_id, node in self.graph.nodes.items():

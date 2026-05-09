@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class GraphCacheService:
     """Persist and load graph snapshots with freshness checks."""
 
-    CACHE_VERSION = 2
+    CACHE_VERSION = 3
 
     def __init__(self, storage_dir: Path) -> None:
         self.storage_dir = storage_dir
@@ -42,10 +42,10 @@ class GraphCacheService:
 
         # Backward compatibility: old cache stored raw graph JSON only.
         if not isinstance(payload, dict) or "graph" not in payload:
-            try:
-                return self.exporter.import_graph(raw, project.name)
-            except Exception:
-                return None
+            return None
+
+        if payload.get("cache_version") != self.CACHE_VERSION:
+            return None
 
         expected_fingerprint = self.fingerprint_service.compute_project_fingerprint(
             project,

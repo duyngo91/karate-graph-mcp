@@ -20,7 +20,7 @@ class CallReadExtractor(IDependencyExtractor):
 
     def __init__(self, config: ParserConfig) -> None:
         self.config = config
-        prefix_pattern = r"(?:(?:(?:call|callonce)\s+)?read|karate\.call(?:Single)?)\s*\(\s*(?:(?:true|false)\s*,\s*)?"
+        prefix_pattern = r"(?:(?:(?:call|callonce)\s+)?read|karate\.read|karate\.call(?:Single)?)\s*\(\s*(?:(?:true|false)\s*,\s*)?"
         
         self._quoted_pattern = re.compile(
             prefix_pattern + r"['\"]([^'\"]+)['\"](?:\s*,\s*(.+?))?\s*\)",
@@ -116,6 +116,8 @@ class CallReadExtractor(IDependencyExtractor):
         # 1. Detect Data files
         if any(path_lower.endswith(ext) for ext in ['.json', '.csv', '.yaml', '.yml']):
             return DependencyType.DATA
+        if path_lower.endswith(".js"):
+            return DependencyType.JAVASCRIPT
             
         # 2. Detect by directory
         path_parts = [p.lower() for p in path.replace("\\", "/").split("/")[:-1]]

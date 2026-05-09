@@ -8,7 +8,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from karate_graph_analyzer.graph.graph_query import GraphQuery
-from karate_graph_analyzer.models import DependencyGraph, Node
+from karate_graph_analyzer.models import DependencyGraph, Node, NodeType
 from karate_graph_analyzer.utils.source_snippet import get_source_snippet
 
 logger = logging.getLogger(__name__)
@@ -389,6 +389,148 @@ class SearchTools:
             }
 
         return self._run_project_query(project_name, "find_unused_components", query)
+
+    def search_java_usage(
+        self,
+        project_name: str,
+        query: str,
+        include_methods: bool = True,
+    ) -> Dict[str, Any]:
+        """Search Java class/method usage and their calling test cases."""
+        term = (query or "").strip().lower()
+
+        def _matches(node: Node) -> bool:
+            haystacks = [
+                node.name or "",
+                str(node.metadata.additional_data.get("class_path", "")),
+                str(node.metadata.additional_data.get("method_name", "")),
+                str(node.metadata.file_path or ""),
+            ]
+            if not term:
+                return True
+            return any(term in text.lower() for text in haystacks)
+
+        def query_fn(query_api: GraphQuery) -> Dict[str, Any]:
+            target_types = {NodeType.JAVA_CLASS}
+            if include_methods:
+                target_types.add(NodeType.JAVA_METHOD)
+
+            nodes = [
+                node
+                for node in query_api.graph.nodes.values()
+                if node.type in target_types and _matches(node)
+            ]
+            results = [self._node_to_dict(node, query_api) for node in nodes]
+            results.sort(key=lambda item: (item.get("usage_count", 0), item.get("name", "")), reverse=True)
+            return self._results_response(results)
+
+        return self._run_project_query(project_name, "search_java_usage", query_fn)
+
+    def search_js_usage(
+        self,
+        project_name: str,
+        query: str = "",
+        include_functions: bool = True,
+    ) -> Dict[str, Any]:
+        """Search JavaScript file/function usage and their calling test cases."""
+        term = (query or "").strip().lower()
+
+        def _matches(node: Node) -> bool:
+            haystacks = [
+                node.name or "",
+                str(node.metadata.additional_data.get("function_name", "")),
+                str(node.metadata.additional_data.get("script_path", "")),
+                str(node.metadata.file_path or ""),
+            ]
+            if not term:
+                return True
+            return any(term in text.lower() for text in haystacks)
+
+        def query_fn(query_api: GraphQuery) -> Dict[str, Any]:
+            target_types = {NodeType.JAVASCRIPT}
+            if include_functions:
+                target_types.add(NodeType.JS_FUNCTION)
+
+            nodes = [
+                node
+                for node in query_api.graph.nodes.values()
+                if node.type in target_types and _matches(node)
+            ]
+            results = [self._node_to_dict(node, query_api) for node in nodes]
+            results.sort(key=lambda item: (item.get("usage_count", 0), item.get("name", "")), reverse=True)
+            return self._results_response(results)
+
+        return self._run_project_query(project_name, "search_js_usage", query_fn)
+
+    def search_error_pattern(
+        self,
+        project_name: str,
+        pattern: str,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Search execution failures by error/fingerprint/failed-step pattern."""
+        term = (pattern or "").strip().lower()
+        if not term:
+            return self._error_response("7005", "Pattern must not be empty")
+
+        def query_fn(query_api: GraphQuery) -> Dict[str, Any]:
+            matches: List[Dict[str, Any]] = []
+            for node in query_api.graph.nodes.values():
+                details = node.execution_details or {}
+                additional = node.metadata.additional_data or {}
+                display = additional.get("display_data", {}).get("details", {})
+
+                error = (
+                    details.get("error")
+                    or additional.get("last_error")
+                    or display.get("last_error")
+                    or ""
+                )
+                failed_step = details.get("failed_step") or ""
+                fingerprint = (
+                    details.get("failure_fingerprint")
+                    or additional.get("failure_fingerprint")
+                    or ""
+                )
+
+                searchable = " | ".join(
+                    [
+                        str(node.name or ""),
+                        str(node.type.value),
+                        str(error),
+                        str(failed_step),
+                        str(fingerprint),
+                    ]
+                ).lower()
+                if term not in searchable:
+                    continue
+
+                item = self._node_to_dict(node, query_api)
+                item.update(
+                    {
+                        "error_message": error,
+                        "failed_step": failed_step,
+                        "failure_fingerprint": fingerprint,
+                        "execution_status": node.execution_status,
+                    }
+                )
+                matches.append(item)
+
+            matches.sort(
+                key=lambda item: (
+                    0 if item.get("execution_status") == "FAILED" else 1,
+                    -(item.get("usage_count", 0)),
+                    item.get("name", ""),
+                )
+            )
+            return {
+                "success": True,
+                "results": matches[:limit],
+                "count": min(len(matches), limit),
+                "total_available": len(matches),
+            }
+
+        return self._run_project_query(project_name, "search_error_pattern", query_fn)
     
     def _node_to_dict(self, node: Node, query_api: GraphQuery) -> Dict[str, Any]:
         """Convert node to dictionary with usage info.

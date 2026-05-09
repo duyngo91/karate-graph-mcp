@@ -90,6 +90,7 @@ class DependencyLinker:
             DependencyType.COMMON: NodeType.COMMON,
             DependencyType.DATA: NodeType.DATA,
             DependencyType.JAVA: NodeType.JAVA_CLASS,
+            DependencyType.JAVASCRIPT: NodeType.JAVASCRIPT,
         }
 
         if dep.type == DependencyType.SETUP:
@@ -105,7 +106,14 @@ class DependencyLinker:
         # Prefer physical_path if already resolved by extractor (prevents logical vs physical mismatch)
         abs_path = dep.parameters.get("physical_path") or dep.target
         
-        if context and dep.type in [DependencyType.WORKFLOW, DependencyType.PAGE, DependencyType.LOCATOR, DependencyType.COMMON]:
+        path_dependency_types = [
+            DependencyType.WORKFLOW,
+            DependencyType.PAGE,
+            DependencyType.LOCATOR,
+            DependencyType.COMMON,
+            DependencyType.JAVASCRIPT,
+        ]
+        if context and dep.type in path_dependency_types:
             if not dep.parameters.get("physical_path"):
                 abs_path = PathResolver.resolve(dep.target, context)
             
@@ -120,7 +128,7 @@ class DependencyLinker:
             return None
             
         # Determine file_path for metadata
-        file_path = abs_path if dep.type in [DependencyType.WORKFLOW, DependencyType.PAGE, DependencyType.LOCATOR, DependencyType.COMMON] else dep.parameters.get("file_path")
+        file_path = abs_path if dep.type in path_dependency_types else dep.parameters.get("file_path")
             
         # Resolve flow and category
         category = ComponentCategory.UNKNOWN
@@ -199,6 +207,7 @@ class DependencyLinker:
             NodeType.DATABASE: self.nx_builder.add_database_node,
             NodeType.DATA: self.nx_builder.add_data_node,
             NodeType.JAVA_CLASS: self.nx_builder.add_java_class_node,
+            NodeType.JAVASCRIPT: self.nx_builder.add_javascript_node,
         }
         return mapping.get(node_type)
 
