@@ -449,6 +449,18 @@ class KarateGraphAnalyzerTool:
             return search_error
         return action(self.search_tools)
 
+    def _with_query_api(self, project_name: str, action: Any) -> Dict[str, Any]:
+        """Execute a low-level GraphQuery action with consistent project lookup."""
+        def _action(tools: SearchTools) -> Dict[str, Any]:
+            query_api = tools._get_query_api(project_name)
+            if not query_api:
+                return self._error_response(
+                    3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' not found"
+                )
+            return action(query_api)
+
+        return self._with_search_tools(_action)
+
     def register_project(
         self,
         name: str,
@@ -1149,12 +1161,7 @@ class KarateGraphAnalyzerTool:
         )
     
     def get_api_stats(self, project_name: str, keyword: Optional[str] = None) -> Dict[str, Any]:
-        def _action(tools: SearchTools) -> Dict[str, Any]:
-            query_api = tools._get_query_api(project_name)
-            if not query_api:
-                return self._error_response(
-                    3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' not found"
-                )
+        def _action(query_api: Any) -> Dict[str, Any]:
             stats = query_api.get_api_stats(keyword)
             return {
                 "success": True,
@@ -1165,15 +1172,10 @@ class KarateGraphAnalyzerTool:
                 "apis": stats["results"],
             }
 
-        return self._with_search_tools(_action)
+        return self._with_query_api(project_name, _action)
     
     def get_page_stats(self, project_name: str, domain: Optional[str] = None) -> Dict[str, Any]:
-        def _action(tools: SearchTools) -> Dict[str, Any]:
-            query_api = tools._get_query_api(project_name)
-            if not query_api:
-                return self._error_response(
-                    3003, "PROJECT_MANAGEMENT", f"Project '{project_name}' not found"
-                )
+        def _action(query_api: Any) -> Dict[str, Any]:
             stats = query_api.get_page_stats(domain)
             return {
                 "success": True,
@@ -1184,7 +1186,7 @@ class KarateGraphAnalyzerTool:
                 "pages": stats["results"],
             }
 
-        return self._with_search_tools(_action)
+        return self._with_query_api(project_name, _action)
     
     def search_workflow(self, project_name: str, path: Optional[str] = None, scenario_tag: Optional[str] = None, keyword: Optional[str] = None) -> Dict[str, Any]:
         return self._with_search_tools(

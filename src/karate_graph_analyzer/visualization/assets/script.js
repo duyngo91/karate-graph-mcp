@@ -2,6 +2,10 @@
 
 var isFocused = false;
 var currentTab = 'HOTSPOTS';
+var currentHotspotNodeId = null;
+var hotspotSortKey = 'impact';
+var hotspotSortDir = 'desc';
+var hotspotTypeFilter = 'ALL';
 
 function getStatusTone(status) {
     if (status === 'PASSED') {
@@ -26,13 +30,188 @@ function classifyHotspot(hs) {
     if (lowered === 'DATA' || lowered === 'LOCATOR' || lowered === 'FILE' || lowered === 'FOLDER') {
         return { label: 'Supporting Asset', color: '#455a64', note: 'Used by failed tests, not a direct failure verdict.' };
     }
-    return { label: 'Shared Dependency', color: '#f57c00', note: 'Shared path in failing tests. Investigate with context.' };
+    return { label: 'Shared Dependency', color: '#1565c0', note: 'Shared path in failing tests. Investigate with context.' };
 }
 
-// --- SIDEBAR & TABS ---
+// --- SHARED HELPERS ---
 
-function jumpToNode(nodeId) {
-    focusOnNode(nodeId);
+function escapeHtml(text) {
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function getTerminalStatus(testCaseNodeId) {
+    const node = nodeMetadata[testCaseNodeId];
+    if (!node) return 'UNKNOWN';
+    return node.execution_status || node.additional_data?.display_data?.status || 'UNKNOWN';
+}
+
+function getFailureReason(testCaseNodeId) {
+    const node = nodeMetadata[testCaseNodeId];
+    if (!node) return 'Unknown error';
+    const display = node.additional_data?.display_data || {};
+    const details = node.execution_details || {};
+    return details.error || display.details?.last_error || node.additional_data?.last_error || 'Unknown error';
+}
+
+function getFailedStep(testCaseNodeId) {
+    const node = nodeMetadata[testCaseNodeId];
+    return node?.execution_details?.failed_step || 'N/A';
+}
+
+function focusGraphNode(nodeId) {
+    if (!nodeId || !nodeMetadata[nodeId]) return;
+    network.selectNodes([nodeId]);
+    network.focus(nodeId, { scale: 1.0, animation: { duration: 700 } });
+}
+
+function selectHotspot(nodeId) {
+    currentHotspotNodeId = nodeId;
+    renderDashboard();
+    focusGraphNode(nodeId);
+}
+
+function setHotspotFilter(type) {
+    hotspotTypeFilter = type || 'ALL';
+    renderDashboard();
+}
+
+function setHotspotSort(key) {
+    if (hotspotSortKey === key) {
+        hotspotSortDir = hotspotSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        hotspotSortKey = key;
+        hotspotSortDir = 'desc';
+    }
+    renderDashboard();
+}
+
+function getHotspots() {
+    return Array.isArray(hotspotData) ? hotspotData : [];
+}
+
+function getHotspotTestCaseId(testCase) {
+    return testCase?.node_id || testCase?.id || '';
+}
+
+function getTotalProjectFailures() {
+    let total = 0;
+    for (const id in nodeMetadata) {
+        const data = nodeMetadata[id].additional_data?.display_data;
+        if (!data) continue;
+
+        const isTerminal = data.type_label === 'TEST_CASE' || data.type_label === 'SCENARIO';
+        if (isTerminal && data.status === 'FAILED') total++;
+    }
+    return total;
+}
+
+function getUniqueFailedTestCases(hotspots) {
+    const uniqueCases = new Map();
+    hotspots.forEach(hs => {
+        (hs.affected_failed_test_cases || []).forEach(tc => {
+            const id = getHotspotTestCaseId(tc);
+            if (id) uniqueCases.set(id, tc);
+        });
+    });
+    return uniqueCases;
+}
+
+function getHotspotType(hotspot) {
+    return String(hotspot?.type || 'UNKNOWN').toUpperCase();
+}
+
+function getHotspotContribution(hotspot, totalProjectFailures) {
+    if (!totalProjectFailures) return 0;
+    return Math.round(((hotspot.failed_test_cases || 0) / totalProjectFailures) * 100);
+}
+
+function getHotspotTypeOptions(hotspots) {
+    return ['ALL', ...new Set(hotspots.map(getHotspotType))];
+}
+
+function getVisibleHotspots(hotspots) {
+    if (hotspotTypeFilter === 'ALL') return hotspots;
+    return hotspots.filter(hs => getHotspotType(hs) === hotspotTypeFilter);
+}
+
+function ensureSelectedHotspot(hotspots, visibleHotspots) {
+    if (!hotspots.length) {
+        currentHotspotNodeId = null;
+        return null;
+    }
+
+    const existsInAll = hotspots.some(hs => hs.node_id === currentHotspotNodeId);
+    if (!currentHotspotNodeId || !existsInAll) {
+        currentHotspotNodeId = hotspots[0].node_id;
+    }
+
+    const existsInVisible = visibleHotspots.some(hs => hs.node_id === currentHotspotNodeId);
+    if (visibleHotspots.length && !existsInVisible) {
+        currentHotspotNodeId = visibleHotspots[0].node_id;
+    }
+
+    return hotspots.find(hs => hs.node_id === currentHotspotNodeId) || hotspots[0];
+}
+
+function buildHotspotRows(hotspots, totalProjectFailures) {
+    return hotspots.map(hs => {
+        const failedCount = hs.failed_test_cases || 0;
+        const totalCount = hs.total_test_cases || 0;
+        const errorSet = new Set(
+            (hs.affected_failed_test_cases || []).map(tc => getFailureReason(getHotspotTestCaseId(tc)))
+        );
+
+        return {
+            hs,
+            failedCount,
+            totalCount,
+            contribution: getHotspotContribution(hs, totalProjectFailures),
+            profile: classifyHotspot(hs),
+            isSelected: hs.node_id === currentHotspotNodeId,
+            errorCount: errorSet.size
+        };
+    }).sort(compareHotspotRows);
+}
+
+function compareHotspotRows(a, b) {
+    const dir = hotspotSortDir === 'asc' ? 1 : -1;
+    if (hotspotSortKey === 'name') return dir * a.hs.name.localeCompare(b.hs.name);
+    if (hotspotSortKey === 'type') return dir * getHotspotType(a.hs).localeCompare(getHotspotType(b.hs));
+    if (hotspotSortKey === 'failed') return dir * (a.failedCount - b.failedCount);
+    if (hotspotSortKey === 'rate') return dir * ((a.hs.failure_percentage || 0) - (b.hs.failure_percentage || 0));
+    if (hotspotSortKey === 'errors') return dir * (a.errorCount - b.errorCount);
+    return dir * (a.contribution - b.contribution);
+}
+
+function getSelectedFailedCases(selectedHotspot) {
+    return (selectedHotspot?.affected_failed_test_cases || []).map(tc => {
+        const id = getHotspotTestCaseId(tc);
+        return {
+            id: id,
+            name: tc.name || id,
+            line: tc.line_number || '',
+            file: tc.file_path || '',
+            depth: tc.depth || 0,
+            status: getTerminalStatus(id),
+            reason: getFailureReason(id),
+            failedStep: getFailedStep(id),
+            path: Array.isArray(tc.dependency_path) ? tc.dependency_path : []
+        };
+    });
+}
+
+function getErrorGroups(failedCases) {
+    const groupedErrors = {};
+    failedCases.forEach(tc => {
+        const key = tc.reason || 'Unknown error';
+        groupedErrors[key] = (groupedErrors[key] || 0) + 1;
+    });
+    return Object.entries(groupedErrors).sort((a, b) => b[1] - a[1]);
 }
 
 // --- SEARCH ---
@@ -80,7 +259,7 @@ function focusOnNode(nodeId) {
     const affectedIds = new Set([nodeId]);
     if (hotspotData) {
         const hs = hotspotData.find(h => h.node_id === nodeId);
-        if (hs) hs.affected_failed_test_cases.forEach(tc => affectedIds.add(tc.id));
+        if (hs) hs.affected_failed_test_cases.forEach(tc => affectedIds.add(tc.node_id || tc.id));
     }
 
     // Ghost out others
@@ -106,255 +285,430 @@ function resetFocus() {
 }
 
 function hideDetails() {
-    document.getElementById('node-details-side').style.display = 'none';
+    const timelineContent = document.getElementById('timeline-content');
+    if (timelineContent) {
+        timelineContent.innerHTML = `
+            <div style="padding: 20px; color: #666; font-size: 13px;">
+                <i class="fas fa-info-circle"></i> Select a node to see its detailed execution history.
+            </div>
+        `;
+    }
 }
 
-function showDetails(nodeId) {
-    const node = nodeMetadata[nodeId];
-    if (!node || !node.additional_data?.display_data) return;
+const NODE_DETAIL_FIELDS = {
+    'http_method': 'HTTP Method',
+    'endpoint': 'Endpoint',
+    'physical_url': 'Physical URL',
+    'resolved_from': 'Resolved From',
+    'variable': 'Variable Name',
+    'database': 'Database',
+    'table': 'Table',
+    'operation': 'DB Operation',
+    'host': 'Host',
+    'scenario_tag': 'Scenario Tag',
+    'workflow_path': 'Workflow File',
+    'key': 'Key',
+    'value': 'Value'
+};
 
-    const data = node.additional_data.display_data;
-    const sidePanel = document.getElementById('node-details-side');
-    const content = document.getElementById('details-content');
-    
-    let html = `
+function buildNodeDetailsModel(nodeId) {
+    const node = nodeMetadata[nodeId];
+    if (!node || !node.additional_data?.display_data) return null;
+    return { nodeId, node, data: node.additional_data.display_data };
+}
+
+function renderNodeDetails(model) {
+    const sections = [
+        renderNodeIdentitySection(model),
+        renderNodeStatusSection(model.data),
+        renderNodeSourceSection(model.data),
+        renderNodeExecutionHistory(model.data),
+        renderNodeTechnicalDetails(model.data),
+        renderEnvironmentVariants(model.node),
+        renderJiraLinks(model.data),
+        renderExpertNotes(model.data),
+        renderAiSuggestions(model.data),
+        renderRelatedFailedComponents(model)
+    ];
+
+    return `<div style="padding: 12px;">${sections.filter(Boolean).join('')}</div>`;
+}
+
+function renderNodeIdentitySection(model) {
+    return `
         <div class="detail-section">
             <div class="detail-label">Component Name</div>
-            <div class="detail-value" style="font-size: 16px; font-weight: 700;">${data.name}</div>
-            <div style="font-size: 10px; color: #888; margin-top: 4px;">ID: ${nodeId}</div>
+            <div class="detail-value" style="font-size: 16px; font-weight: 700;">${escapeHtml(model.data.name)}</div>
+            <div style="font-size: 10px; color: #888; margin-top: 4px;">ID: ${escapeHtml(model.nodeId)}</div>
         </div>
-        
+    `;
+}
+
+function renderNodeStatusSection(data) {
+    const tone = getStatusTone(data.status);
+    return `
         <div class="detail-section">
             <div class="detail-label">Type & Status</div>
             <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
-                ${data.badges.map(b => `<span class="impact-badge badge-type">${b}</span>`).join('')}
-                <span class="impact-badge ${getStatusTone(data.status).klass}" 
-                      style="background: ${getStatusTone(data.status).bg}; color: ${getStatusTone(data.status).color};">
-                    ${getStatusTone(data.status).label}
+                ${(data.badges || []).map(b => `<span class="impact-badge badge-type">${escapeHtml(b)}</span>`).join('')}
+                <span class="impact-badge ${tone.klass}" style="background: ${tone.bg}; color: ${tone.color};">
+                    ${escapeHtml(tone.label)}
                 </span>
             </div>
         </div>
     `;
+}
 
-    // File Info
-    if (data.file_path) {
-        html += `
-            <div class="detail-section">
-                <div class="detail-label">Source Location</div>
-                <div class="detail-value" style="font-family: monospace; font-size: 11px;">
-                    ${data.file_path}${data.line_number ? `:${data.line_number}` : ''}
-                </div>
+function renderNodeSourceSection(data) {
+    if (!data.file_path) return '';
+    const location = `${data.file_path}${data.line_number ? `:${data.line_number}` : ''}`;
+    return `
+        <div class="detail-section">
+            <div class="detail-label">Source Location</div>
+            <div class="detail-value" style="font-family: monospace; font-size: 11px;">
+                ${escapeHtml(location)}
             </div>
-        `;
-    }
+        </div>
+    `;
+}
 
-    // Execution History
-    if (data.execution_history && data.execution_history.length > 0) {
-        html += `
-            <div class="detail-section">
-                <div class="detail-label">Execution History (Last 10)</div>
-                <div class="history-timeline">
-                    ${data.execution_history.slice(-10).map(s => `
-                        <div class="dot ${s === 'PASSED' ? 'pass' : 'fail'}" title="${s}"></div>
-                    `).join('')}
-                </div>
+function renderNodeExecutionHistory(data) {
+    const history = Array.isArray(data.execution_history) ? data.execution_history.slice(-10) : [];
+    if (!history.length) return '';
+
+    return `
+        <div class="detail-section">
+            <div class="detail-label">Execution History (Last 10)</div>
+            <div class="history-timeline">
+                ${history.map(status => `
+                    <div class="dot ${status === 'PASSED' ? 'pass' : 'fail'}" title="${escapeHtml(status)}"></div>
+                `).join('')}
             </div>
-        `;
-    }
+        </div>
+    `;
+}
 
-    // Component Specific Details (API, DB, etc.)
-    if (data.details) {
-        const details = data.details;
-        const relevantKeys = {
-            'http_method': 'HTTP Method',
-            'endpoint': 'Endpoint',
-            'physical_url': 'Physical URL',
-            'resolved_from': 'Resolved From',
-            'variable': 'Variable Name',
-            'database': 'Database',
-            'table': 'Table',
-            'operation': 'DB Operation',
-            'host': 'Host',
-            'scenario_tag': 'Scenario Tag',
-            'workflow_path': 'Workflow File',
-            'key': 'Key',
-            'value': 'Value'
-        };
+function renderNodeTechnicalDetails(data) {
+    const details = data.details || {};
+    const rows = Object.entries(NODE_DETAIL_FIELDS)
+        .filter(([key]) => details[key])
+        .map(([key, label]) => `
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 12px;">
+                <span style="color: #666;">${label}:</span>
+                <span style="font-weight: 600; color: #333; text-align: right; max-width: 200px; word-break: break-all;">${escapeHtml(details[key])}</span>
+            </div>
+        `).join('');
 
-        const detailsRows = Object.entries(relevantKeys)
-            .filter(([key]) => details[key])
-            .map(([key, label]) => `
-                <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 12px;">
-                    <span style="color: #666;">${label}:</span>
-                    <span style="font-weight: 600; color: #333; text-align: right; max-width: 200px; word-break: break-all;">${details[key]}</span>
-                </div>
-            `).join('');
+    if (!rows) return '';
+    return `
+        <div class="detail-section" style="background: rgba(0,0,0,0.02); margin: 10px -15px; padding: 15px;">
+            <div class="detail-label">Technical Details</div>
+            <div style="margin-top: 10px;">${rows}</div>
+        </div>
+    `;
+}
 
-        if (detailsRows) {
-            html += `
-                <div class="detail-section" style="background: rgba(0,0,0,0.02); margin: 10px -15px; padding: 15px;">
-                    <div class="detail-label">Technical Details</div>
-                    <div style="margin-top: 10px;">
-                        ${detailsRows}
+function renderEnvironmentVariants(node) {
+    const variants = node.environment_variants || {};
+    if (!Object.keys(variants).length) return '';
+
+    return `
+        <div class="detail-section" style="border: 1px solid #e3f2fd; background: #f9fcff;">
+            <div class="detail-label" style="color: #1976d2;"><i class="fas fa-globe"></i> Environment Variants</div>
+            <div style="margin-top: 10px;">
+                ${Object.entries(variants).map(([env, value]) => `
+                    <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #eee;">
+                        <div style="font-size: 9px; font-weight: 700; color: #1976d2; text-transform: uppercase;">${escapeHtml(env)}</div>
+                        <div style="font-size: 11px; color: #555; word-break: break-all; font-family: monospace;">${escapeHtml(value)}</div>
                     </div>
-                </div>
-            `;
-        }
-    }
-
-    // Environment Variants (Cross-environment resolution)
-    if (node.environment_variants && Object.keys(node.environment_variants).length > 0) {
-        html += `
-            <div class="detail-section" style="border: 1px solid #e3f2fd; background: #f9fcff;">
-                <div class="detail-label" style="color: #1976d2;"><i class="fas fa-globe"></i> Environment Variants</div>
-                <div style="margin-top: 10px;">
-                    ${Object.entries(node.environment_variants).map(([env, value]) => `
-                        <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #eee;">
-                            <div style="font-size: 9px; font-weight: 700; color: #1976d2; text-transform: uppercase;">${env}</div>
-                            <div style="font-size: 11px; color: #555; word-break: break-all; font-family: monospace;">${value}</div>
-                        </div>
-                    `).join('')}
-                </div>
+                `).join('')}
             </div>
-        `;
-    }
+        </div>
+    `;
+}
 
-    // Jira Links
-    if (data.jira_tags && data.jira_tags.length > 0) {
-        html += `
-            <div class="detail-section">
-                <div class="detail-label">Jira Traceability</div>
-                <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px;">
-                    ${data.jira_tags.map(tag => {
-                        const cleanTag = tag.replace('@', '');
-                        const url = jiraBaseUrl ? `${jiraBaseUrl}${cleanTag}` : '#';
-                        return `<a href="${url}" target="_blank" class="badge-utility" style="text-decoration: none; font-size: 10px;">${tag}</a>`;
-                    }).join('')}
-                </div>
+function renderJiraLinks(data) {
+    const tags = Array.isArray(data.jira_tags) ? data.jira_tags : [];
+    if (!tags.length) return '';
+
+    return `
+        <div class="detail-section">
+            <div class="detail-label">Jira Traceability</div>
+            <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px;">
+                ${tags.map(tag => {
+                    const cleanTag = String(tag).replace('@', '');
+                    const url = jiraBaseUrl ? `${jiraBaseUrl}${cleanTag}` : '#';
+                    return `<a href="${escapeHtml(url)}" target="_blank" class="badge-utility" style="text-decoration: none; font-size: 10px;">${escapeHtml(tag)}</a>`;
+                }).join('')}
             </div>
-        `;
-    }
+        </div>
+    `;
+}
 
-    // AI Expert Analysis (The fix for missing notes)
-    if (data.expert_notes && data.expert_notes.length > 0) {
-        html += `
-            <div class="detail-section">
-                <div class="detail-label" style="color: #1976D2;"><i class="fas fa-robot"></i> Expert Analysis</div>
-                ${data.expert_notes.map(note => `
+function renderExpertNotes(data) {
+    const notes = Array.isArray(data.expert_notes) ? data.expert_notes : [];
+    if (!notes.length) return '';
+
+    return `
+        <div class="detail-section">
+            <div class="detail-label" style="color: #1976D2;"><i class="fas fa-robot"></i> Expert Analysis</div>
+            ${notes.map(note => {
+                const title = note.timestamp ? `Note from AI Assistant (${note.timestamp}):` : 'Architectural Note:';
+                return `
                     <div style="background: #E3F2FD; padding: 10px; border-radius: 8px; border: 1px solid #BBDEFB; margin-top: 10px; font-size: 11px;">
-                        <div style="color: #0D47A1; font-weight: 700; margin-bottom: 3px;">${note.timestamp ? `Note from AI Assistant (${note.timestamp}):` : 'Architectural Note:'}</div>
-                        <div>${note.note}</div>
+                        <div style="color: #0D47A1; font-weight: 700; margin-bottom: 3px;">${escapeHtml(title)}</div>
+                        <div>${escapeHtml(note.note)}</div>
                     </div>
-                `).join('')}
-            </div>
-        `;
-    }
+                `;
+            }).join('')}
+        </div>
+    `;
+}
 
-    // AI Suggestions
-    if (data.suggestions && data.suggestions.length > 0) {
-        html += `
-            <div class="detail-section">
-                <div class="detail-label">💡 AI Fix Intelligence</div>
-                ${data.suggestions.map(s => `
-                    <div style="background: #fffde7; padding: 10px; border-radius: 8px; border: 1px solid #fff59d; margin-top: 10px;">
-                        <div style="font-weight: 700; color: #827717; font-size: 12px;">${s.description}</div>
-                        ${s.solution ? `<div style="font-family: monospace; font-size: 11px; margin-top: 5px; background: #fff; padding: 5px; border: 1px solid #eee;">${s.solution}</div>` : ''}
-                    </div>
-                `).join('')}
-            </div>
-        `;
-    }
+function renderAiSuggestions(data) {
+    const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+    if (!suggestions.length) return '';
 
-    // Internal Failures (for hotspots)
-    if (data.status === 'FAILED' || data.status === 'PARTIAL_FAIL') {
-        const failedChildren = [];
-        edges.get().forEach(edge => {
-            if (edge.from === nodeId) {
-                const child = nodeMetadata[edge.to];
-                if (child && (child.execution_status === 'FAILED' || child.execution_status === 'PARTIAL_FAIL')) {
-                    failedChildren.push({ id: edge.to, name: child.name });
-                }
-            }
-        });
-
-        if (failedChildren.length > 0) {
-            html += `
-                <div class="detail-section">
-                    <div class="detail-label" style="color: #d32f2f;"><i class="fas fa-search-location"></i> Related Failed Components</div>
-                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                        ${failedChildren.map(child => `
-                            <div class="error-box" style="border-left: 4px solid #f44336; cursor: pointer; transition: 0.2s;" 
-                                 onclick="jumpToNode('${child.id}')" onmouseover="this.style.background='#ffebee'" onmouseout="this.style.background='#fff5f5'">
-                                <div style="font-weight: 700; font-size: 11px; color: #b71c1c;">${child.name}</div>
-                                <div style="font-size: 9px; color: #1976d2; margin-top: 4px; font-weight: 800;">🔍 CLICK TO FOCUS ON MAP</div>
-                            </div>
-                        `).join('')}
-                    </div>
+    return `
+        <div class="detail-section">
+            <div class="detail-label">AI Fix Intelligence</div>
+            ${suggestions.map(suggestion => `
+                <div style="background: #fffde7; padding: 10px; border-radius: 8px; border: 1px solid #fff59d; margin-top: 10px;">
+                    <div style="font-weight: 700; color: #827717; font-size: 12px;">${escapeHtml(suggestion.description)}</div>
+                    ${suggestion.solution ? `<div style="font-family: monospace; font-size: 11px; margin-top: 5px; background: #fff; padding: 5px; border: 1px solid #eee;">${escapeHtml(suggestion.solution)}</div>` : ''}
                 </div>
-            `;
-        }
-    }
+            `).join('')}
+        </div>
+    `;
+}
 
-    content.innerHTML = html;
-    sidePanel.style.display = 'block';
+function getRelatedFailedChildren(nodeId) {
+    const failedChildren = [];
+    edges.get().forEach(edge => {
+        if (edge.from !== nodeId) return;
+        const child = nodeMetadata[edge.to];
+        if (child && (child.execution_status === 'FAILED' || child.execution_status === 'PARTIAL_FAIL')) {
+            failedChildren.push({ id: edge.to, name: child.name });
+        }
+    });
+    return failedChildren;
+}
+
+function renderRelatedFailedComponents(model) {
+    if (model.data.status !== 'FAILED' && model.data.status !== 'PARTIAL_FAIL') return '';
+
+    const failedChildren = getRelatedFailedChildren(model.nodeId);
+    if (!failedChildren.length) return '';
+
+    return `
+        <div class="detail-section">
+            <div class="detail-label" style="color: #d32f2f;"><i class="fas fa-search-location"></i> Related Failed Components</div>
+            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                ${failedChildren.map(child => `
+                    <div class="error-box" style="border-left: 4px solid #f44336; cursor: pointer; transition: 0.2s;"
+                         onclick="jumpToNode('${child.id}')" onmouseover="this.style.background='#ffebee'" onmouseout="this.style.background='#fff5f5'">
+                        <div style="font-weight: 700; font-size: 11px; color: #b71c1c;">${escapeHtml(child.name)}</div>
+                        <div style="font-size: 9px; color: #1976d2; margin-top: 4px; font-weight: 800;">CLICK TO FOCUS ON MAP</div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function showDetails(nodeId) {
+    const model = buildNodeDetailsModel(nodeId);
+    const timelineContent = document.getElementById('timeline-content');
+    if (!model || !timelineContent) return;
+
+    timelineContent.innerHTML = renderNodeDetails(model);
+    switchTab('timeline');
 }
 
 // --- DASHBOARD RENDERING ---
 function renderDashboard() {
-    // 1. Hotspots in Sidebar
     const hotspotList = document.getElementById('hotspot-list');
-    
-    // Calculate total project failures first for contribution ratio
-    let totalProjectFailures = 0;
-    for (const id in nodeMetadata) {
-        const node = nodeMetadata[id];
-        const data = node.additional_data?.display_data;
-        if (!data) continue;
-        
-        // Ensure we count all terminal failure points (Test Cases or Scenarios)
-        if ((data.type_label === 'TEST_CASE' || data.type_label === 'SCENARIO') && data.status === 'FAILED') {
-            totalProjectFailures++;
-        }
-    }
+    if (!hotspotList) return;
 
-    if (hotspotData && hotspotData.length > 0) {
-        hotspotList.innerHTML = hotspotData.map(hs => {
-            const failedCount = hs.failed_test_cases || 0;
-            const totalCount = hs.total_test_cases || 1;
-            
-            // Safe calculation for contribution
-            const contribution = totalProjectFailures > 0 
-                ? Math.round((failedCount / totalProjectFailures) * 100) 
-                : 0;
-            
-            const isRootCause = contribution >= 50;
-            const profile = classifyHotspot(hs);
-            
-            return `
-                <div class="hotspot-item ${isRootCause ? 'pulse-fail' : ''}" onclick="focusOnNode('${hs.node_id}')" 
-                     style="border-left: 4px solid ${profile.color};">
-                    <div class="hotspot-header">
-                        <div style="font-weight: 800; font-size: 13px; color: #1a237e;">${hs.name}</div>
-                        <span class="impact-badge" style="background: ${profile.color}; font-size: 10px;">
-                            ${profile.label}
-                        </span>
-                    </div>
-                    <div style="margin-top: 8px; font-size: 11px; color: #444;">
-                        <i class="fas fa-exclamation-triangle" style="color: ${profile.color};"></i> 
-                        <b>${hs.failed_test_cases} / ${hs.total_test_cases}</b> tests failed along this path
-                    </div>
-                                        <div style="margin-top: 5px; font-size: 10px; color: #555;">
-                        Impact signal: <b>${contribution}%</b> of failed tests
-                    </div>
-                    <div style="margin-top: 4px; font-size: 10px; color: #666;">
-                        ${profile.note}
-                    </div>
+    const model = buildHotspotDashboardModel();
+    hotspotList.innerHTML = model.hotspots.length
+        ? renderHotspotDashboard(model)
+        : renderEmptyHotspots(model.totalProjectFailures);
+
+    renderStatusSummary();
+}
+
+function buildHotspotDashboardModel() {
+    const totalProjectFailures = getTotalProjectFailures();
+    const hotspots = getHotspots();
+    const visibleHotspots = getVisibleHotspots(hotspots);
+    const selectedHotspot = ensureSelectedHotspot(hotspots, visibleHotspots);
+    const selectedFailedCases = getSelectedFailedCases(selectedHotspot);
+    const errorGroups = getErrorGroups(selectedFailedCases);
+
+    return {
+        totalProjectFailures,
+        hotspots,
+        selectedHotspot,
+        selectedProfile: classifyHotspot(selectedHotspot || {}),
+        selectedFailedCases,
+        errorGroups,
+        topError: errorGroups.length ? errorGroups[0][0] : 'N/A',
+        rows: buildHotspotRows(visibleHotspots, totalProjectFailures),
+        typeOptions: getHotspotTypeOptions(hotspots),
+        uniqueFailedCaseCount: getUniqueFailedTestCases(hotspots).size
+    };
+}
+
+function renderEmptyHotspots(totalProjectFailures) {
+    return `
+        <div class="dashboard-summary-grid">
+            ${renderSummaryCard('Failed Test Cases', totalProjectFailures)}
+            ${renderSummaryCard('Hotspots', 0)}
+        </div>
+        <div class="empty-hotspot">No failure hotspot data available in current report.</div>
+    `;
+}
+
+function renderHotspotDashboard(model) {
+    return `
+        <div class="dashboard-summary-grid">
+            ${renderSummaryCard('Failed Test Cases', model.totalProjectFailures)}
+            ${renderSummaryCard('Unique Failing Cases', model.uniqueFailedCaseCount)}
+            ${renderSummaryCard('Hotspots', model.hotspots.length)}
+        </div>
+        <div class="hotspot-section-title">Hotspot Dashboard Table</div>
+        ${renderHotspotFilters(model.typeOptions)}
+        ${renderHotspotTable(model.rows)}
+        ${renderHotspotAnalysis(model)}
+    `;
+}
+
+function renderSummaryCard(label, value) {
+    return `
+        <div class="dashboard-summary-card">
+            <div class="summary-label">${label}</div>
+            <div class="summary-value">${value}</div>
+        </div>
+    `;
+}
+
+function renderHotspotFilters(typeOptions) {
+    return `
+        <div class="hotspot-toolbar">
+            <div class="hotspot-filter-group">
+                ${typeOptions.map(type => `
+                    <button class="hotspot-filter-btn ${type === hotspotTypeFilter ? 'active' : ''}" onclick="setHotspotFilter('${type}')">${type}</button>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderHotspotTable(rows) {
+    return `
+        <div class="hotspot-table-wrap">
+            <table class="hotspot-table">
+                <thead>
+                    <tr>
+                        <th onclick="setHotspotSort('name')">Hotspot</th>
+                        <th onclick="setHotspotSort('type')">Type</th>
+                        <th onclick="setHotspotSort('failed')">Failed/Total</th>
+                        <th onclick="setHotspotSort('impact')">Impact %</th>
+                        <th onclick="setHotspotSort('rate')">Fail Rate %</th>
+                        <th onclick="setHotspotSort('errors')">Error Groups</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map(renderHotspotTableRow).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function renderHotspotTableRow(row) {
+    return `
+        <tr class="${row.isSelected ? 'selected' : ''}" onclick="selectHotspot('${row.hs.node_id}')">
+            <td>
+                <div class="hotspot-name-cell">
+                    <span class="hotspot-color-dot" style="background:${row.profile.color};"></span>
+                    <span>${escapeHtml(row.hs.name)}</span>
                 </div>
-            `;
-        }).join('');
-    }
+            </td>
+            <td>${escapeHtml(getHotspotType(row.hs))}</td>
+            <td>${row.failedCount}/${row.totalCount}</td>
+            <td>${row.contribution}%</td>
+            <td>${row.hs.failure_percentage || 0}%</td>
+            <td>${row.errorCount}</td>
+        </tr>
+    `;
+}
 
-    // 2. Summary HUD
+function renderHotspotAnalysis(model) {
+    if (!model.selectedHotspot) return '';
+
+    return `
+        <div class="hotspot-analysis-panel">
+            <div class="hotspot-section-title">Selected Hotspot Analysis</div>
+            <div class="hotspot-analysis-header">
+                <div class="hotspot-analysis-name">${escapeHtml(model.selectedHotspot.name)}</div>
+                <span class="impact-badge" style="background: ${model.selectedProfile.color}; font-size: 10px;">
+                    ${model.selectedProfile.label}
+                </span>
+            </div>
+            <div class="hotspot-analysis-kpis">
+                <div><b>Impact:</b> ${model.selectedHotspot.failed_test_cases || 0}/${model.selectedHotspot.total_test_cases || 0} failed</div>
+                <div><b>Failure Rate:</b> ${model.selectedHotspot.failure_percentage || 0}%</div>
+                <div><b>Main Error:</b> ${escapeHtml(model.topError)}</div>
+            </div>
+            <div class="hotspot-section-subtitle">Error Groups</div>
+            <div class="hotspot-error-groups">
+                ${renderErrorGroups(model.errorGroups)}
+            </div>
+
+            <div class="hotspot-section-subtitle">Related Failed Test Cases</div>
+            <div class="hotspot-case-list">
+                ${renderFailedCaseList(model.selectedFailedCases)}
+            </div>
+        </div>
+    `;
+}
+
+function renderErrorGroups(errorGroups) {
+    if (!errorGroups.length) return '<div style="font-size:11px;color:#777;">No error groups.</div>';
+    return errorGroups.map(([reason, count]) => `
+        <div class="hotspot-error-group">
+            <div class="hotspot-error-count">${count}x</div>
+            <div class="hotspot-error-text">${escapeHtml(reason)}</div>
+        </div>
+    `).join('');
+}
+
+function renderFailedCaseList(failedCases) {
+    if (!failedCases.length) {
+        return '<div style="font-size:11px;color:#777;">No related failed test cases.</div>';
+    }
+    return failedCases.map(renderFailedCaseItem).join('');
+}
+
+function renderFailedCaseItem(testCase) {
+    return `
+        <div class="hotspot-case-item" onclick="focusOnNode('${testCase.id}')">
+            <div class="hotspot-case-title">${escapeHtml(testCase.name)}</div>
+            <div class="hotspot-case-meta">
+                <span>Status: <b>${escapeHtml(testCase.status)}</b></span>
+                <span>Depth: <b>${testCase.depth}</b></span>
+                <span>Line: <b>${testCase.line || 'N/A'}</b></span>
+            </div>
+            <div class="hotspot-case-error">${escapeHtml(testCase.reason)}</div>
+            <div class="hotspot-case-step">Failed Step: ${escapeHtml(testCase.failedStep)}</div>
+            <div class="hotspot-case-path">Path: ${escapeHtml(testCase.path.join(' -> '))}</div>
+        </div>
+    `;
+}
+
+function renderStatusSummary() {
     let total = 0, passed = 0, failed = 0, partial = 0;
     for (const id in nodeMetadata) {
         const node = nodeMetadata[id];
@@ -515,7 +869,7 @@ function renderLegend() {
             <!-- 6. STRUCTURAL LAYER -->
             <div style="font-weight: 700; color: #666; margin: 15px 0 10px 0; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px;">🏗️ Structural Layer</div>
             <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">
-                <div style="width: 18px; height: 18px; background: #fbc02d; transform: rotate(45deg); margin: 0 11px 0 1px;"></div>
+                <div style="width: 18px; height: 18px; background: #00897b; transform: rotate(45deg); margin: 0 11px 0 1px;"></div>
                 <span><b>Folder (Hexagon)</b></span>
             </div>
             <div style="display: flex; align-items: center; margin-bottom: 12px; font-size: 12px;">

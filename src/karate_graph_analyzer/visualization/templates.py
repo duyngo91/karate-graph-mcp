@@ -36,7 +36,7 @@ LAYOUT_TEMPLATE = """
             </div>
             
             <div class="sidebar-tabs">
-                <div class="tab active" onclick="switchTab('hotspots')"><i class="fas fa-fire"></i> Failure Impact</div>
+                <div class="tab active" onclick="switchTab('hotspots')"><i class="fas fa-fire"></i> Hotspots</div>
                 <div class="tab" onclick="switchTab('timeline')"><i class="fas fa-history"></i> History</div>
                 <div class="tab" onclick="switchTab('legend')">📖 Legend</div>
             </div>
@@ -93,15 +93,6 @@ LAYOUT_TEMPLATE = """
             </div>
 
             <div id="graph-canvas" style="width: 100%; height: 100%;"></div>
-
-            <!-- NODE DETAILS (Floating Right) -->
-            <div id="node-details-side" class="hud-card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid var(--primary); padding-bottom: 10px;">
-                    <h3 id="detail-title" style="margin: 0; font-size: 18px; color: var(--primary);">Node Insights</h3>
-                    <button onclick="hideDetails()" style="border: none; background: none; font-size: 24px; cursor: pointer; color: #999;">&times;</button>
-                </div>
-                <div id="details-content"></div>
-            </div>
 
             <!-- LEGEND OVERLAY -->
             <div id="legend-overlay" class="hud-card" style="display:none; width: 280px;">

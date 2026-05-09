@@ -49,22 +49,15 @@ class CallReadExtractor(IDependencyExtractor):
             
             resolved_path, scenario_tag, logical_path = self._resolve_variable_expression(expression)
             dep_type = self._classify_call_dependency(resolved_path)
-            
-            dep_params = self._build_resolution_params(resolved_path)
-            if params_str: dep_params["params"] = params_str
-            if scenario_tag: dep_params["scenario_tag"] = scenario_tag
-            
             dependencies.append(
-                Dependency(
-                    type=dep_type,
-                    target=logical_path or resolved_path,
-                    line_number=line_number,
-                    parameters={
-                        **dep_params,
-                        "original_expression": expression,
-                        "physical_path": resolved_path if logical_path else None,
-                        "scenario_tag": scenario_tag
-                    },
+                self._build_call_dependency(
+                    dep_type,
+                    expression,
+                    resolved_path,
+                    logical_path,
+                    scenario_tag,
+                    line_number,
+                    params_str=params_str,
                 )
             )
 
@@ -76,25 +69,46 @@ class CallReadExtractor(IDependencyExtractor):
                 
                 resolved_path, scenario_tag, logical_path = self._resolve_variable_expression(expression)
                 dep_type = self._classify_call_dependency(resolved_path)
-                
-                dep_params = self._build_resolution_params(resolved_path)
-                if scenario_tag: dep_params["scenario_tag"] = scenario_tag
-                
                 dependencies.append(
-                    Dependency(
-                        type=dep_type,
-                        target=logical_path or resolved_path,
-                        line_number=line_number,
-                        parameters={
-                            **dep_params,
-                            "original_expression": expression,
-                            "physical_path": resolved_path if logical_path else None,
-                            "scenario_tag": scenario_tag
-                        },
+                    self._build_call_dependency(
+                        dep_type,
+                        expression,
+                        resolved_path,
+                        logical_path,
+                        scenario_tag,
+                        line_number,
                     )
                 )
 
         return dependencies
+
+    def _build_call_dependency(
+        self,
+        dep_type: DependencyType,
+        expression: str,
+        resolved_path: str,
+        logical_path: Optional[str],
+        scenario_tag: Optional[str],
+        line_number: int,
+        params_str: str = "",
+    ) -> Dependency:
+        dep_params = self._build_resolution_params(resolved_path)
+        if params_str:
+            dep_params["params"] = params_str
+        if scenario_tag:
+            dep_params["scenario_tag"] = scenario_tag
+
+        return Dependency(
+            type=dep_type,
+            target=logical_path or resolved_path,
+            line_number=line_number,
+            parameters={
+                **dep_params,
+                "original_expression": expression,
+                "physical_path": resolved_path if logical_path else None,
+                "scenario_tag": scenario_tag,
+            },
+        )
 
     def _classify_call_dependency(self, path: str) -> DependencyType:
         path_lower = path.lower()
