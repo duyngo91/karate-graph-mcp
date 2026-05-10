@@ -381,8 +381,6 @@ def test_selection_suggestion(
     return analyzer_tool.test_selection_suggestion(project_name, changed_paths, limit)
 
 @mcp.tool()
-<<<<<<< Updated upstream
-=======
 def feature_intent_index(
     project_name: str,
     query: Optional[str] = None,
@@ -649,7 +647,6 @@ def db_impact_preview(
     return analyzer_tool.db_impact_preview(project_name, changed_entities, limit)
 
 @mcp.tool()
->>>>>>> Stashed changes
 def flaky_risk(project_name: str, limit: int = 10) -> Dict[str, Any]:
     """
     Preset query: test cases with mixed pass/fail history (flaky risk).

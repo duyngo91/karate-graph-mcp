@@ -74,7 +74,7 @@ LAYOUT_TEMPLATE = """
 
             <div style="padding: 15px; border-top: 1px solid var(--border);">
                 <div style="position: relative;">
-                    <input type="text" id="node-search" placeholder="🔍 Search components (Ctrl+K)..." 
+                    <input type="text" id="node-search" placeholder="Search test case ID, name, path (Ctrl+K)..."
                            style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ddd; outline: none;"
                            onkeyup="handleSearch(this.value)">
                     <div id="search-results" class="hud-card" style="position: absolute; bottom: 50px; left: 0; right: 0; display: none; max-height: 300px; overflow-y: auto;"></div>

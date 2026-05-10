@@ -154,6 +154,72 @@ body, html {
     font-size: 11px;
     font-weight: 800;
 }
+.test-case-title-row,
+.detail-title-row,
+.search-result-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.test-case-id-badge {
+    display: inline-flex;
+    align-items: center;
+    background: #e3f2fd;
+    color: #0d47a1;
+    border: 1px solid #bbdefb;
+    border-radius: 6px;
+    padding: 2px 6px;
+    font-size: 10px;
+    font-weight: 800;
+    white-space: nowrap;
+}
+.test-case-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.detail-subvalue {
+    color: #5f6b77;
+    font-size: 11px;
+    margin-top: 4px;
+    overflow-wrap: anywhere;
+}
+.search-result-item {
+    align-items: flex-start;
+    border-bottom: 1px solid #eee;
+    cursor: pointer;
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+    padding: 9px 8px;
+}
+.search-result-item:hover {
+    background: #f7fbff;
+}
+.search-result-content {
+    min-width: 0;
+}
+.search-result-title {
+    color: #1f2937;
+    font-size: 12px;
+    font-weight: 700;
+}
+.search-result-meta {
+    color: #78909c;
+    font-family: monospace;
+    font-size: 10px;
+    margin-top: 3px;
+    overflow-wrap: anywhere;
+}
+.search-result-type {
+    background: #eef2f6;
+    border-radius: 4px;
+    color: #455a64;
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 5px;
+}
 .dashboard-summary-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

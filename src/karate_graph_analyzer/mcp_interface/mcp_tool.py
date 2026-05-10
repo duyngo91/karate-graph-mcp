@@ -21,12 +21,8 @@ from karate_graph_analyzer.exporters import ExporterFactory
 from karate_graph_analyzer.mcp_interface.responses import error_response
 from karate_graph_analyzer.mcp_interface.search_tools import SearchTools
 from karate_graph_analyzer.services.graph_cache_service import GraphCacheService
-<<<<<<< Updated upstream
-=======
-from karate_graph_analyzer.services.fix_priority_service import FixPriorityService
 from karate_graph_analyzer.services.db_tracking_service import DbTrackingService
 from karate_graph_analyzer.services.feature_understanding_service import FeatureUnderstandingService
->>>>>>> Stashed changes
 from karate_graph_analyzer.services.failure_context_service import FailureContextService
 from karate_graph_analyzer.services.project_lifecycle_service import ProjectLifecycleService
 from karate_graph_analyzer.services.query_service import QueryService
@@ -261,8 +257,6 @@ class TestSelectionSuggestionRequest(BaseModel):
     )
     limit: int = Field(default=30, ge=1, le=500, description="Max suggested test cases")
 
-<<<<<<< Updated upstream
-=======
 
 class FeatureIntentIndexRequest(BaseModel):
     """Request model for feature intent search/index."""
@@ -358,7 +352,6 @@ class DbImpactPreviewRequest(BaseModel):
     limit: int = Field(default=50, ge=1, le=500, description="Max impacted test cases returned")
 
 
->>>>>>> Stashed changes
 class KarateGraphAnalyzerTool:
     """MCP protocol interface for graph analyzer."""
 
@@ -628,8 +621,6 @@ class KarateGraphAnalyzerTool:
 
         return self._with_search_tools(_action)
 
-<<<<<<< Updated upstream
-=======
     def _feature_understanding_service(
         self,
         project_name: str,
@@ -656,7 +647,6 @@ class KarateGraphAnalyzerTool:
             )
         return DbTrackingService(project, self.graphs.get(project_name)), None
 
->>>>>>> Stashed changes
     def register_project(
         self,
         name: str,
@@ -1735,8 +1725,6 @@ class KarateGraphAnalyzerTool:
             logger.error(f"Failed to suggest test selection: {e}")
             return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
-<<<<<<< Updated upstream
-=======
     def feature_intent_index(
         self,
         project_name: str,
@@ -2166,7 +2154,6 @@ class KarateGraphAnalyzerTool:
             logger.error(f"Failed to build DB impact preview: {e}", exc_info=True)
             return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
->>>>>>> Stashed changes
     def prioritize_fix_queue(self, project_name: str, limit: int = 10) -> Dict[str, Any]:
         """Preset: rank components to fix first by impact + risk."""
         request = QueryPresetRequest(project_name=project_name, limit=limit)

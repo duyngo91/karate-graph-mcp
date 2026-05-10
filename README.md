@@ -58,8 +58,6 @@ pip install -e .
 - `search_reusable_function`
 - `change_impact_preview`
 - `test_selection_suggestion`
-<<<<<<< Updated upstream
-=======
 - `feature_intent_index`
 - `variable_data_flow_trace`
 - `assertion_map`
@@ -73,7 +71,6 @@ pip install -e .
 - `db_data_flow_trace`
 - `db_assertion_map`
 - `db_impact_preview`
->>>>>>> Stashed changes
 - `top_hotspots`
 - `prioritize_fix_queue`
 - `flaky_risk`
@@ -103,8 +100,6 @@ Current strategy:
 
 `priority = trigger_count * 10 - min_depth`
 
-<<<<<<< Updated upstream
-=======
 ## Feature Understanding For AI
 
 These tools help AI understand Karate `.feature` files before editing or debugging:
@@ -141,10 +136,12 @@ These tools help AI understand query usage, variable flow, and DB-related impact
 - `db_impact_preview(project_name, changed_entities, limit)`
   - previews impacted test cases from changed DB entities (tables/schemas/hosts/DB feature paths)
 
->>>>>>> Stashed changes
 ## Visual Reports
 
 Interactive HTML graph output is generated under each project `output/` folder.
+
+- Test cases are shown as `@TEST-ID - Scenario name` when Jira/test-case tags exist.
+- Dashboard search supports `TEST-ID`, `@TEST-ID`, scenario name, component name, and feature path.
 
 ## Project Structure
 

@@ -233,6 +233,8 @@ class GraphVisualizer:
         reg_key = self._resolve_registry_key(node)
         config = self.COMPONENT_REGISTRY[reg_key]
         ecosystem = config["eco"]
+        test_case_id = self._get_primary_test_case_id(node)
+        display_name = self._format_node_display_name(node, reg_key)
 
         details_copy = node.metadata.additional_data.copy()
         details_copy.pop("display_data", None)
@@ -240,6 +242,8 @@ class GraphVisualizer:
         display_data = {
             "id": node.id,
             "name": node.name,
+            "display_name": display_name,
+            "test_case_id": test_case_id,
             "type_label": reg_key,
             "flow": ecosystem,
             "file_path": node.metadata.file_path,
@@ -270,7 +274,22 @@ class GraphVisualizer:
             "reg_key": reg_key,
             "config": config,
             "ecosystem": ecosystem,
+            "display_name": display_name,
+            "test_case_id": test_case_id,
         }
+
+    def _get_primary_test_case_id(self, node: Any) -> Optional[str]:
+        if not node.metadata.jira_tags:
+            return None
+        return node.metadata.jira_tags[0].lstrip("@")
+
+    def _format_node_display_name(self, node: Any, reg_key: str) -> str:
+        test_case_id = self._get_primary_test_case_id(node)
+        if not test_case_id or reg_key not in {"TEST_CASE", "SCENARIO", "ACTION"}:
+            return node.name
+
+        clean_name = re.sub(rf"^@?{re.escape(test_case_id)}\s*[-:|]?\s*", "", node.name).strip()
+        return f"@{test_case_id} - {clean_name or node.name}"
 
     def _is_terminal_visual_node(self, reg_key: str) -> bool:
         return reg_key in {"TEST_CASE", "SCENARIO", "ACTION", "API", "DATABASE"}
@@ -297,10 +316,10 @@ class GraphVisualizer:
         fail_count = node.execution_details.get("failed_count", 0)
         is_terminal = self._is_terminal_visual_node(reg_key)
 
-        display_label = node.name
+        display_label = model["display_name"]
         label_font_size = 14
         if fail_count > 0 and is_terminal:
-            display_label = f"[{fail_count} FAIL]\n{node.name}"
+            display_label = f"[{fail_count} FAIL]\n{model['display_name']}"
             label_font_size = 14 + min(fail_count, 15)
 
         node_attrs = {
@@ -389,10 +408,13 @@ class GraphVisualizer:
         ecosystem = node.metadata.additional_data.get("eco", "Unknown")
         
         parts = [
-            f"<div style='font-size:14px; margin-bottom:5px;'><b>{node.name}</b></div>",
+            f"<div style='font-size:14px; margin-bottom:5px;'><b>{self._format_node_display_name(node, reg_key)}</b></div>",
             f"<div style='margin-bottom:8px;'><span style='background:#eee; padding:2px 6px; border-radius:4px; font-size:10px;'>{ecosystem}</span> <b style='color:#666;'>{reg_key}</b></div>",
             f"<div style='font-size:11px; color:#888;'>ID: {node.id}</div>"
         ]
+        test_case_id = self._get_primary_test_case_id(node)
+        if test_case_id:
+            parts.append(f"<div style='font-size:11px; color:#1565c0;'><b>Test Case:</b> @{test_case_id}</div>")
         if node.metadata.file_path: 
             parts.append(f"<div style='font-size:11px; color:#888;'><b>File:</b> {node.metadata.file_path}</div>")
         
