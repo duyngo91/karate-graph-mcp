@@ -40,12 +40,14 @@ Verify the package:
 ```bash
 python -m pip show karate-graph
 python -m karate_graph_analyzer.mcp_server --help
+python -m karate_graph_analyzer.mcp_server --version
 ```
 
 If `karate-graph-mcp` is on your `PATH`, this also works:
 
 ```bash
 karate-graph-mcp --help
+karate-graph-mcp --version
 ```
 
 On Windows, if `where karate-graph-mcp` cannot find the command, use the `python -m` MCP config below. That avoids PATH issues.

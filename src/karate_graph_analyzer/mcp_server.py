@@ -913,6 +913,11 @@ def main() -> int:
     """Run Karate Graph Analyzer as a FastMCP stdio server."""
     parser = argparse.ArgumentParser(description="Karate Graph Analyzer MCP server")
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+    parser.add_argument(
         "--transport",
         choices=["stdio"],
         default="stdio",
