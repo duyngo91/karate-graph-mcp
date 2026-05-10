@@ -9,6 +9,7 @@ from karate_graph_analyzer.models import DependencyGraph, NodeType, Project, Sce
 from karate_graph_analyzer.parser.extractors.call_read_extractor import CallReadExtractor
 from karate_graph_analyzer.parser.extractors.database_extractor import DatabaseExtractor
 from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
+from karate_graph_analyzer.utils.db_dialect import DbDialectDetector
 
 
 class DbTrackingService:
@@ -22,7 +23,7 @@ class DbTrackingService:
         re.IGNORECASE,
     )
     SQL_TABLE_PATTERN = re.compile(
-        r"\b(?:FROM|INTO|UPDATE|JOIN|TABLE)\s+([A-Za-z_][A-Za-z0-9_.]*)",
+        r"\b(?:FROM|INTO|UPDATE|JOIN|TABLE)\s+[`\"\[]?([A-Za-z_][A-Za-z0-9_.]*)[`\"\]]?",
         re.IGNORECASE,
     )
     SQL_COLUMN_PATTERN = re.compile(
@@ -193,6 +194,7 @@ class DbTrackingService:
                 continue
 
             stats = query_api.get_usage_stats(node)
+            dialect_info = self._dialect_context(node)
             matched_nodes.append(
                 {
                     "id": node.id,
@@ -203,6 +205,11 @@ class DbTrackingService:
                     "table": node.metadata.additional_data.get("table"),
                     "database": node.metadata.additional_data.get("database"),
                     "host": node.metadata.additional_data.get("host"),
+                    "db_type": dialect_info.get("db_type"),
+                    "dialect": dialect_info.get("dialect"),
+                    "provider": dialect_info.get("provider"),
+                    "entity_type": dialect_info.get("entity_type"),
+                    "entity_name": dialect_info.get("entity_name"),
                     "usage_count": stats.get("usage_count", 0),
                     "matched_entities": matched_entities,
                 }
@@ -232,6 +239,11 @@ class DbTrackingService:
                         "name": node.name,
                         "operation": node.metadata.additional_data.get("operation"),
                         "table": node.metadata.additional_data.get("table"),
+                        "db_type": dialect_info.get("db_type"),
+                        "dialect": dialect_info.get("dialect"),
+                        "provider": dialect_info.get("provider"),
+                        "entity_type": dialect_info.get("entity_type"),
+                        "entity_name": dialect_info.get("entity_name"),
                         "matched_entities": matched_entities,
                     }
                 )
@@ -279,8 +291,11 @@ class DbTrackingService:
         table = data.get("table")
         database = data.get("database")
         host = data.get("host")
-        kind = "query" if any([operation, table, database, host]) else "component"
-        store_type = self._store_type(data, node.name)
+        dialect_info = self._dialect_context(node)
+        dialect = dialect_info.get("dialect")
+        entity_name = dialect_info.get("entity_name")
+        kind = "query" if any([operation, table, database, host, entity_name]) or dialect != "unknown" else "component"
+        store_type = self._store_type(data, node.name, dialect_info)
         risk = self._risk_level(operation, node.name)
         stats = query_api.get_usage_stats(node)
 
@@ -293,6 +308,13 @@ class DbTrackingService:
             "database": database,
             "host": host,
             "store_type": store_type,
+            "db_type": dialect_info.get("db_type"),
+            "dialect": dialect,
+            "provider": dialect_info.get("provider"),
+            "dialect_confidence": dialect_info.get("dialect_confidence"),
+            "dialect_signals": dialect_info.get("dialect_signals", []),
+            "entity_type": dialect_info.get("entity_type"),
+            "entity_name": entity_name,
             "risk_level": risk["level"],
             "risk_score": risk["score"],
             "file_path": node.metadata.file_path,
@@ -304,7 +326,33 @@ class DbTrackingService:
             "direct_dependencies": stats.get("direct_dependencies", []),
         }
 
-    def _store_type(self, data: Dict[str, Any], fallback: str) -> str:
+    def _dialect_context(self, node: Any) -> Dict[str, Any]:
+        data = node.metadata.additional_data or {}
+        text = " ".join(
+            [
+                node.name,
+                str(data.get("operation", "")),
+                str(data.get("table", "")),
+                str(data.get("database", "")),
+                str(data.get("host", "")),
+                str(data.get("collection", "")),
+                str(data.get("key", "")),
+                str(data.get("index", "")),
+                str(data.get("keyspace", "")),
+            ]
+        )
+        return DbDialectDetector.detect(text, data)
+
+    def _store_type(
+        self,
+        data: Dict[str, Any],
+        fallback: str,
+        dialect_info: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        dialect_info = dialect_info or DbDialectDetector.detect(fallback, data)
+        db_type = dialect_info.get("db_type")
+        if db_type and db_type != "unknown":
+            return db_type
         text = " ".join(
             [
                 str(data.get("operation", "")),
@@ -327,11 +375,17 @@ class DbTrackingService:
         if not op:
             # If operation is unavailable, treat as medium and let callers inspect details.
             return {"level": "medium", "score": 0.5}
-        if op in {"SELECT", "SHOW", "DESCRIBE", "EXPLAIN"}:
+        if op in {
+            "SELECT", "SHOW", "DESCRIBE", "EXPLAIN", "FIND", "FINDONE", "GET",
+            "HGET", "MGET", "QUERY", "SCAN", "GETITEM", "SEARCH", "AGGREGATE", "MATCH",
+        }:
             return {"level": "read", "score": 0.2}
-        if op in {"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"}:
+        if op in {
+            "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "INSERTONE", "UPDATEONE",
+            "DELETEONE", "SET", "HSET", "DEL", "PUTITEM", "UPDATEITEM", "DELETEITEM", "INDEX",
+        }:
             return {"level": "write", "score": 0.8}
-        if op in {"CREATE", "DROP", "ALTER", "TRUNCATE"}:
+        if op in {"CREATE", "DROP", "ALTER", "TRUNCATE", "CREATEINDEX", "DROPINDEX"}:
             return {"level": "ddl", "score": 1.0}
         if "DROP" in fallback.upper() or "TRUNCATE" in fallback.upper():
             return {"level": "ddl", "score": 1.0}
@@ -344,6 +398,7 @@ class DbTrackingService:
             "name": node.name,
             "file_path": node.metadata.file_path,
             "additional_data": node.metadata.additional_data,
+            "dialect_context": self._dialect_context(node),
         }
         return [entity for entity in entities if self._entry_matches(payload, [entity])]
 
@@ -362,6 +417,7 @@ class DbTrackingService:
                         "line_number": step.line_number,
                         "expression": expression,
                         "is_sql": self._looks_like_sql(expression),
+                        "dialect_context": DbDialectDetector.detect(expression),
                         "template_variables": self._template_variables(expression),
                     }
                 )
@@ -445,6 +501,11 @@ class DbTrackingService:
                     "table": dep.parameters.get("table"),
                     "database": dep.parameters.get("database"),
                     "host": dep.parameters.get("host"),
+                    "db_type": dep.parameters.get("db_type"),
+                    "dialect": dep.parameters.get("dialect"),
+                    "provider": dep.parameters.get("provider"),
+                    "entity_type": dep.parameters.get("entity_type"),
+                    "entity_name": dep.parameters.get("entity_name"),
                 }
                 if item not in signatures:
                     signatures.append(item)
@@ -480,6 +541,7 @@ class DbTrackingService:
             "operation": operation_match.group(1).upper() if operation_match else None,
             "tables": sorted(set(table_matches)),
             "columns": columns,
+            **DbDialectDetector.detect(text),
         }
 
     def _is_db_assertion(self, step_text: str, db_vars: Set[str]) -> bool:
@@ -493,6 +555,7 @@ class DbTrackingService:
             self.db_extractor.can_extract(step_text)
             or self._is_db_call_step(step_text)
             or self._is_db_call_expression(step_text)
+            or DbDialectDetector.detect(step_text).get("dialect") != "unknown"
         )
 
     def _is_db_call_step(self, step_text: str) -> bool:

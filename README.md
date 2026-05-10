@@ -126,7 +126,7 @@ These tools help AI understand Karate `.feature` files before editing or debuggi
 These tools help AI understand query usage, variable flow, and DB-related impact:
 
 - `db_query_index(project_name, query, limit, include_components)`
-  - indexes DB query nodes and DB executor/components with operation/table/database/host/risk/usage
+  - indexes DB query nodes and DB executor/components with operation/table/database/host/dialect/provider/risk/usage
 - `search_db_usage(project_name, query, limit)`
   - searches DB usage by table, operation, host, file path, or query keywords
 - `db_data_flow_trace(project_name, feature_path, scenario_tag, scenario_name, node_id, limit)`
@@ -135,6 +135,13 @@ These tools help AI understand query usage, variable flow, and DB-related impact
   - indexes DB-related assertion steps and links them to DB variables/query signatures
 - `db_impact_preview(project_name, changed_entities, limit)`
   - previews impacted test cases from changed DB entities (tables/schemas/hosts/DB feature paths)
+
+Dialect and DB-type detection is included in DB outputs:
+
+- SQL dialects: PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, SQLite, DB2, H2, Redshift, Snowflake, ClickHouse, and generic SQL
+- NoSQL/cache/search/graph stores: MongoDB, Redis, DynamoDB, Cassandra/CQL, Elasticsearch/OpenSearch, Neo4j/Cypher
+- Returned fields include `db_type`, `dialect`, `provider`, `dialect_confidence`, `dialect_signals`, `entity_type`, and `entity_name`
+- Detection uses Strategy + Registry + Value Object so new DB providers can be added as isolated strategies.
 
 ## Visual Reports
 

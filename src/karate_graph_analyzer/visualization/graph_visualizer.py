@@ -66,8 +66,8 @@ class GraphVisualizer:
         "LOCATOR":      {"shape": "dot",      "color": "#9e9e9e", "size": 15, "eco": "UI Flow"},
         
         # 3. DB Flow (Databases/Dots)
-        "DATABASE":     {"shape": "database", "color": "#795548", "size": 30, "eco": "DB Flow"},
-        "DB_QUERY":     {"shape": "dot",      "color": "#795548", "size": 15, "eco": "DB Flow"},
+        "DATABASE":     {"shape": "database", "color": "#795548", "size": 22, "eco": "DB Flow"},
+        "DB_QUERY":     {"shape": "dot",      "color": "#795548", "size": 11, "eco": "DB Flow"},
         
         # 4. TEST Flow (Stars/Squares)
         "TEST_CASE":    {"shape": "star",     "color": "#03a9f4", "size": 35, "eco": "Test Flow"},
@@ -98,6 +98,8 @@ class GraphVisualizer:
         "MODIFIED": "#FF9800",
         "NEUTRAL": "#9E9E9E",
     }
+
+    FIXED_SIZE_NODE_KEYS = {"DATABASE", "DB_QUERY"}
 
     def __init__(self, graph: DependencyGraph, mode: VisualizationMode = VisualizationMode.DEFAULT):
         """Initialize visualizer with dependency graph.
@@ -343,7 +345,7 @@ class GraphVisualizer:
             "title": self._build_tooltip(node)
         }
 
-        if fail_count > 0:
+        if fail_count > 0 and reg_key not in self.FIXED_SIZE_NODE_KEYS:
             node_attrs["value"] = 10 + (fail_count * 5)
 
         return node_attrs
