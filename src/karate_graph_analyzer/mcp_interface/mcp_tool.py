@@ -21,6 +21,12 @@ from karate_graph_analyzer.exporters import ExporterFactory
 from karate_graph_analyzer.mcp_interface.responses import error_response
 from karate_graph_analyzer.mcp_interface.search_tools import SearchTools
 from karate_graph_analyzer.services.graph_cache_service import GraphCacheService
+<<<<<<< Updated upstream
+=======
+from karate_graph_analyzer.services.fix_priority_service import FixPriorityService
+from karate_graph_analyzer.services.db_tracking_service import DbTrackingService
+from karate_graph_analyzer.services.feature_understanding_service import FeatureUnderstandingService
+>>>>>>> Stashed changes
 from karate_graph_analyzer.services.failure_context_service import FailureContextService
 from karate_graph_analyzer.services.project_lifecycle_service import ProjectLifecycleService
 from karate_graph_analyzer.services.query_service import QueryService
@@ -255,6 +261,104 @@ class TestSelectionSuggestionRequest(BaseModel):
     )
     limit: int = Field(default=30, ge=1, le=500, description="Max suggested test cases")
 
+<<<<<<< Updated upstream
+=======
+
+class FeatureIntentIndexRequest(BaseModel):
+    """Request model for feature intent search/index."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project")
+    query: Optional[str] = Field(default=None, description="Optional intent keyword filter")
+    limit: int = Field(default=100, ge=1, le=500, description="Max scenarios returned")
+
+
+class FeatureScenarioSelectorRequest(BaseModel):
+    """Request model for selecting feature scenarios."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project")
+    feature_path: Optional[str] = Field(default=None, description="Feature path or path fragment")
+    scenario_tag: Optional[str] = Field(default=None, description="Scenario tag, e.g. @TC-103")
+    scenario_name: Optional[str] = Field(default=None, description="Scenario name fragment")
+    node_id: Optional[str] = Field(default=None, description="Optional graph node id")
+    limit: int = Field(default=50, ge=1, le=500, description="Max scenarios returned")
+
+
+class AssertionMapRequest(BaseModel):
+    """Request model for assertion map."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project")
+    query: Optional[str] = Field(default=None, description="Optional assertion keyword filter")
+    limit: int = Field(default=100, ge=1, le=500, description="Max assertions returned")
+
+
+class CallReadDeepContextRequest(FeatureScenarioSelectorRequest):
+    """Request model for call-read deep context."""
+
+    max_depth: int = Field(default=2, ge=0, le=5, description="Nested call/read depth")
+
+
+class AiFeatureContextPackRequest(FeatureScenarioSelectorRequest):
+    """Request model for AI feature context pack."""
+
+    max_call_depth: int = Field(default=2, ge=0, le=5, description="Nested call/read depth")
+
+
+class ScenarioSimilarityMapRequest(BaseModel):
+    """Request model for scenario similarity mapping."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project")
+    query: Optional[str] = Field(default=None, description="Optional scenario keyword filter")
+    limit: int = Field(default=50, ge=1, le=500, description="Max anchor scenarios returned")
+    top_k: int = Field(default=3, ge=1, le=10, description="Max similar scenarios per anchor")
+
+
+class FeatureReuseAdvisorRequest(BaseModel):
+    """Request model for duplicate step/flow reuse advisor."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project")
+    min_group_size: int = Field(default=2, ge=2, le=50, description="Minimum duplicate locations")
+    min_flow_length: int = Field(default=3, ge=2, le=10, description="Minimum duplicate flow length")
+    limit: int = Field(default=50, ge=1, le=500, description="Max groups returned")
+    include_low_signal: bool = Field(default=False, description="Include generic grammar steps")
+
+
+class DbQueryIndexRequest(BaseModel):
+    """Request model for database query/component index."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project")
+    query: Optional[str] = Field(default=None, description="Optional DB keyword filter")
+    limit: int = Field(default=100, ge=1, le=500, description="Max items returned")
+    include_components: bool = Field(
+        default=True,
+        description="Include DB components (feature files/executors) besides raw queries",
+    )
+
+
+class DbSearchUsageRequest(BaseModel):
+    """Request model for searching DB usage."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project")
+    query: str = Field(..., min_length=1, description="DB keyword, table, operation, host, or file path")
+    limit: int = Field(default=100, ge=1, le=500, description="Max results returned")
+
+
+class DbScenarioTraceRequest(FeatureScenarioSelectorRequest):
+    """Request model for DB data-flow traces by scenario selector."""
+
+
+class DbImpactPreviewRequest(BaseModel):
+    """Request model for DB impact preview from changed entities."""
+
+    project_name: str = Field(..., min_length=1, description="Name of the project")
+    changed_entities: List[str] = Field(
+        ...,
+        min_length=1,
+        description="Changed DB entities such as tables, schemas, hosts, or DB feature paths",
+    )
+    limit: int = Field(default=50, ge=1, le=500, description="Max impacted test cases returned")
+
+
+>>>>>>> Stashed changes
 class KarateGraphAnalyzerTool:
     """MCP protocol interface for graph analyzer."""
 
@@ -524,6 +628,35 @@ class KarateGraphAnalyzerTool:
 
         return self._with_search_tools(_action)
 
+<<<<<<< Updated upstream
+=======
+    def _feature_understanding_service(
+        self,
+        project_name: str,
+    ) -> tuple[Optional[FeatureUnderstandingService], Optional[Dict[str, Any]]]:
+        project = self.registry.get(project_name)
+        if not project:
+            return None, self._error_response(
+                3003,
+                "PROJECT_MANAGEMENT",
+                f"Project '{project_name}' not found in registry",
+            )
+        return FeatureUnderstandingService(project, self.graphs.get(project_name)), None
+
+    def _db_tracking_service(
+        self,
+        project_name: str,
+    ) -> tuple[Optional[DbTrackingService], Optional[Dict[str, Any]]]:
+        project = self.registry.get(project_name)
+        if not project:
+            return None, self._error_response(
+                3003,
+                "PROJECT_MANAGEMENT",
+                f"Project '{project_name}' not found in registry",
+            )
+        return DbTrackingService(project, self.graphs.get(project_name)), None
+
+>>>>>>> Stashed changes
     def register_project(
         self,
         name: str,
@@ -1602,6 +1735,438 @@ class KarateGraphAnalyzerTool:
             logger.error(f"Failed to suggest test selection: {e}")
             return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
+<<<<<<< Updated upstream
+=======
+    def feature_intent_index(
+        self,
+        project_name: str,
+        query: Optional[str] = None,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Index scenario intent summaries so AI can search feature behavior."""
+        try:
+            request = FeatureIntentIndexRequest(
+                project_name=project_name,
+                query=query,
+                limit=limit,
+            )
+            service, error = self._feature_understanding_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "feature-intent-index",
+                "project_name": request.project_name,
+                "query": request.query,
+                **service.feature_intent_index(request.query, request.limit),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build feature intent index: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def variable_data_flow_trace(
+        self,
+        project_name: str,
+        feature_path: Optional[str] = None,
+        scenario_tag: Optional[str] = None,
+        scenario_name: Optional[str] = None,
+        node_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Trace feature variables from definition/source to usage points."""
+        try:
+            request = FeatureScenarioSelectorRequest(
+                project_name=project_name,
+                feature_path=feature_path,
+                scenario_tag=scenario_tag,
+                scenario_name=scenario_name,
+                node_id=node_id,
+                limit=limit,
+            )
+            service, error = self._feature_understanding_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "variable-data-flow-trace",
+                "project_name": request.project_name,
+                **service.variable_data_flow_trace(
+                    request.feature_path,
+                    request.scenario_tag,
+                    request.scenario_name,
+                    request.node_id,
+                    request.limit,
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build variable data flow trace: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def assertion_map(
+        self,
+        project_name: str,
+        query: Optional[str] = None,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Index status/match/assert steps across feature files."""
+        try:
+            request = AssertionMapRequest(project_name=project_name, query=query, limit=limit)
+            service, error = self._feature_understanding_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "assertion-map",
+                "project_name": request.project_name,
+                "query": request.query,
+                **service.assertion_map(request.query, request.limit),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build assertion map: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def call_read_deep_context(
+        self,
+        project_name: str,
+        feature_path: Optional[str] = None,
+        scenario_tag: Optional[str] = None,
+        scenario_name: Optional[str] = None,
+        node_id: Optional[str] = None,
+        max_depth: int = 2,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Return nested call/read context for selected scenarios."""
+        try:
+            request = CallReadDeepContextRequest(
+                project_name=project_name,
+                feature_path=feature_path,
+                scenario_tag=scenario_tag,
+                scenario_name=scenario_name,
+                node_id=node_id,
+                max_depth=max_depth,
+                limit=limit,
+            )
+            service, error = self._feature_understanding_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "call-read-deep-context",
+                "project_name": request.project_name,
+                **service.call_read_deep_context(
+                    request.feature_path,
+                    request.scenario_tag,
+                    request.scenario_name,
+                    request.node_id,
+                    request.max_depth,
+                    request.limit,
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build call/read deep context: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def ai_feature_context_pack(
+        self,
+        project_name: str,
+        feature_path: Optional[str] = None,
+        scenario_tag: Optional[str] = None,
+        scenario_name: Optional[str] = None,
+        node_id: Optional[str] = None,
+        max_call_depth: int = 2,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Build an AI-ready feature pack: intent, variables, assertions, calls, graph context."""
+        try:
+            request = AiFeatureContextPackRequest(
+                project_name=project_name,
+                feature_path=feature_path,
+                scenario_tag=scenario_tag,
+                scenario_name=scenario_name,
+                node_id=node_id,
+                max_call_depth=max_call_depth,
+                limit=limit,
+            )
+            service, error = self._feature_understanding_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "ai-feature-context-pack",
+                "project_name": request.project_name,
+                **service.ai_feature_context_pack(
+                    request.feature_path,
+                    request.scenario_tag,
+                    request.scenario_name,
+                    request.node_id,
+                    request.max_call_depth,
+                    request.limit,
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build AI feature context pack: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def feature_behavior_map(
+        self,
+        project_name: str,
+        feature_path: Optional[str] = None,
+        scenario_tag: Optional[str] = None,
+        scenario_name: Optional[str] = None,
+        node_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Build scenario behavior map: preconditions, actions, expectations."""
+        try:
+            request = FeatureScenarioSelectorRequest(
+                project_name=project_name,
+                feature_path=feature_path,
+                scenario_tag=scenario_tag,
+                scenario_name=scenario_name,
+                node_id=node_id,
+                limit=limit,
+            )
+            service, error = self._feature_understanding_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "feature-behavior-map",
+                "project_name": request.project_name,
+                **service.feature_behavior_map(
+                    request.feature_path,
+                    request.scenario_tag,
+                    request.scenario_name,
+                    request.node_id,
+                    request.limit,
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build feature behavior map: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def scenario_similarity_map(
+        self,
+        project_name: str,
+        query: Optional[str] = None,
+        limit: int = 50,
+        top_k: int = 3,
+    ) -> Dict[str, Any]:
+        """Build scenario similarity map from intent keywords."""
+        try:
+            request = ScenarioSimilarityMapRequest(
+                project_name=project_name,
+                query=query,
+                limit=limit,
+                top_k=top_k,
+            )
+            service, error = self._feature_understanding_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "scenario-similarity-map",
+                "project_name": request.project_name,
+                "query": request.query,
+                **service.scenario_similarity_map(
+                    request.query,
+                    request.limit,
+                    request.top_k,
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build scenario similarity map: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def feature_reuse_advisor(
+        self,
+        project_name: str,
+        min_group_size: int = 2,
+        min_flow_length: int = 3,
+        limit: int = 50,
+        include_low_signal: bool = False,
+    ) -> Dict[str, Any]:
+        """Find duplicate feature steps/flows and return AI-safe refactor suggestions."""
+        try:
+            request = FeatureReuseAdvisorRequest(
+                project_name=project_name,
+                min_group_size=min_group_size,
+                min_flow_length=min_flow_length,
+                limit=limit,
+                include_low_signal=include_low_signal,
+            )
+            service, error = self._feature_understanding_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "feature-reuse-advisor",
+                "project_name": request.project_name,
+                **service.feature_reuse_advisor(
+                    request.min_group_size,
+                    request.min_flow_length,
+                    request.limit,
+                    request.include_low_signal,
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build feature reuse advisor: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def db_query_index(
+        self,
+        project_name: str,
+        query: Optional[str] = None,
+        limit: int = 100,
+        include_components: bool = True,
+    ) -> Dict[str, Any]:
+        """Build/search DB query and DB component index."""
+        try:
+            request = DbQueryIndexRequest(
+                project_name=project_name,
+                query=query,
+                limit=limit,
+                include_components=include_components,
+            )
+            service, error = self._db_tracking_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "db-query-index",
+                "project_name": request.project_name,
+                "query": request.query,
+                **service.db_query_index(
+                    request.query,
+                    request.limit,
+                    request.include_components,
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build DB query index: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def search_db_usage(
+        self,
+        project_name: str,
+        query: str,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Search DB usage by table/query/operation/host/path keywords."""
+        try:
+            request = DbSearchUsageRequest(
+                project_name=project_name,
+                query=query,
+                limit=limit,
+            )
+            service, error = self._db_tracking_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "search-db-usage",
+                "project_name": request.project_name,
+                "query": request.query,
+                **service.search_db_usage(request.query, request.limit),
+            }
+        except Exception as e:
+            logger.error(f"Failed to search DB usage: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def db_data_flow_trace(
+        self,
+        project_name: str,
+        feature_path: Optional[str] = None,
+        scenario_tag: Optional[str] = None,
+        scenario_name: Optional[str] = None,
+        node_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Trace DB-related variables/calls/assertions in selected scenarios."""
+        try:
+            request = DbScenarioTraceRequest(
+                project_name=project_name,
+                feature_path=feature_path,
+                scenario_tag=scenario_tag,
+                scenario_name=scenario_name,
+                node_id=node_id,
+                limit=limit,
+            )
+            service, error = self._db_tracking_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "db-data-flow-trace",
+                "project_name": request.project_name,
+                **service.db_data_flow_trace(
+                    request.feature_path,
+                    request.scenario_tag,
+                    request.scenario_name,
+                    request.node_id,
+                    request.limit,
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build DB data flow trace: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def db_assertion_map(
+        self,
+        project_name: str,
+        query: Optional[str] = None,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Index DB-related assertions across feature files."""
+        try:
+            request = DbQueryIndexRequest(
+                project_name=project_name,
+                query=query,
+                limit=limit,
+                include_components=True,
+            )
+            service, error = self._db_tracking_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "db-assertion-map",
+                "project_name": request.project_name,
+                "query": request.query,
+                **service.db_assertion_map(request.query, request.limit),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build DB assertion map: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def db_impact_preview(
+        self,
+        project_name: str,
+        changed_entities: List[str],
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Preview impacted tests from changed DB entities."""
+        try:
+            request = DbImpactPreviewRequest(
+                project_name=project_name,
+                changed_entities=changed_entities,
+                limit=limit,
+            )
+            service, error = self._db_tracking_service(request.project_name)
+            if error:
+                return error
+            return {
+                "success": True,
+                "preset": "db-impact-preview",
+                "project_name": request.project_name,
+                "changed_entities": request.changed_entities,
+                **service.db_impact_preview(request.changed_entities, request.limit),
+            }
+        except Exception as e:
+            logger.error(f"Failed to build DB impact preview: {e}", exc_info=True)
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+>>>>>>> Stashed changes
     def prioritize_fix_queue(self, project_name: str, limit: int = 10) -> Dict[str, Any]:
         """Preset: rank components to fix first by impact + risk."""
         request = QueryPresetRequest(project_name=project_name, limit=limit)
