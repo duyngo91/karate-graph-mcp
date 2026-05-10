@@ -1,7 +1,6 @@
 """Search source functions that can be reused before adding new helpers."""
 
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -11,38 +10,6 @@ from karate_graph_analyzer.parser.extractors.javascript_structure_extractor impo
     JavaScriptStructureExtractor,
 )
 from karate_graph_analyzer.utils.source_snippet import get_source_snippet
-
-
-@dataclass(frozen=True)
-class CandidateScoringContext:
-    """Prepared text fields used by reusable-function ranking."""
-
-    name: str
-    snippet: str
-    terms: List[str]
-    aliases: List[str]
-    tags: List[str]
-    graph_hit: Optional[Dict[str, Any]]
-
-    @property
-    def name_text(self) -> str:
-        return self.name.lower()
-
-    @property
-    def source_text(self) -> str:
-        return self.snippet.lower()
-
-    @property
-    def alias_text(self) -> str:
-        return " ".join(self.aliases).lower()
-
-    @property
-    def tag_text(self) -> str:
-        return " ".join(self.tags).lower()
-
-    @property
-    def combined_text(self) -> str:
-        return f"{self.name_text} {self.source_text} {self.alias_text} {self.tag_text}"
 
 
 class ReusableFunctionSearchService:
@@ -326,14 +293,14 @@ class ReusableFunctionSearchService:
         snippet = get_source_snippet(file_path, line_number, context_lines=4)
         inferred_tags = self._infer_tags(name, search_text or snippet)
         aliases = self._build_aliases(name, inferred_tags)
-        score, reasons = self._score_candidate(CandidateScoringContext(
+        score, reasons = self._score_candidate(
             name=name,
             snippet=search_text or snippet,
             terms=terms,
             graph_hit=graph_hit,
             aliases=aliases,
             tags=inferred_tags,
-        ))
+        )
         usage_count = graph_hit.get("usage_count", 0) if graph_hit else 0
         return {
             "language": language,
@@ -355,48 +322,59 @@ class ReusableFunctionSearchService:
             "source_snippet": snippet,
         }
 
-    def _score_candidate(self, context: CandidateScoringContext) -> Tuple[int, List[str]]:
+    def _score_candidate(
+        self,
+        name: str,
+        snippet: str,
+        terms: List[str],
+        graph_hit: Optional[Dict[str, Any]],
+        aliases: List[str],
+        tags: List[str],
+    ) -> Tuple[int, List[str]]:
         score = 0
         reasons: List[str] = []
+        name_text = name.lower()
+        source_text = snippet.lower()
+        alias_text = " ".join(aliases).lower()
+        tag_text = " ".join(tags).lower()
+        combined_text = f"{name_text} {source_text} {alias_text} {tag_text}"
 
-        if not all(term in context.combined_text for term in context.terms):
+        if not all(term in combined_text for term in terms):
             return 0, []
 
-        if all(term in context.name_text for term in context.terms):
+        if all(term in name_text for term in terms):
             score += 80
             reasons.append("function_name")
         else:
-            name_hits = [term for term in context.terms if term in context.name_text]
+            name_hits = [term for term in terms if term in name_text]
             if name_hits:
                 score += 25 + (10 * len(name_hits))
                 reasons.append("partial_name")
 
-        source_hits = [term for term in context.terms if term in context.source_text]
-        if len(source_hits) == len(context.terms):
+        source_hits = [term for term in terms if term in source_text]
+        if len(source_hits) == len(terms):
             score += 35
             reasons.append("source_snippet")
         elif source_hits:
             score += 8 * len(source_hits)
             reasons.append("partial_source")
 
-        alias_hits = [term for term in context.terms if term in context.alias_text]
+        alias_hits = [term for term in terms if term in alias_text]
         if alias_hits:
             score += 10 * len(alias_hits)
             reasons.append("alias_match")
 
-        tag_hits = [term for term in context.terms if term in context.tag_text]
+        tag_hits = [term for term in terms if term in tag_text]
         if tag_hits:
             score += 12 * len(tag_hits)
             reasons.append("tag_match")
 
-        usage_count = context.graph_hit.get("usage_count", 0) if context.graph_hit else 0
+        usage_count = graph_hit.get("usage_count", 0) if graph_hit else 0
         if score > 0 and usage_count:
             score += min(usage_count, 20)
             reasons.append("already_used")
 
-        stability_score = (
-            context.graph_hit.get("stability_score", 0.0) if context.graph_hit else 0.0
-        )
+        stability_score = graph_hit.get("stability_score", 0.0) if graph_hit else 0.0
         if score > 0 and stability_score > 0:
             score += int(stability_score * 20)
             reasons.append("stability")

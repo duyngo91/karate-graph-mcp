@@ -24,26 +24,6 @@ if TYPE_CHECKING:
 class DependencyLinker:
     """Handles linking of dependencies and building complex node structures."""
 
-    PATH_DEPENDENCY_TYPES = {
-        DependencyType.WORKFLOW,
-        DependencyType.PAGE,
-        DependencyType.LOCATOR,
-        DependencyType.COMMON,
-        DependencyType.JAVASCRIPT,
-    }
-
-    DEPENDENCY_NODE_TYPES = {
-        DependencyType.WORKFLOW: NodeType.WORKFLOW,
-        DependencyType.API: NodeType.API,
-        DependencyType.PAGE: NodeType.PAGE,
-        DependencyType.DATABASE: NodeType.DATABASE,
-        DependencyType.LOCATOR: NodeType.LOCATOR,
-        DependencyType.COMMON: NodeType.COMMON,
-        DependencyType.DATA: NodeType.DATA,
-        DependencyType.JAVA: NodeType.JAVA_CLASS,
-        DependencyType.JAVASCRIPT: NodeType.JAVASCRIPT,
-    }
-
     def __init__(self, nx_builder, context: Optional["AnalysisContext"] = None, path_classifier: Optional[Any] = None, ignored_files: Optional[set] = None, structural_builder: Optional[Any] = None) -> None:
         """Initialize with a NetworkXBuilder instance.
 
@@ -97,9 +77,21 @@ class DependencyLinker:
         project_name: str,
         node_map: Dict[Tuple, str],
         context: Any = None
-    ) -> Optional[str]:
+    ) -> str:
         """Get existing dependency node or create a new one."""
         logger.info(f"LINKING DEP: target={dep.target}, type={dep.type}, params={dep.parameters}")
+        
+        node_type_map = {
+            DependencyType.WORKFLOW: NodeType.WORKFLOW,
+            DependencyType.API: NodeType.API,
+            DependencyType.PAGE: NodeType.PAGE,
+            DependencyType.DATABASE: NodeType.DATABASE,
+            DependencyType.LOCATOR: NodeType.LOCATOR,
+            DependencyType.COMMON: NodeType.COMMON,
+            DependencyType.DATA: NodeType.DATA,
+            DependencyType.JAVA: NodeType.JAVA_CLASS,
+            DependencyType.JAVASCRIPT: NodeType.JAVASCRIPT,
+        }
 
         if dep.type == DependencyType.SETUP:
             return self.nx_builder.get_test_case_id(
@@ -109,59 +101,46 @@ class DependencyLinker:
                 dep.target
             )
 
-        node_type = self.DEPENDENCY_NODE_TYPES[dep.type]
-        abs_path, norm_target = self._resolve_dependency_target(dep, context)
+        node_type = node_type_map[dep.type]
+        # Resolve path to absolute if possible
+        # Prefer physical_path if already resolved by extractor (prevents logical vs physical mismatch)
+        abs_path = dep.parameters.get("physical_path") or dep.target
+        
+        path_dependency_types = [
+            DependencyType.WORKFLOW,
+            DependencyType.PAGE,
+            DependencyType.LOCATOR,
+            DependencyType.COMMON,
+            DependencyType.JAVASCRIPT,
+        ]
+        if context and dep.type in path_dependency_types:
+            if not dep.parameters.get("physical_path"):
+                abs_path = PathResolver.resolve(dep.target, context)
+            
+        # Normalize target for identity AFTER resolution
+        norm_target = self.normalize_path(abs_path)
+        
         logger.info(f"PATH RESOLUTION: target='{dep.target}' -> abs='{abs_path}' -> norm='{norm_target}'")
-
+        
+        # Check if target is ignored
         if norm_target in self.ignored_files:
             logger.info(f"IGNORING TARGET: {norm_target}")
             return None
-
-        metadata = self._build_dependency_metadata(
-            dep=dep,
-            project_name=project_name,
-            node_type=node_type,
-            abs_path=abs_path,
-            context=context,
-        )
-
-        if dep.type == DependencyType.API:
-            return self.create_api_hierarchy(dep.target, metadata, node_map)
-
-        if dep.type == DependencyType.JAVA:
-            java_node_id = self._link_java_method(norm_target, metadata, node_map, dep)
-            if java_node_id:
-                return java_node_id
-
-        return self._link_standard_dependency_node(
-            dep=dep,
-            node_type=node_type,
-            norm_target=norm_target,
-            metadata=metadata,
-            node_map=node_map,
-        )
-
-    def _resolve_dependency_target(self, dep: Dependency, context: Any = None) -> Tuple[str, str]:
-        """Resolve physical path if possible and return absolute + normalized identity."""
-        abs_path = dep.parameters.get("physical_path") or dep.target
-        if context and dep.type in self.PATH_DEPENDENCY_TYPES and not dep.parameters.get("physical_path"):
-            abs_path = PathResolver.resolve(dep.target, context)
-        return abs_path, self.normalize_path(abs_path)
-
-    def _build_dependency_metadata(
-        self,
-        dep: Dependency,
-        project_name: str,
-        node_type: NodeType,
-        abs_path: str,
-        context: Any = None,
-    ) -> NodeMetadata:
-        file_path = self._dependency_file_path(dep, abs_path)
+            
+        # Determine file_path for metadata
+        file_path = abs_path if dep.type in path_dependency_types else dep.parameters.get("file_path")
+            
+        # Resolve flow and category
         category = ComponentCategory.UNKNOWN
         flow = FlowType.UNKNOWN
         if self.path_classifier:
             category = self.path_classifier.classify_component_category(file_path)
             flow = self.path_classifier.resolve_flow(node_type)
+
+        # Resolve environment variants if it's a variable
+        env_variants = {}
+        if context and ('${' in dep.target or any(v in dep.target for v in context.parser_config.variable_patterns.keys())):
+            env_variants = PathResolver.get_env_variants(dep.target, context)
 
         metadata = NodeMetadata(
             file_path=file_path,
@@ -170,84 +149,52 @@ class DependencyLinker:
             project_name=project_name,
             category=category,
             flow=flow,
-            environment_variants=self._environment_variants(dep, context),
+            environment_variants=env_variants,
             additional_data=dep.parameters,
         )
-
+        
+        # Add business domain classification
         if self.path_classifier and file_path:
-            metadata.additional_data["feature"] = self.path_classifier.detect_business_domain(file_path)
-        return metadata
+            feature = self.path_classifier.detect_business_domain(file_path)
+            metadata.additional_data['feature'] = feature
+        
+        # API handled separately due to hierarchy
+        if dep.type == DependencyType.API:
+            return self.create_api_hierarchy(dep.target, metadata, node_map)
+            
+        if dep.type == DependencyType.JAVA:
+            method_name = dep.parameters.get("method_name")
+            if method_name:
+                logger.info(f"LINKING JAVA METHOD: {norm_target}.{method_name}")
+                # 1. Create/Get the Java Class node
+                class_node_id = self._get_or_create_node(
+                    NodeType.JAVA_CLASS, norm_target, metadata, node_map, self.nx_builder.add_java_class_node
+                )
+                
+                # 2. Create/Get the Java Method node (ID: class.method)
+                method_id = self._get_or_create_node(
+                    NodeType.JAVA_METHOD, f"{norm_target}.{method_name}", metadata, node_map, self.nx_builder.add_java_method_node
+                )
+                
+                # 3. Link Method -> Class (CONTAINS)
+                self.nx_builder.add_dependency(method_id, class_node_id, DependencyType.CONTAINS)
+                
+                return method_id
 
-    def _dependency_file_path(self, dep: Dependency, abs_path: str) -> Optional[str]:
-        if dep.type in self.PATH_DEPENDENCY_TYPES:
-            return abs_path
-        return dep.parameters.get("file_path")
-
-    def _environment_variants(self, dep: Dependency, context: Any = None) -> Dict[str, str]:
-        if not context:
-            return {}
-        has_env_ref = "${" in dep.target or any(
-            variable in dep.target
-            for variable in context.parser_config.variable_patterns.keys()
-        )
-        return PathResolver.get_env_variants(dep.target, context) if has_env_ref else {}
-
-    def _link_java_method(
-        self,
-        norm_target: str,
-        metadata: NodeMetadata,
-        node_map: Dict[Tuple, str],
-        dep: Dependency,
-    ) -> Optional[str]:
-        method_name = dep.parameters.get("method_name")
-        if not method_name:
-            return None
-
-        logger.info(f"LINKING JAVA METHOD: {norm_target}.{method_name}")
-        class_node_id = self._get_or_create_node(
-            NodeType.JAVA_CLASS,
-            norm_target,
-            metadata,
-            node_map,
-            self.nx_builder.add_java_class_node,
-        )
-        method_id = self._get_or_create_node(
-            NodeType.JAVA_METHOD,
-            f"{norm_target}.{method_name}",
-            metadata,
-            node_map,
-            self.nx_builder.add_java_method_node,
-        )
-        self.nx_builder.add_dependency(method_id, class_node_id, DependencyType.CONTAINS)
-        return method_id
-
-    def _link_standard_dependency_node(
-        self,
-        dep: Dependency,
-        node_type: NodeType,
-        norm_target: str,
-        metadata: NodeMetadata,
-        node_map: Dict[Tuple, str],
-    ) -> str:
+        # Common pattern for WORKFLOW, COMMON, PAGE, LOCATOR, DATABASE
         node_id = self._get_or_create_node(
-            node_type,
-            norm_target,
-            metadata,
+            node_type, 
+            norm_target, 
+            metadata, 
             node_map,
-            self._get_creation_func(node_type),
+            self._get_creation_func(node_type)
         )
-
-        scenario_tag = dep.parameters.get("scenario_tag")
+        
+        # Special handling for Scenario/Action tags
+        scenario_tag = dep.parameters.get('scenario_tag')
         if scenario_tag and node_type in [NodeType.WORKFLOW, NodeType.COMMON, NodeType.PAGE]:
-            return self._handle_tag_subnode(
-                node_id,
-                node_type,
-                norm_target,
-                scenario_tag,
-                metadata,
-                node_map,
-                dep.type,
-            )
+            return self._handle_tag_subnode(node_id, node_type, norm_target, scenario_tag, metadata, node_map, dep.type)
+            
         return node_id
 
     def _get_creation_func(self, node_type: NodeType):

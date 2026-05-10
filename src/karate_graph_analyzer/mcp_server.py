@@ -557,6 +557,96 @@ def feature_reuse_advisor(
     )
 
 @mcp.tool()
+def db_query_index(
+    project_name: str,
+    query: Optional[str] = None,
+    limit: int = 100,
+    include_components: bool = True,
+) -> Dict[str, Any]:
+    """
+    Build/search DB query and DB component index.
+
+    Args:
+        project_name: Name of the registered project.
+        query: Optional DB keyword filter.
+        limit: Maximum items to return.
+        include_components: Include DB feature/executor components besides raw SQL nodes.
+    """
+    return analyzer_tool.db_query_index(project_name, query, limit, include_components)
+
+@mcp.tool()
+def search_db_usage(
+    project_name: str,
+    query: str,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """
+    Search DB usage by table/query/operation/host/path keywords.
+
+    Args:
+        project_name: Name of the registered project.
+        query: DB keyword, table name, operation, host, or path.
+        limit: Maximum results to return.
+    """
+    return analyzer_tool.search_db_usage(project_name, query, limit)
+
+@mcp.tool()
+def db_data_flow_trace(
+    project_name: str,
+    feature_path: Optional[str] = None,
+    scenario_tag: Optional[str] = None,
+    scenario_name: Optional[str] = None,
+    node_id: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Trace DB-related variable/call/assertion flow in selected scenarios.
+
+    Args:
+        project_name: Name of the registered project.
+        feature_path: Optional feature path or path fragment.
+        scenario_tag: Optional scenario tag such as @VerifyOrderStatus.
+        scenario_name: Optional scenario name fragment.
+        node_id: Optional graph node id.
+        limit: Maximum traces to return.
+    """
+    return analyzer_tool.db_data_flow_trace(
+        project_name, feature_path, scenario_tag, scenario_name, node_id, limit
+    )
+
+@mcp.tool()
+def db_assertion_map(
+    project_name: str,
+    query: Optional[str] = None,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """
+    Index DB-related assertions across feature files.
+
+    Args:
+        project_name: Name of the registered project.
+        query: Optional DB assertion keyword filter.
+        limit: Maximum assertions to return.
+    """
+    return analyzer_tool.db_assertion_map(project_name, query, limit)
+
+@mcp.tool()
+def db_impact_preview(
+    project_name: str,
+    changed_entities: List[str],
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Preview impacted tests from changed DB entities.
+
+    Args:
+        project_name: Name of the registered project.
+        changed_entities: Changed tables, schema names, DB hosts, or DB feature paths.
+        limit: Maximum impacted test cases to return.
+    """
+    return analyzer_tool.db_impact_preview(project_name, changed_entities, limit)
+
+@mcp.tool()
 def flaky_risk(project_name: str, limit: int = 10) -> Dict[str, Any]:
     """
     Preset query: test cases with mixed pass/fail history (flaky risk).

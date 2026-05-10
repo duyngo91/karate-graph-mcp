@@ -44,6 +44,89 @@ function escapeHtml(text) {
         .replace(/'/g, '&#039;');
 }
 
+function getDisplayData(nodeId) {
+    return nodeMetadata[nodeId]?.additional_data?.display_data || {};
+}
+
+function normalizeCaseId(value) {
+    return String(value || '').trim().replace(/^@+/, '');
+}
+
+function formatCaseId(value) {
+    const clean = normalizeCaseId(value);
+    return clean ? `@${clean}` : '';
+}
+
+function getNodeTags(node, data) {
+    if (Array.isArray(data?.jira_tags) && data.jira_tags.length) {
+        return data.jira_tags;
+    }
+    const details = data?.details || {};
+    if (Array.isArray(details.jira_tags) && details.jira_tags.length) {
+        return details.jira_tags;
+    }
+    if (Array.isArray(node?.additional_data?.jira_tags)) {
+        return node.additional_data.jira_tags;
+    }
+    return [];
+}
+
+function getPrimaryTestCaseId(nodeId, dataOverride) {
+    const node = nodeMetadata[nodeId];
+    const data = dataOverride || getDisplayData(nodeId);
+    const directId = normalizeCaseId(data.test_case_id || node?.additional_data?.test_case_id);
+    if (directId) return directId;
+
+    const tags = getNodeTags(node, data).map(normalizeCaseId).filter(Boolean);
+    return tags[0] || '';
+}
+
+function isCaseLikeNode(node, data) {
+    const type = String(data?.type_label || node?.type || '').toUpperCase();
+    return type === 'TEST_CASE' || type === 'SCENARIO' || type === 'ACTION';
+}
+
+function stripCaseIdPrefix(name, testCaseId) {
+    const cleanId = normalizeCaseId(testCaseId);
+    if (!cleanId) return String(name || '');
+    return String(name || '')
+        .replace(new RegExp(`^@?${cleanId}\\s*[-:|]?\\s*`, 'i'), '')
+        .trim();
+}
+
+function getNodeDisplayName(nodeId, fallbackName) {
+    const node = nodeMetadata[nodeId];
+    const data = getDisplayData(nodeId);
+    const baseName = data.display_name || data.name || fallbackName || node?.name || nodeId;
+    const testCaseId = getPrimaryTestCaseId(nodeId, data);
+
+    if (!testCaseId || !isCaseLikeNode(node, data)) {
+        return baseName;
+    }
+
+    const cleanName = stripCaseIdPrefix(baseName, testCaseId) || node?.name || fallbackName || nodeId;
+    return `${formatCaseId(testCaseId)} - ${cleanName}`;
+}
+
+function buildCaseTitleHtml(nodeId, fallbackName) {
+    const testCaseId = getPrimaryTestCaseId(nodeId);
+    const displayName = getNodeDisplayName(nodeId, fallbackName);
+    const cleanName = stripCaseIdPrefix(displayName, testCaseId);
+
+    if (!testCaseId) {
+        return `<span class="test-case-name">${escapeHtml(displayName)}</span>`;
+    }
+
+    return `
+        <span class="test-case-id-badge">${escapeHtml(formatCaseId(testCaseId))}</span>
+        <span class="test-case-name">${escapeHtml(cleanName)}</span>
+    `;
+}
+
+function getHotspotDisplayName(hotspot) {
+    return getNodeDisplayName(hotspot?.node_id, hotspot?.name || hotspot?.node_id || '');
+}
+
 function getTerminalStatus(testCaseNodeId) {
     const node = nodeMetadata[testCaseNodeId];
     if (!node) return 'UNKNOWN';
@@ -180,7 +263,7 @@ function buildHotspotRows(hotspots, totalProjectFailures) {
 
 function compareHotspotRows(a, b) {
     const dir = hotspotSortDir === 'asc' ? 1 : -1;
-    if (hotspotSortKey === 'name') return dir * a.hs.name.localeCompare(b.hs.name);
+    if (hotspotSortKey === 'name') return dir * getHotspotDisplayName(a.hs).localeCompare(getHotspotDisplayName(b.hs));
     if (hotspotSortKey === 'type') return dir * getHotspotType(a.hs).localeCompare(getHotspotType(b.hs));
     if (hotspotSortKey === 'failed') return dir * (a.failedCount - b.failedCount);
     if (hotspotSortKey === 'rate') return dir * ((a.hs.failure_percentage || 0) - (b.hs.failure_percentage || 0));
@@ -191,9 +274,14 @@ function compareHotspotRows(a, b) {
 function getSelectedFailedCases(selectedHotspot) {
     return (selectedHotspot?.affected_failed_test_cases || []).map(tc => {
         const id = getHotspotTestCaseId(tc);
+        const testCaseId = getPrimaryTestCaseId(id) || normalizeCaseId((tc.jira_tags || [])[0]);
+        const displayName = getNodeDisplayName(id, tc.name || id);
         return {
             id: id,
             name: tc.name || id,
+            displayName,
+            testCaseId,
+            testCaseLabel: testCaseId ? formatCaseId(testCaseId) : '',
             line: tc.line_number || '',
             file: tc.file_path || '',
             depth: tc.depth || 0,
@@ -215,6 +303,47 @@ function getErrorGroups(failedCases) {
 }
 
 // --- SEARCH ---
+function normalizeSearchTerm(value) {
+    return normalizeCaseId(value).toLowerCase();
+}
+
+function getNodeSearchText(nodeId, node, data) {
+    const details = data.details || {};
+    const tags = getNodeTags(node, data);
+    const testCaseId = getPrimaryTestCaseId(nodeId, data);
+
+    return [
+        nodeId,
+        node?.name,
+        data.name,
+        data.display_name,
+        getNodeDisplayName(nodeId),
+        data.type_label,
+        data.file_path,
+        details.file_path,
+        details.workflow_path,
+        details.scenario_tag,
+        testCaseId,
+        formatCaseId(testCaseId),
+        ...tags,
+        ...tags.map(normalizeCaseId)
+    ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function renderSearchResultItem(match) {
+    return `
+        <div class="search-result-item" onclick="focusOnNode('${match.id}')">
+            <div class="search-result-content">
+                <div class="search-result-title">
+                    ${buildCaseTitleHtml(match.id, match.name)}
+                </div>
+                <div class="search-result-meta">${escapeHtml(match.filePath || match.id)}</div>
+            </div>
+            <span class="search-result-type">${escapeHtml(match.typeLabel)}</span>
+        </div>
+    `;
+}
+
 function handleSearch(query) {
     const resultsDiv = document.getElementById('search-results');
     if (!query || query.length < 2) {
@@ -223,27 +352,28 @@ function handleSearch(query) {
     }
 
     const matches = [];
-    const searchTerms = query.toLowerCase().split(' ');
+    const searchTerms = query.split(/\s+/).map(normalizeSearchTerm).filter(Boolean);
     
     for (const id in nodeMetadata) {
         const node = nodeMetadata[id];
         const data = node.additional_data?.display_data;
         if (!data) continue;
 
-        const text = (data.name + ' ' + (data.type_label || '')).toLowerCase();
+        const text = getNodeSearchText(id, node, data);
         if (searchTerms.every(t => text.includes(t))) {
-            matches.push({ id, ...data });
+            matches.push({
+                id,
+                name: data.name,
+                displayName: getNodeDisplayName(id),
+                typeLabel: data.type_label || node.type || 'UNKNOWN',
+                filePath: data.file_path || data.details?.workflow_path || ''
+            });
         }
         if (matches.length >= 15) break;
     }
 
     if (matches.length > 0) {
-        resultsDiv.innerHTML = matches.map(m => `
-            <div class="search-result-item" onclick="focusOnNode('${m.id}')" style="padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; justify-content: space-between;">
-                <span style="font-size: 13px;">${m.name}</span>
-                <span style="font-size: 10px; background: #eee; padding: 2px 4px; border-radius: 4px;">${m.type_label}</span>
-            </div>
-        `).join('');
+        resultsDiv.innerHTML = matches.map(renderSearchResultItem).join('');
         resultsDiv.style.display = 'block';
     } else {
         resultsDiv.style.display = 'none';
@@ -336,10 +466,14 @@ function renderNodeDetails(model) {
 }
 
 function renderNodeIdentitySection(model) {
+    const testCaseId = getPrimaryTestCaseId(model.nodeId, model.data);
     return `
         <div class="detail-section">
-            <div class="detail-label">Component Name</div>
-            <div class="detail-value" style="font-size: 16px; font-weight: 700;">${escapeHtml(model.data.name)}</div>
+            <div class="detail-label">${testCaseId ? 'Test Case' : 'Component Name'}</div>
+            <div class="detail-value detail-title-row" style="font-size: 16px; font-weight: 700;">
+                ${buildCaseTitleHtml(model.nodeId, model.data.name)}
+            </div>
+            ${testCaseId ? `<div class="detail-subvalue">Name: ${escapeHtml(stripCaseIdPrefix(getNodeDisplayName(model.nodeId), testCaseId))}</div>` : ''}
             <div style="font-size: 10px; color: #888; margin-top: 4px;">ID: ${escapeHtml(model.nodeId)}</div>
         </div>
     `;
@@ -781,12 +915,13 @@ function renderHotspotTable(rows) {
 }
 
 function renderHotspotTableRow(row) {
+    const hotspotName = getHotspotDisplayName(row.hs);
     return `
         <tr class="${row.isSelected ? 'selected' : ''}" onclick="selectHotspot('${row.hs.node_id}')">
             <td>
                 <div class="hotspot-name-cell">
                     <span class="hotspot-color-dot" style="background:${row.profile.color};"></span>
-                    <span>${escapeHtml(row.hs.name)}</span>
+                    <span>${escapeHtml(hotspotName)}</span>
                 </div>
             </td>
             <td>${escapeHtml(getHotspotType(row.hs))}</td>
@@ -800,12 +935,13 @@ function renderHotspotTableRow(row) {
 
 function renderHotspotAnalysis(model) {
     if (!model.selectedHotspot) return '';
+    const selectedHotspotName = getHotspotDisplayName(model.selectedHotspot);
 
     return `
         <div class="hotspot-analysis-panel">
             <div class="hotspot-section-title">Selected Hotspot Analysis</div>
             <div class="hotspot-analysis-header">
-                <div class="hotspot-analysis-name">${escapeHtml(model.selectedHotspot.name)}</div>
+                <div class="hotspot-analysis-name">${escapeHtml(selectedHotspotName)}</div>
                 <span class="impact-badge" style="background: ${model.selectedProfile.color}; font-size: 10px;">
                     ${model.selectedProfile.label}
                 </span>
@@ -848,8 +984,11 @@ function renderFailedCaseList(failedCases) {
 function renderFailedCaseItem(testCase) {
     return `
         <div class="hotspot-case-item" onclick="focusOnNode('${testCase.id}')">
-            <div class="hotspot-case-title">${escapeHtml(testCase.name)}</div>
+            <div class="hotspot-case-title test-case-title-row">
+                ${buildCaseTitleHtml(testCase.id, testCase.displayName || testCase.name)}
+            </div>
             <div class="hotspot-case-meta">
+                ${testCase.testCaseLabel ? `<span>Test Case ID: <b>${escapeHtml(testCase.testCaseLabel)}</b></span>` : ''}
                 <span>Status: <b>${escapeHtml(testCase.status)}</b></span>
                 <span>Depth: <b>${testCase.depth}</b></span>
                 <span>Line: <b>${testCase.line || 'N/A'}</b></span>
@@ -857,15 +996,6 @@ function renderFailedCaseItem(testCase) {
             <div class="hotspot-case-error">${escapeHtml(testCase.reason)}</div>
             <div class="hotspot-case-step">Failed Step: ${escapeHtml(testCase.failedStep)}</div>
             <div class="hotspot-case-path">Path: ${escapeHtml(testCase.path.join(' -> '))}</div>
-        </div>
-    `;
-}
-
-function renderStatusMetric(label, value, color, status) {
-    return `
-        <div onclick="filterNodes('${status}')" style="cursor: pointer;">
-            <div style="font-size: 10px; color: ${color}; font-weight: 800;">${label}</div>
-            <div style="font-size: 18px; font-weight: 800; color: ${color};">${value}</div>
         </div>
     `;
 }
@@ -892,10 +1022,22 @@ function renderStatusSummary() {
                     <div style="font-size: 32px; font-weight: 900; color: ${rate >= 90 ? '#4caf50' : '#f44336'};">${rate}%</div>
                 </div>
                 <div style="display: flex; gap: 20px; text-align: right;">
-                    ${renderStatusMetric('PASS', passed, '#2e7d32', 'passed')}
-                    ${renderStatusMetric('FAIL', failed, '#c62828', 'failed')}
-                    ${renderStatusMetric('PARTIAL', partial, '#e65100', 'partial')}
-                    ${renderStatusMetric('TOTAL', total, '#444', 'all')}
+                    <div onclick="filterNodes('passed')" style="cursor: pointer;">
+                        <div style="font-size: 10px; color: #4caf50; font-weight: 800;">PASS</div>
+                        <div style="font-size: 18px; font-weight: 800; color: #2e7d32;">${passed}</div>
+                    </div>
+                    <div onclick="filterNodes('failed')" style="cursor: pointer;">
+                        <div style="font-size: 10px; color: #f44336; font-weight: 800;">FAIL</div>
+                        <div style="font-size: 18px; font-weight: 800; color: #c62828;">${failed}</div>
+                    </div>
+                    <div onclick="filterNodes('partial')" style="cursor: pointer;">
+                        <div style="font-size: 10px; color: #e65100; font-weight: 800;">PARTIAL</div>
+                        <div style="font-size: 18px; font-weight: 800; color: #e65100;">${partial}</div>
+                    </div>
+                    <div onclick="filterNodes('all')" style="cursor: pointer;">
+                        <div style="font-size: 10px; color: #999; font-weight: 800;">TOTAL</div>
+                        <div style="font-size: 18px; font-weight: 800; color: #444;">${total}</div>
+                    </div>
                     <div onclick="switchTab('legend')" style="cursor: pointer; border-left: 1px solid #ddd; padding-left: 15px; margin-left: 5px;">
                         <div style="font-size: 10px; color: #1976d2; font-weight: 800;">LEGEND</div>
                         <div style="font-size: 18px; font-weight: 800; color: #1976d2;">📖</div>
