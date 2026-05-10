@@ -1,6 +1,4 @@
-"""
-Proper MCP Server for Karate Feature Graph Analyzer using FastMCP.
-"""
+"""MCP server for Karate Graph using FastMCP."""
 
 import argparse
 import logging
@@ -19,7 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize FastMCP
-mcp = FastMCP("Karate-Graph-Analyzer")
+mcp = FastMCP("Karate-Graph")
 
 # Initialize Implementation Tool
 # We use a global instance to persist state across tool calls if needed
@@ -32,7 +30,7 @@ def mcp_health() -> Dict[str, Any]:
     """Health probe for MCP connectivity and server state."""
     return {
         "success": True,
-        "server": "Karate-Graph-Analyzer",
+        "server": "Karate-Graph",
         "version": __version__,
         "registered_projects": len(analyzer_tool.registry.list()),
         "analyzed_projects": len(analyzer_tool.graphs),
@@ -44,7 +42,7 @@ def mcp_version() -> Dict[str, Any]:
     """Return server and package version metadata."""
     return {
         "success": True,
-        "server": "Karate-Graph-Analyzer",
+        "server": "Karate-Graph",
         "version": __version__,
     }
 
