@@ -1,4 +1,4 @@
-# Karate Feature Graph Analyzer (MCP-Powered)
+# Karate Graph (MCP-Powered)
 
 A Model Context Protocol (MCP) tool for AI agents to analyze Karate Framework projects, build dependency graphs, and generate interactive reports.
 
@@ -15,9 +15,15 @@ A Model Context Protocol (MCP) tool for AI agents to analyze Karate Framework pr
 1. Install
 
 ```bash
+pip install karate-graph
+```
+
+For local development:
+
+```bash
 git clone <repository-url>
-cd karate-feature-graph-analyzer
-pip install -e .
+cd karate-graph
+pip install -r requirements-dev.txt
 ```
 
 2. Configure MCP client
@@ -25,9 +31,9 @@ pip install -e .
 ```json
 {
   "mcpServers": {
-    "karate-analyzer": {
-      "command": "python",
-      "args": ["-m", "karate_graph_analyzer"],
+    "karate-graph": {
+      "command": "karate-graph-mcp",
+      "args": [],
       "env": {
         "PYTHONPATH": "C:/path/to/repo/src",
         "PYTHONIOENCODING": "utf-8"
@@ -152,10 +158,29 @@ Interactive HTML graph output is generated under each project `output/` folder.
 - Test cases are shown as `@TEST-ID - Scenario name` when Jira/test-case tags exist.
 - Dashboard search supports `TEST-ID`, `@TEST-ID`, scenario name, component name, and feature path.
 
+## Publishing
+
+Build and validate locally first:
+
+```bash
+python -m pip install build twine
+python -m build
+python -m twine check dist/*
+```
+
+Publish to TestPyPI before PyPI:
+
+```bash
+python -m twine upload --repository testpypi dist/*
+python -m twine upload dist/*
+```
+
+Use an API token for upload. The package ships report assets (`style.css`, `script.js`) via package data.
+
 ## Project Structure
 
 ```text
-karate-feature-graph-analyzer/
+karate-graph/
 ├── src/karate_graph_analyzer/
 │   ├── mcp_server.py
 │   ├── mcp_interface/
