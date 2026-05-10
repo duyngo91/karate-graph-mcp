@@ -109,11 +109,15 @@ class GraphMLExporter(IGraphExporter):
             )
             edges[edge.id] = edge
 
-        # Detect cycles (GraphML doesn't store cycles)
-        try:
-            cycles = list(nx.simple_cycles(nx_graph))
-        except Exception:
+        # Detect cycles (GraphML doesn't store cycles). Full cycle enumeration
+        # can be very expensive for large imported graphs, so cap it.
+        if nx_graph.number_of_nodes() > 20000:
             cycles = []
+        else:
+            try:
+                cycles = list(nx.simple_cycles(nx_graph))
+            except Exception:
+                cycles = []
 
         return DependencyGraph(
             project_name=project_name, nodes=nodes, edges=edges, cycles=cycles

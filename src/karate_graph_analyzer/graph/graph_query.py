@@ -6,7 +6,7 @@ Edges in the dependency graph point from caller to callee. In other words,
 "who uses this?" therefore traverse incoming edges.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from karate_graph_analyzer.models import DependencyGraph, InvertedIndices, Node, NodeType
 
@@ -19,6 +19,12 @@ class GraphQuery:
         self.indices = InvertedIndices()
         self.indices.build_from_graph(graph)
         self._build_adjacency_lists()
+        self.nodes_by_type: Dict[NodeType, List[Node]] = {}
+        for node in self.graph.nodes.values():
+            self.nodes_by_type.setdefault(node.type, []).append(node)
+        self._caller_cache: Dict[str, List[Node]] = {}
+        self._usage_index: Optional[Dict[str, Set[str]]] = None
+        self._direct_dependency_cache: Dict[str, List[Dict[str, Any]]] = {}
 
     def _build_adjacency_lists(self) -> None:
         self.outgoing: Dict[str, List[str]] = {}
@@ -28,8 +34,46 @@ class GraphQuery:
             self.outgoing.setdefault(edge.from_node, []).append(edge.to_node)
             self.incoming.setdefault(edge.to_node, []).append(edge.from_node)
 
+    def _nodes_of_type(self, node_type: NodeType) -> List[Node]:
+        return self.nodes_by_type.get(node_type, [])
+
+    def _build_usage_index(self) -> Dict[str, Set[str]]:
+        """Build node -> reachable TEST_CASE ids once for broad usage queries."""
+        if self._usage_index is not None:
+            return self._usage_index
+
+        usage: Dict[str, Set[str]] = {}
+        test_cases = self._nodes_of_type(NodeType.TEST_CASE)
+        for test_case in test_cases:
+            seen: Set[str] = set()
+            stack = list(self.outgoing.get(test_case.id, []))
+            while stack:
+                node_id = stack.pop()
+                if node_id in seen:
+                    continue
+                seen.add(node_id)
+                usage.setdefault(node_id, set()).add(test_case.id)
+                stack.extend(self.outgoing.get(node_id, []))
+
+        self._usage_index = usage
+        self._caller_cache.clear()
+        return usage
+
     def _collect_test_case_callers(self, node_id: str) -> List[Node]:
         """Return TEST_CASE nodes that can reach the dependency node."""
+        if node_id in self._caller_cache:
+            return self._caller_cache[node_id]
+
+        if self._usage_index is not None:
+            result = [
+                self.graph.nodes[test_id]
+                for test_id in self._usage_index.get(node_id, set())
+                if test_id in self.graph.nodes
+            ]
+            result.sort(key=lambda n: (n.metadata.file_path or "", n.metadata.line_number or 0, n.id))
+            self._caller_cache[node_id] = result
+            return result
+
         result: List[Node] = []
         seen = set()
         stack = list(self.incoming.get(node_id, []))
@@ -49,7 +93,44 @@ class GraphQuery:
                 stack.extend(self.incoming.get(caller_id, []))
 
         result.sort(key=lambda n: (n.metadata.file_path or "", n.metadata.line_number or 0, n.id))
+        self._caller_cache[node_id] = result
         return result
+
+    def get_usage_count(self, node: Node) -> int:
+        """Return how many TEST_CASE nodes can reach this node."""
+        if self._usage_index is not None:
+            return len(self._usage_index.get(node.id, set()))
+        return len(self._collect_test_case_callers(node.id))
+
+    def _direct_dependencies(self, node: Node) -> List[Dict[str, Any]]:
+        if node.id in self._direct_dependency_cache:
+            return self._direct_dependency_cache[node.id]
+
+        direct_dependencies: List[Dict[str, Any]] = []
+        for target_id in self.outgoing.get(node.id, []):
+            target_node = self.graph.nodes.get(target_id)
+            if target_node:
+                direct_dependencies.append(
+                    {"id": target_node.id, "type": target_node.type.value, "name": target_node.name}
+                )
+        self._direct_dependency_cache[node.id] = direct_dependencies
+        return direct_dependencies
+
+    def _test_case_payloads(
+        self,
+        used_by: List[Node],
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        selected = used_by if limit is None else used_by[: max(limit, 0)]
+        return [
+            {
+                "id": n.id,
+                "name": n.name,
+                "jira_tags": n.metadata.jira_tags,
+                "test_case_id": n.metadata.jira_tags[0].lstrip('@') if n.metadata.jira_tags else None,
+            }
+            for n in selected
+        ]
 
     def _dedupe_nodes(self, nodes: List[Node]) -> List[Node]:
         result: List[Node] = []
@@ -67,9 +148,10 @@ class GraphQuery:
         return self.graph.nodes.get(node_id)
 
     def find_nodes_by_name(self, name: str, node_type: Optional[NodeType] = None) -> List[Node]:
+        nodes = self._nodes_of_type(node_type) if node_type else self.graph.nodes.values()
         return [
             node
-            for node in self.graph.nodes.values()
+            for node in nodes
             if node.name == name and (node_type is None or node.type == node_type)
         ]
 
@@ -77,9 +159,10 @@ class GraphQuery:
         self, pattern: str, node_type: Optional[NodeType] = None
     ) -> List[Node]:
         pattern_lower = pattern.lower()
+        nodes = self._nodes_of_type(node_type) if node_type else self.graph.nodes.values()
         return [
             node
-            for node in self.graph.nodes.values()
+            for node in nodes
             if pattern_lower in node.name.lower() and (node_type is None or node.type == node_type)
         ]
 
@@ -114,8 +197,8 @@ class GraphQuery:
     # ========== Workflow/Scenario Query Methods ==========
 
     def find_workflow_by_path(self, path: str) -> Optional[Node]:
-        for node in self.graph.nodes.values():
-            if node.type == NodeType.WORKFLOW and (node.name == path or path in node.name):
+        for node in self._nodes_of_type(NodeType.WORKFLOW):
+            if node.name == path or path in node.name:
                 return node
         return None
 
@@ -123,7 +206,7 @@ class GraphQuery:
         """Search workflows and scenarios by keyword in name, tags, or description."""
         keyword_lower = keyword.lower()
         results = []
-        for node in self.graph.nodes.values():
+        for node in self._nodes_of_type(NodeType.WORKFLOW) + self._nodes_of_type(NodeType.SCENARIO):
             if node.type in (NodeType.WORKFLOW, NodeType.SCENARIO):
                 # Search in name
                 if keyword_lower in node.name.lower():
@@ -161,8 +244,8 @@ class GraphQuery:
     # ========== Page/Action Query Methods ==========
 
     def find_page_by_path(self, path: str) -> Optional[Node]:
-        for node in self.graph.nodes.values():
-            if node.type == NodeType.PAGE and (node.name == path or path in node.name):
+        for node in self._nodes_of_type(NodeType.PAGE):
+            if node.name == path or path in node.name:
                 return node
         return None
 
@@ -214,32 +297,25 @@ class GraphQuery:
 
     # ========== Usage Statistics Methods ==========
 
-    def get_usage_stats(self, node: Node) -> Dict:
+    def get_usage_stats(
+        self,
+        node: Node,
+        include_test_cases: bool = True,
+        test_case_limit: Optional[int] = None,
+    ) -> Dict:
         used_by = self._collect_test_case_callers(node.id)
-        direct_dependencies = []
-        for target_id in self.outgoing.get(node.id, []):
-            target_node = self.graph.nodes.get(target_id)
-            if target_node:
-                direct_dependencies.append(
-                    {"id": target_node.id, "type": target_node.type.value, "name": target_node.name}
-                )
 
         stats = {
             "node_id": node.id,
             "node_type": node.type.value,
             "node_name": node.name,
             "usage_count": len(used_by),
-            "used_by_test_cases": [
-                {
-                    "id": n.id, 
-                    "name": n.name, 
-                    "jira_tags": n.metadata.jira_tags,
-                    "test_case_id": n.metadata.jira_tags[0].lstrip('@') if n.metadata.jira_tags else None
-                }
-                for n in used_by
-            ],
-            "direct_dependencies": direct_dependencies,
+            "used_by_test_cases": self._test_case_payloads(used_by, test_case_limit) if include_test_cases else [],
+            "direct_dependencies": self._direct_dependencies(node),
         }
+        if test_case_limit is not None and len(used_by) > max(test_case_limit, 0):
+            stats["used_by_test_cases_truncated"] = True
+            stats["used_by_test_cases_total"] = len(used_by)
 
         if node.type == NodeType.WORKFLOW:
             scenarios = self.find_scenarios_in_workflow(node)
@@ -248,7 +324,7 @@ class GraphQuery:
                 {
                     "id": s.id,
                     "tag": s.metadata.additional_data.get("scenario_tag"),
-                    "usage_count": len(self._collect_test_case_callers(s.id)),
+                    "usage_count": self.get_usage_count(s),
                 }
                 for s in scenarios
             ]
@@ -259,7 +335,7 @@ class GraphQuery:
                 {
                     "id": a.id,
                     "tag": a.metadata.additional_data.get("action_tag"),
-                    "usage_count": len(self._collect_test_case_callers(a.id)),
+                    "usage_count": self.get_usage_count(a),
                 }
                 for a in actions
             ]
@@ -267,22 +343,23 @@ class GraphQuery:
         return stats
 
     def get_most_used_apis(self, limit: int = 10) -> List[Tuple[Node, int]]:
+        self._build_usage_index()
         api_usage = []
-        for node in self.graph.nodes.values():
-            if node.type == NodeType.API:
-                api_usage.append((node, len(self.find_test_cases_using_api(node))))
+        for node in self._nodes_of_type(NodeType.API):
+            api_usage.append((node, self.get_usage_count(node)))
         api_usage.sort(key=lambda x: x[1], reverse=True)
         return api_usage[:limit]
 
     def get_most_used_workflows(self, limit: int = 10) -> List[Tuple[Node, int]]:
+        self._build_usage_index()
         workflow_usage = []
-        for node in self.graph.nodes.values():
-            if node.type == NodeType.WORKFLOW:
-                workflow_usage.append((node, len(self.find_test_cases_using_workflow(node))))
+        for node in self._nodes_of_type(NodeType.WORKFLOW):
+            workflow_usage.append((node, self.get_usage_count(node)))
         workflow_usage.sort(key=lambda x: x[1], reverse=True)
         return workflow_usage[:limit]
 
     def get_unused_components(self) -> Dict[str, List[Node]]:
+        self._build_usage_index()
         unused = {
             "workflows": [],
             "pages": [],
@@ -296,7 +373,7 @@ class GraphQuery:
         for node in self.graph.nodes.values():
             if node.type == NodeType.TEST_CASE:
                 continue
-            if self._collect_test_case_callers(node.id):
+            if self.get_usage_count(node):
                 continue
 
             if node.type == NodeType.WORKFLOW:
@@ -318,7 +395,7 @@ class GraphQuery:
 
     def get_api_stats(self, keyword: Optional[str] = None) -> Dict[str, Any]:
         """Get API statistics for the graph."""
-        api_nodes = [n for n in self.graph.nodes.values() if n.type == NodeType.API]
+        api_nodes = list(self._nodes_of_type(NodeType.API))
         
         if keyword:
             keyword_lower = keyword.lower()
@@ -356,7 +433,7 @@ class GraphQuery:
 
     def get_page_stats(self, domain: Optional[str] = None) -> Dict[str, Any]:
         """Get Page statistics for the graph."""
-        page_nodes = [n for n in self.graph.nodes.values() if n.type == NodeType.PAGE]
+        page_nodes = list(self._nodes_of_type(NodeType.PAGE))
         
         domain_stats = {}
         for node in page_nodes:

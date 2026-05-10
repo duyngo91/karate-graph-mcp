@@ -3,7 +3,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 
 from karate_graph_analyzer.models import DependencyGraph, NodeType, DependencyType
 from karate_graph_analyzer.utils.failure_signature import (
@@ -20,6 +20,10 @@ class ExecutionReportParser:
     def __init__(self, graph: DependencyGraph, run_context: Optional[Dict[str, Any]] = None):
         self.graph = graph
         self.run_context = run_context or self._default_run_context()
+        self._scenario_index: Optional[Dict[str, List[Any]]] = None
+        self._incoming: Optional[Dict[str, List[str]]] = None
+        self._outgoing: Optional[Dict[str, List[str]]] = None
+        self._updated_leaf_ids: Set[str] = set()
 
     def _default_run_context(self) -> Dict[str, Any]:
         applied_at = datetime.now(timezone.utc).isoformat()
@@ -59,11 +63,8 @@ class ExecutionReportParser:
             if self._process_feature(feature):
                 applied_count += 1
         
-        # Identify all leaf nodes that have status and trigger propagation
         if applied_count > 0:
-            for node_id, node in self.graph.nodes.items():
-                if node.type in [NodeType.TEST_CASE, NodeType.SCENARIO] and node.execution_status:
-                    self._propagate_status_to_parents(node_id)
+            self._propagate_updated_nodes()
                     
         return applied_count
 
@@ -136,10 +137,8 @@ class ExecutionReportParser:
             except Exception as e:
                 logger.error(f"Failed to apply report {path}: {str(e)}")
         
-        # Identify all leaf nodes that have status and trigger propagation
-        for node_id, node in self.graph.nodes.items():
-            if node.type in [NodeType.TEST_CASE, NodeType.SCENARIO] and node.execution_status:
-                self._propagate_status_to_parents(node_id)
+        if total_applied > 0:
+            self._propagate_updated_nodes()
                 
         return total_applied
 
@@ -175,7 +174,7 @@ class ExecutionReportParser:
 
             status = self._detect_scenario_status(scenario_data)
             matched = False
-            for node in self.graph.nodes.values():
+            for node in self._candidate_nodes_for_scenario(scenario_name, feature_uri):
                 if not self._node_matches_scenario(node, scenario_name, feature_uri):
                     continue
 
@@ -197,6 +196,45 @@ class ExecutionReportParser:
                 logger.debug(f"Could not map scenario '{scenario_name}' in '{feature_uri}' to any graph node")
                 
         return applied
+
+    def _build_scenario_index(self) -> Dict[str, List[Any]]:
+        if self._scenario_index is not None:
+            return self._scenario_index
+
+        index: Dict[str, List[Any]] = {}
+        for node in self.graph.nodes.values():
+            if node.type not in [NodeType.SCENARIO, NodeType.TEST_CASE]:
+                continue
+            keys = {
+                self._normalize_scenario_name(node.name),
+                self._normalize_scenario_name(str(node.metadata.additional_data.get("scenario_name", ""))),
+                self._normalize_scenario_name(str(node.metadata.additional_data.get("display_name", ""))),
+            }
+            for key in keys:
+                if key:
+                    index.setdefault(key, []).append(node)
+        self._scenario_index = index
+        return index
+
+    def _candidate_nodes_for_scenario(self, scenario_name: str, feature_uri: str) -> List[Any]:
+        normalized_name = self._normalize_scenario_name(scenario_name)
+        candidates = list(self._build_scenario_index().get(normalized_name, []))
+        if candidates:
+            return candidates
+
+        # Preserve fuzzy matching for small graphs without turning large reports
+        # into report-scenarios x graph-nodes scans.
+        if len(self.graph.nodes) <= 5000:
+            return [
+                node for node in self.graph.nodes.values()
+                if node.type in [NodeType.SCENARIO, NodeType.TEST_CASE]
+            ]
+        logger.debug(
+            "No indexed graph node matched report scenario '%s' in '%s'",
+            scenario_name,
+            feature_uri,
+        )
+        return []
 
     def _extract_scenarios(self, feature: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Handle the common Karate/Cucumber report shapes."""
@@ -353,7 +391,9 @@ class ExecutionReportParser:
         return self._uri_matches(feature_uri, node.metadata.file_path or "")
 
     def _normalize_scenario_name(self, name: str) -> str:
-        return re.sub(r'^\[[^\]]+\]\s*', '', name.lower()).lower()
+        normalized = re.sub(r'^\[[^\]]+\]\s*', '', (name or "").lower()).strip()
+        normalized = re.sub(r'^@\S+\s*[-:|]?\s*', '', normalized).strip()
+        return normalized
 
     def _uri_matches(self, feature_uri: str, node_file: str) -> bool:
         if not feature_uri:
@@ -388,6 +428,8 @@ class ExecutionReportParser:
             return
             
         node.execution_status = status
+        if node.type in [NodeType.TEST_CASE, NodeType.SCENARIO]:
+            self._updated_leaf_ids.add(node_id)
         
         # Initialize counts for leaf nodes
         if node.type in [NodeType.TEST_CASE, NodeType.SCENARIO]:
@@ -449,18 +491,40 @@ class ExecutionReportParser:
             deduped.append(run)
         runs[:] = list(reversed(deduped))
 
+    def _build_adjacency(self) -> tuple[Dict[str, List[str]], Dict[str, List[str]]]:
+        if self._incoming is not None and self._outgoing is not None:
+            return self._incoming, self._outgoing
+
+        incoming: Dict[str, List[str]] = {}
+        outgoing: Dict[str, List[str]] = {}
+        for edge in self.graph.edges.values():
+            incoming.setdefault(edge.to_node, []).append(edge.from_node)
+            outgoing.setdefault(edge.from_node, []).append(edge.to_node)
+        self._incoming = incoming
+        self._outgoing = outgoing
+        return incoming, outgoing
+
+    def _propagate_updated_nodes(self) -> None:
+        pending = list(self._updated_leaf_ids)
+        self._updated_leaf_ids.clear()
+        seen: Set[str] = set()
+        for node_id in pending:
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            self._propagate_status_to_parents(node_id)
+
     def _propagate_status_to_parents(self, node_id: str):
         """Propagate status up and aggregate failure counts for structural nodes."""
-        # Find all parent nodes that have an edge pointing TO this node
-        parents = [edge.from_node for edge in self.graph.edges.values() if edge.to_node == node_id]
+        incoming, outgoing = self._build_adjacency()
+        parents = incoming.get(node_id, [])
         
         for parent_id in parents:
             parent = self.graph.nodes.get(parent_id)
             if not parent:
                 continue
             
-            # Find all direct children of this parent by looking at global edges
-            child_ids = [edge.to_node for edge in self.graph.edges.values() if edge.from_node == parent_id]
+            child_ids = outgoing.get(parent_id, [])
             children = [self.graph.nodes[cid] for cid in child_ids if cid in self.graph.nodes]
             
             if not children:

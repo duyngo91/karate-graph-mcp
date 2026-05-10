@@ -9,12 +9,12 @@ import glob
 import json
 import os
 import tempfile
-from pathlib import Path
 from dataclasses import asdict
 from typing import List, Optional
 
 from karate_graph_analyzer.interfaces import IProjectRepository
 from karate_graph_analyzer.models import ParserConfig, Project
+from karate_graph_analyzer.utils.scan_filters import is_excluded_path
 
 
 class ProjectRegistry(IProjectRepository):
@@ -57,9 +57,10 @@ class ProjectRegistry(IProjectRepository):
                 f"Project root path does not exist: {project.root_path}"
             )
 
-        # Validate that project contains at least one feature file
-        feature_files = self._find_feature_files(project)
-        if not feature_files:
+        # Validate that project contains at least one feature file. For very
+        # large projects this short-circuits on the first match instead of
+        # materializing the full file list during registration.
+        if not self._has_feature_file(project):
             raise ValueError(
                 f"No feature files found in project '{project.name}' at path "
                 f"{project.root_path} matching patterns {project.feature_file_patterns}"
@@ -196,23 +197,21 @@ class ProjectRegistry(IProjectRepository):
         """
         feature_files = []
         for pattern in project.feature_file_patterns:
-            # Construct full path pattern
             full_pattern = os.path.join(project.root_path, pattern)
-            # Use glob to find matching files
-            matches = glob.glob(full_pattern, recursive=True)
-            
-            # Filter out common build and dependency directories
-            filtered_matches = []
-            exclude_dirs = {"target", "build", "node_modules", ".git"}
-            for m in matches:
-                path_parts = [p.lower() for p in Path(m).parts]
-                if not any(ex in path_parts for ex in exclude_dirs):
-                    filtered_matches.append(m)
-            
-            feature_files.extend(filtered_matches)
+            for match in glob.iglob(full_pattern, recursive=True):
+                if not is_excluded_path(match, project.parser_config):
+                    feature_files.append(match)
 
-        # Remove duplicates and return
-        return list(set(feature_files))
+        return sorted(set(feature_files))
+
+    def _has_feature_file(self, project: Project) -> bool:
+        """Return True as soon as a matching feature file is found."""
+        for pattern in project.feature_file_patterns:
+            full_pattern = os.path.join(project.root_path, pattern)
+            for match in glob.iglob(full_pattern, recursive=True):
+                if not is_excluded_path(match, project.parser_config):
+                    return True
+        return False
 
     def list_all(self) -> List[Project]:
         """List all registered projects (IProjectRepository interface).

@@ -132,6 +132,7 @@ LAYOUT_TEMPLATE = """
         
         {{SCRIPT_INJECTION}}
     </script>
+    {{PROGRESSIVE_MANIFEST_TAG}}
 </body>
 </html>
 """

@@ -87,7 +87,7 @@ class JsonExporter(IGraphExporter):
             "include_structural_nodes": getattr(graph, "include_structural_nodes", False),
         }
 
-        return json.dumps(export_data, indent=2)
+        return json.dumps(export_data, ensure_ascii=False, separators=(",", ":"))
 
     def import_graph(self, data: str, project_name: str) -> DependencyGraph:
         """Import graph from JSON format.

@@ -13,6 +13,7 @@ import os
 from typing import TYPE_CHECKING, List
 
 from karate_graph_analyzer.models import DependencyGraph, ParseError
+from karate_graph_analyzer.utils.scan_filters import is_excluded_path
 
 if TYPE_CHECKING:
     from karate_graph_analyzer.cache.cache_manager import CacheManager
@@ -90,5 +91,7 @@ class IncrementalUpdater:
         feature_files = []
         for pattern in project.feature_file_patterns:
             full_pattern = os.path.join(project.root_path, pattern)
-            feature_files.extend(glob.glob(full_pattern, recursive=True))
+            for match in glob.iglob(full_pattern, recursive=True):
+                if not is_excluded_path(match, project.parser_config):
+                    feature_files.append(match)
         return sorted(set(feature_files))

@@ -614,6 +614,68 @@ body, html {
 }
 #top-hud > div { pointer-events: auto; }
 
+.progressive-loader {
+    width: 360px;
+    padding: 12px;
+    margin-left: auto;
+    pointer-events: auto;
+}
+.progressive-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+}
+.progressive-title {
+    font-size: 11px;
+    font-weight: 900;
+    color: #455a64;
+    text-transform: uppercase;
+}
+.progressive-counts {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #263238;
+    font-weight: 700;
+}
+.progressive-actions {
+    display: flex;
+    gap: 6px;
+}
+.progressive-actions button {
+    border: 1px solid #cfd8dc;
+    background: #ffffff;
+    color: #263238;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 11px;
+    font-weight: 800;
+    cursor: pointer;
+}
+.progressive-actions button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.progressive-bar {
+    height: 6px;
+    background: #eceff1;
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 10px;
+}
+#progressive-bar-fill {
+    height: 100%;
+    width: 0;
+    background: #1976d2;
+    transition: width 0.2s ease;
+}
+.progressive-status {
+    margin-top: 6px;
+    color: #607d8b;
+    font-size: 10px;
+    line-height: 1.35;
+}
+
 /* Glass Detail Section */
 .detail-section {
     padding: 15px 0;

@@ -235,6 +235,7 @@ class ReusableFunctionSearchService:
         query_api: GraphQuery,
     ) -> Dict[Tuple[str, str, str], Dict[str, Any]]:
         index: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+        query_api._build_usage_index()
         for node in graph.nodes.values():
             if node.type not in {NodeType.JAVA_METHOD, NodeType.JS_FUNCTION}:
                 continue
@@ -266,8 +267,8 @@ class ReusableFunctionSearchService:
         )
 
     def _graph_payload(self, node: Node, query_api: GraphQuery) -> Dict[str, Any]:
-        stats = query_api.get_usage_stats(node)
-        usage_examples = self._build_usage_examples(node, query_api, limit=3)
+        stats = query_api.get_usage_stats(node, test_case_limit=10)
+        usage_examples = self._build_usage_examples(node, query_api, stats, limit=3)
         stability_score = self._calculate_stability_score(node, stats, query_api)
         return {
             "graph_node_id": node.id,
@@ -476,10 +477,12 @@ class ReusableFunctionSearchService:
         self,
         node: Node,
         query_api: GraphQuery,
+        stats: Optional[Dict[str, Any]] = None,
         limit: int = 3,
     ) -> List[Dict[str, Any]]:
         examples: List[Dict[str, Any]] = []
-        callers = query_api.get_usage_stats(node).get("used_by_test_cases", [])[: max(limit, 0)]
+        stats = stats or query_api.get_usage_stats(node, test_case_limit=limit)
+        callers = stats.get("used_by_test_cases", [])[: max(limit, 0)]
         for caller in callers:
             test_case_id = caller.get("id")
             test_case_node = query_api.find_node_by_id(test_case_id) if test_case_id else None

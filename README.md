@@ -154,6 +154,75 @@ Notes:
 - `root_path` should be the absolute path to the Karate project.
 - `feature_file_patterns` can be omitted; default is usually `["**/*.feature"]`.
 
+For very large projects where real test cases live only under `feature(s)/**testcase`,
+enable strict test-case directory mode. This lets reusable feature packages such as
+`reuse`, `shared`, `helpers`, or `services` stay outside the test-case count without
+renaming the project structure:
+
+```text
+register_project(
+  name="karate-core",
+  root_path="E:/Project/auto/karate-fw/karate-core",
+  feature_file_patterns=["**/*.feature"],
+  parser_config={
+    "strict_test_case_directory_mode": true,
+    "test_case_directories": ["testcase", "testcases"],
+    "feature_root_directories": ["feature", "features"],
+    "default_non_test_feature_type": "COMMON",
+    "common_directories": ["common", "services", "reuse", "reusable", "shared", "helpers"],
+    "scan_exclude_directories": [
+      ".git", ".gradle", ".idea", ".karate_cache", "build", "dist",
+      "node_modules", "out", "output", "reports", "target"
+    ],
+    "javascript_file_patterns": ["**/*.js"],
+    "large_project_streaming_scan": true,
+    "scan_log_every": 2000,
+    "visualization_large_graph_threshold": 1500,
+    "visualization_physics_enabled": null,
+    "visualization_node_limit": 5000,
+    "visualization_edge_limit": 12000,
+    "visualization_progressive_enabled": true,
+    "visualization_chunk_size": 1000,
+    "visualization_auto_load_chunks": 0,
+    "cycle_detection_enabled": true,
+    "cycle_detection_node_limit": 20000,
+    "ai_context_cache_feature_threshold": 5000,
+    "ai_context_similarity_pool_limit": 1000,
+    "ai_context_duplicate_location_limit": 25
+  }
+)
+```
+
+When `parser_config` is provided, Karate Graph still keeps values auto-detected from
+`karate-config*.js` and only applies the explicit overrides above.
+
+For projects with tens of thousands of feature files, prefer narrow feature patterns
+when possible:
+
+```text
+feature_file_patterns=[
+  "src/test/java/features/**/*testcase/**/*.feature",
+  "src/test/java/feature/**/*testcase/**/*.feature",
+  "src/test/java/features/**/reuse/**/*.feature",
+  "src/test/java/feature/**/reuse/**/*.feature"
+]
+```
+
+Performance tips:
+
+- Use `large_project_streaming_scan=true` for very large repositories. It avoids keeping every parsed feature AST in memory.
+- If not set manually, streaming scan is automatically used when the matched feature count reaches `large_project_streaming_threshold` (default `20000`).
+- Keep `include_structural_nodes=false` for the first scan. Turn it on only when you need folder/file nodes in the visual graph.
+- Keep `scan_exclude_directories` updated with generated folders such as `target`, `reports`, `output`, and `node_modules`.
+- Narrow `javascript_file_patterns` if only some JavaScript folders matter, for example `["src/test/java/**/*.js", "src/test/resources/**/*.js"]`.
+- For huge graphs, leave `visualization_physics_enabled=null`. Karate Graph will disable physics automatically after `visualization_large_graph_threshold` nodes.
+- Full 100k-node interactive canvases are not practical in a browser. The report opens with a capped working view (`visualization_node_limit`) and, when `visualization_progressive_enabled=true`, writes extra `.js` chunks next to the HTML so you can load more nodes from the report without freezing the first page load.
+- Keep `visualization_auto_load_chunks=0` for very large reports. Use the report's `Load more` button to add chunks on demand.
+- Keep `cycle_detection_node_limit` enabled. Full cycle enumeration is skipped above the limit because it can dominate scan time on 100k-node graphs.
+- AI feature/DB context tools stream large feature sets instead of caching every parsed AST after `ai_context_cache_feature_threshold`.
+- `scenario_similarity_map` uses `ai_context_similarity_pool_limit` to avoid O(N²) comparisons across the whole repository.
+- Duplicate step/flow tools count all matches but only keep `ai_context_duplicate_location_limit` example locations per group.
+
 ### 3. Scan / Analyze Project
 
 Build the dependency graph:

@@ -10,6 +10,7 @@ from karate_graph_analyzer.parser.extractors.call_read_extractor import CallRead
 from karate_graph_analyzer.parser.extractors.database_extractor import DatabaseExtractor
 from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
 from karate_graph_analyzer.utils.db_dialect import DbDialectDetector
+from karate_graph_analyzer.utils.scan_filters import is_excluded_path
 
 
 class DbTrackingService:
@@ -93,7 +94,7 @@ class DbTrackingService:
     ) -> Dict[str, Any]:
         traces = []
         for feature, scenario in self._matching_scenarios(
-            feature_path, scenario_tag, scenario_name, node_id
+            feature_path, scenario_tag, scenario_name, node_id, limit
         ):
             all_steps = feature["background_steps"] + scenario.steps
             definitions = self._defined_variables(all_steps)
@@ -145,6 +146,8 @@ class DbTrackingService:
         limit: int = 100,
     ) -> Dict[str, Any]:
         assertions: List[Dict[str, Any]] = []
+        total_available = 0
+        terms = self._terms(query) if query else []
         for feature, scenario in self._iter_scenarios():
             all_steps = feature["background_steps"] + scenario.steps
             definitions = self._defined_variables(all_steps)
@@ -170,13 +173,16 @@ class DbTrackingService:
                     "db_variables": sorted(db_vars),
                     "db_query_signatures": query_signatures,
                 }
-                if not query or self._entry_matches(payload, self._terms(query)):
+                if terms and not self._entry_matches(payload, terms):
+                    continue
+                total_available += 1
+                if len(assertions) < limit:
                     assertions.append(payload)
 
         return {
-            "assertions": assertions[:limit],
-            "count": min(len(assertions), limit),
-            "total_available": len(assertions),
+            "assertions": assertions,
+            "count": len(assertions),
+            "total_available": total_available,
         }
 
     def db_impact_preview(
@@ -193,6 +199,7 @@ class DbTrackingService:
             }
 
         query_api = GraphQuery(self.graph)
+        query_api._build_usage_index()
         terms = [term.lower() for term in changed_entities if term and term.strip()]
         impacted: Dict[str, Dict[str, Any]] = {}
         matched_nodes: List[Dict[str, Any]] = []
@@ -204,7 +211,7 @@ class DbTrackingService:
             if not matched_entities:
                 continue
 
-            stats = query_api.get_usage_stats(node)
+            stats = query_api.get_usage_stats(node, test_case_limit=100)
             dialect_info = self._dialect_context(node)
             kind = self._db_node_kind(node, dialect_info)
             link_status, link_status_reason = self._db_link_status(node, kind, stats)
@@ -280,6 +287,7 @@ class DbTrackingService:
         if not self.graph:
             return []
         query_api = GraphQuery(self.graph)
+        query_api._build_usage_index()
         entries: List[Dict[str, Any]] = []
 
         for node in self.graph.nodes.values():
@@ -313,7 +321,7 @@ class DbTrackingService:
         kind = self._db_node_kind(node, dialect_info)
         store_type = self._store_type(data, node.name, dialect_info)
         risk = self._risk_level(operation, node.name)
-        stats = query_api.get_usage_stats(node)
+        stats = query_api.get_usage_stats(node, test_case_limit=25)
         link_status, link_status_reason = self._db_link_status(node, kind, stats)
 
         return {
@@ -399,28 +407,40 @@ class DbTrackingService:
 
         seen = {node.id}
         frontier = [node.id]
+        incoming = self._incoming_edge_map()
         for _ in range(max_depth):
             next_frontier = []
-            for edge in self.graph.edges.values():
-                if edge.to_node not in frontier or edge.from_node in seen:
-                    continue
-                seen.add(edge.from_node)
-                parent = self.graph.nodes.get(edge.from_node)
-                if not parent:
-                    continue
-                terms.append(parent.name)
-                terms.append(str(parent.metadata.file_path or ""))
-                terms.extend(parent.tags or [])
-                terms.extend(parent.metadata.jira_tags or [])
-                parent_data = parent.metadata.additional_data or {}
-                terms.append(str(parent_data.get("scenario_name", "")))
-                terms.extend(parent_data.get("scenario_tags", []) or [])
-                terms.append(str(parent_data.get("workflow_path", "")))
-                next_frontier.append(edge.from_node)
+            for target_id in frontier:
+                for parent_id in incoming.get(target_id, []):
+                    if parent_id in seen:
+                        continue
+                    seen.add(parent_id)
+                    parent = self.graph.nodes.get(parent_id)
+                    if not parent:
+                        continue
+                    terms.append(parent.name)
+                    terms.append(str(parent.metadata.file_path or ""))
+                    terms.extend(parent.tags or [])
+                    terms.extend(parent.metadata.jira_tags or [])
+                    parent_data = parent.metadata.additional_data or {}
+                    terms.append(str(parent_data.get("scenario_name", "")))
+                    terms.extend(parent_data.get("scenario_tags", []) or [])
+                    terms.append(str(parent_data.get("workflow_path", "")))
+                    next_frontier.append(parent_id)
             frontier = next_frontier
             if not frontier:
                 break
         return terms
+
+    def _incoming_edge_map(self) -> Dict[str, List[str]]:
+        if hasattr(self, "_incoming_edges"):
+            return self._incoming_edges
+        incoming: Dict[str, List[str]] = {}
+        if self.graph:
+            for edge in self.graph.edges.values():
+                incoming.setdefault(edge.to_node, []).append(edge.from_node)
+        self._incoming_edges = incoming
+        return incoming
 
     def _filter_by_link_status(
         self,
@@ -774,14 +794,43 @@ class DbTrackingService:
         self._feature_cache = features
         return features
 
+    def _iter_feature_asts(self) -> Iterable[Dict[str, Any]]:
+        if self._feature_cache is not None:
+            yield from self._feature_cache
+            return
+
+        files = self._feature_files()
+        threshold = getattr(
+            self.project.parser_config,
+            "ai_context_cache_feature_threshold",
+            5000,
+        )
+        if threshold <= 0 or len(files) <= threshold:
+            yield from self._feature_asts()
+            return
+
+        for file_path in files:
+            try:
+                ast = self.parser.parse_file(str(file_path))
+            except Exception:
+                continue
+            yield {
+                "file_path": str(file_path),
+                "feature_name": ast.feature_name,
+                "background_steps": ast.background_steps,
+                "scenarios": ast.scenarios,
+            }
+
     def _feature_files(self) -> List[Path]:
         files: List[Path] = []
         for pattern in self.project.feature_file_patterns or ["**/*.feature"]:
-            files.extend(self.root.glob(pattern))
-        return sorted({path.resolve() for path in files if path.is_file()})
+            for path in self.root.glob(pattern):
+                if path.is_file() and not is_excluded_path(path, self.project.parser_config):
+                    files.append(path)
+        return sorted({path.resolve() for path in files})
 
     def _iter_scenarios(self) -> Iterable[tuple[Dict[str, Any], Scenario]]:
-        for feature in self._feature_asts():
+        for feature in self._iter_feature_asts():
             for scenario in feature["scenarios"]:
                 yield feature, scenario
 
@@ -791,6 +840,7 @@ class DbTrackingService:
         scenario_tag: Optional[str],
         scenario_name: Optional[str],
         node_id: Optional[str],
+        limit: Optional[int] = None,
     ) -> List[tuple[Dict[str, Any], Scenario]]:
         node_filter = self._node_filter(node_id)
         matches = []
@@ -804,6 +854,8 @@ class DbTrackingService:
             if scenario_name and scenario_name.lower() not in scenario.name.lower():
                 continue
             matches.append((feature, scenario))
+            if limit is not None and len(matches) >= max(limit, 0):
+                break
         return matches
 
     def _node_filter(self, node_id: Optional[str]) -> Optional[Dict[str, Any]]:

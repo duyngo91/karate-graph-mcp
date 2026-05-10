@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from karate_graph_analyzer.models import DependencyGraph, NodeType, Project, Scenario, Step
 from karate_graph_analyzer.parser.extractors.call_read_extractor import CallReadExtractor
 from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
+from karate_graph_analyzer.utils.scan_filters import is_excluded_path
 
 
 class FeatureUnderstandingService:
@@ -65,15 +66,21 @@ class FeatureUnderstandingService:
         query: Optional[str] = None,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        scenarios = [self._intent_payload(feature, scenario) for feature, scenario in self._iter_scenarios()]
-        if query:
-            terms = self._terms(query)
-            scenarios = [item for item in scenarios if self._entry_matches(item, terms)]
+        scenarios = []
+        total_available = 0
+        terms = self._terms(query) if query else []
+        for feature, scenario in self._iter_scenarios():
+            item = self._intent_payload(feature, scenario)
+            if terms and not self._entry_matches(item, terms):
+                continue
+            total_available += 1
+            if len(scenarios) < limit:
+                scenarios.append(item)
 
         return {
-            "scenarios": scenarios[:limit],
-            "count": min(len(scenarios), limit),
-            "total_available": len(scenarios),
+            "scenarios": scenarios,
+            "count": len(scenarios),
+            "total_available": total_available,
         }
 
     def variable_data_flow_trace(
@@ -85,7 +92,7 @@ class FeatureUnderstandingService:
         limit: int = 50,
     ) -> Dict[str, Any]:
         traces = []
-        for feature, scenario in self._matching_scenarios(feature_path, scenario_tag, scenario_name, node_id):
+        for feature, scenario in self._matching_scenarios(feature_path, scenario_tag, scenario_name, node_id, limit):
             traces.append(
                 {
                     "feature_file": feature["file_path"],
@@ -109,30 +116,31 @@ class FeatureUnderstandingService:
         limit: int = 100,
     ) -> Dict[str, Any]:
         assertions = []
+        total_available = 0
+        terms = self._terms(query) if query else []
         for feature, scenario in self._iter_scenarios():
             for step in scenario.steps:
                 if not self._is_assertion_step(step.text):
                     continue
-                assertions.append(
-                    {
-                        "feature_file": feature["file_path"],
-                        "scenario_name": scenario.name,
-                        "line_number": step.line_number,
-                        "step": step.text,
-                        "assertion_type": self._assertion_type(step.text),
-                        "tags": scenario.tags,
-                        "jira_tags": scenario.jira_tags,
-                    }
-                )
-
-        if query:
-            terms = self._terms(query)
-            assertions = [item for item in assertions if self._entry_matches(item, terms)]
+                item = {
+                    "feature_file": feature["file_path"],
+                    "scenario_name": scenario.name,
+                    "line_number": step.line_number,
+                    "step": step.text,
+                    "assertion_type": self._assertion_type(step.text),
+                    "tags": scenario.tags,
+                    "jira_tags": scenario.jira_tags,
+                }
+                if terms and not self._entry_matches(item, terms):
+                    continue
+                total_available += 1
+                if len(assertions) < limit:
+                    assertions.append(item)
 
         return {
-            "assertions": assertions[:limit],
-            "count": min(len(assertions), limit),
-            "total_available": len(assertions),
+            "assertions": assertions,
+            "count": len(assertions),
+            "total_available": total_available,
         }
 
     def call_read_deep_context(
@@ -145,7 +153,7 @@ class FeatureUnderstandingService:
         limit: int = 50,
     ) -> Dict[str, Any]:
         contexts = []
-        for feature, scenario in self._matching_scenarios(feature_path, scenario_tag, scenario_name, node_id):
+        for feature, scenario in self._matching_scenarios(feature_path, scenario_tag, scenario_name, node_id, limit):
             contexts.append(
                 {
                     "feature_file": feature["file_path"],
@@ -173,7 +181,7 @@ class FeatureUnderstandingService:
         limit: int = 20,
     ) -> Dict[str, Any]:
         packs = []
-        for feature, scenario in self._matching_scenarios(feature_path, scenario_tag, scenario_name, node_id):
+        for feature, scenario in self._matching_scenarios(feature_path, scenario_tag, scenario_name, node_id, limit):
             packs.append(
                 {
                     "identity": self._scenario_identity(feature, scenario),
@@ -201,7 +209,7 @@ class FeatureUnderstandingService:
         limit: int = 50,
     ) -> Dict[str, Any]:
         maps = []
-        for feature, scenario in self._matching_scenarios(feature_path, scenario_tag, scenario_name, node_id):
+        for feature, scenario in self._matching_scenarios(feature_path, scenario_tag, scenario_name, node_id, limit):
             maps.append(self._behavior_for_scenario(feature, scenario))
 
         return {
@@ -216,7 +224,14 @@ class FeatureUnderstandingService:
         limit: int = 50,
         top_k: int = 3,
     ) -> Dict[str, Any]:
-        payloads = [self._intent_payload(feature, scenario) for feature, scenario in self._iter_scenarios()]
+        pool_limit = self._similarity_pool_limit(limit)
+        payloads = []
+        truncated = False
+        for index, (feature, scenario) in enumerate(self._iter_scenarios(), start=1):
+            if index > pool_limit:
+                truncated = True
+                break
+            payloads.append(self._intent_payload(feature, scenario))
         candidates = payloads
         if query:
             terms = self._terms(query)
@@ -250,6 +265,8 @@ class FeatureUnderstandingService:
             "anchors": anchors,
             "count": len(anchors),
             "total_available": len(candidates),
+            "truncated": truncated,
+            "pool_limit": pool_limit,
         }
 
     def feature_reuse_advisor(
@@ -406,7 +423,9 @@ class FeatureUnderstandingService:
         include_low_signal: bool,
     ) -> List[Dict[str, Any]]:
         grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        counts: Dict[str, int] = defaultdict(int)
         examples: Dict[str, str] = {}
+        location_limit = self._duplicate_location_limit()
         for feature, scenario in self._iter_scenarios():
             for step in scenario.steps:
                 normalized = self._normalize_step(step.text)
@@ -414,20 +433,24 @@ class FeatureUnderstandingService:
                     continue
                 if not include_low_signal and self._is_low_signal_step(normalized):
                     continue
-                grouped[normalized].append(self._location(feature, scenario, step.line_number))
+                counts[normalized] += 1
+                if len(grouped[normalized]) < location_limit:
+                    grouped[normalized].append(self._location(feature, scenario, step.line_number))
                 examples.setdefault(normalized, step.text)
 
         rows = []
         for normalized, locations in grouped.items():
-            if len(locations) < min_group_size:
+            occurrence_count = counts[normalized]
+            if occurrence_count < min_group_size:
                 continue
             rows.append(
                 {
                     "kind": "duplicate_step",
                     "normalized_step": normalized,
                     "example_step": examples[normalized],
-                    "occurrence_count": len(locations),
+                    "occurrence_count": occurrence_count,
                     "locations": locations,
+                    "locations_truncated": occurrence_count > len(locations),
                     "suggestion": "Extract this repeated step into a common feature/page/service scenario when the surrounding flow is stable.",
                 }
             )
@@ -441,7 +464,9 @@ class FeatureUnderstandingService:
         include_low_signal: bool,
     ) -> List[Dict[str, Any]]:
         grouped: Dict[Tuple[str, ...], List[Dict[str, Any]]] = defaultdict(list)
+        counts: Dict[Tuple[str, ...], int] = defaultdict(int)
         examples: Dict[Tuple[str, ...], List[str]] = {}
+        location_limit = self._duplicate_location_limit()
         for feature, scenario in self._iter_scenarios():
             steps = [
                 (self._normalize_step(step.text), step)
@@ -455,20 +480,24 @@ class FeatureUnderstandingService:
             for index in range(0, len(steps) - min_flow_length + 1):
                 window = tuple(text for text, _ in steps[index : index + min_flow_length])
                 first_step = steps[index][1]
-                grouped[window].append(self._location(feature, scenario, first_step.line_number))
+                counts[window] += 1
+                if len(grouped[window]) < location_limit:
+                    grouped[window].append(self._location(feature, scenario, first_step.line_number))
                 examples.setdefault(window, [step.text for _, step in steps[index : index + min_flow_length]])
 
         rows = []
         for window, locations in grouped.items():
-            if len(locations) < min_group_size:
+            occurrence_count = counts[window]
+            if occurrence_count < min_group_size:
                 continue
             rows.append(
                 {
                     "kind": "duplicate_flow",
                     "normalized_flow": list(window),
                     "example_steps": examples[window],
-                    "occurrence_count": len(locations),
+                    "occurrence_count": occurrence_count,
                     "locations": locations,
+                    "locations_truncated": occurrence_count > len(locations),
                     "suggestion": "Consider extracting this repeated flow into a reusable scenario with a clear tag and parameters.",
                 }
             )
@@ -525,14 +554,59 @@ class FeatureUnderstandingService:
         self._feature_cache = features
         return features
 
+    def _iter_feature_asts(self) -> Iterable[Dict[str, Any]]:
+        if self._feature_cache is not None:
+            yield from self._feature_cache
+            return
+
+        files = self._feature_files()
+        threshold = getattr(
+            self.project.parser_config,
+            "ai_context_cache_feature_threshold",
+            5000,
+        )
+        if threshold <= 0 or len(files) <= threshold:
+            yield from self._feature_asts()
+            return
+
+        for file_path in files:
+            try:
+                ast = self.parser.parse_file(str(file_path))
+            except Exception:
+                continue
+            yield {
+                "file_path": str(file_path),
+                "feature_name": ast.feature_name,
+                "background_steps": ast.background_steps,
+                "scenarios": ast.scenarios,
+            }
+
+    def _similarity_pool_limit(self, requested_limit: int) -> int:
+        configured = getattr(
+            self.project.parser_config,
+            "ai_context_similarity_pool_limit",
+            1000,
+        )
+        return max(int(configured or 1000), max(requested_limit, 1))
+
+    def _duplicate_location_limit(self) -> int:
+        configured = getattr(
+            self.project.parser_config,
+            "ai_context_duplicate_location_limit",
+            25,
+        )
+        return max(int(configured or 25), 1)
+
     def _feature_files(self) -> List[Path]:
         files: List[Path] = []
         for pattern in self.project.feature_file_patterns or ["**/*.feature"]:
-            files.extend(self.root.glob(pattern))
-        return sorted({path.resolve() for path in files if path.is_file()})
+            for path in self.root.glob(pattern):
+                if path.is_file() and not is_excluded_path(path, self.project.parser_config):
+                    files.append(path)
+        return sorted({path.resolve() for path in files})
 
     def _iter_scenarios(self) -> Iterable[Tuple[Dict[str, Any], Scenario]]:
-        for feature in self._feature_asts():
+        for feature in self._iter_feature_asts():
             for scenario in feature["scenarios"]:
                 yield feature, scenario
 
@@ -542,6 +616,7 @@ class FeatureUnderstandingService:
         scenario_tag: Optional[str],
         scenario_name: Optional[str],
         node_id: Optional[str],
+        limit: Optional[int] = None,
     ) -> List[Tuple[Dict[str, Any], Scenario]]:
         node_filter = self._node_filter(node_id)
         matches = []
@@ -555,6 +630,8 @@ class FeatureUnderstandingService:
             if scenario_name and scenario_name.lower() not in scenario.name.lower():
                 continue
             matches.append((feature, scenario))
+            if limit is not None and len(matches) >= max(limit, 0):
+                break
         return matches
 
     def _node_filter(self, node_id: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -756,7 +833,28 @@ class FeatureUnderstandingService:
     ) -> List[Tuple[Dict[str, Any], Scenario]]:
         if not resolved_path:
             return []
-        for feature in self._feature_asts():
+        target = Path(resolved_path)
+        if target.exists():
+            try:
+                ast = self.parser.parse_file(str(target))
+                feature = {
+                    "file_path": str(target.resolve()),
+                    "feature_name": ast.feature_name,
+                    "background_steps": ast.background_steps,
+                    "scenarios": ast.scenarios,
+                }
+                scenarios = feature["scenarios"]
+                if scenario_tag:
+                    scenarios = [
+                        scenario
+                        for scenario in scenarios
+                        if self._tag_matches(scenario.tags + scenario.jira_tags, scenario_tag)
+                    ]
+                return [(feature, scenario) for scenario in scenarios]
+            except Exception:
+                return []
+
+        for feature in self._iter_feature_asts():
             if not self._path_matches(feature["file_path"], resolved_path):
                 continue
             scenarios = feature["scenarios"]
@@ -802,6 +900,9 @@ class FeatureUnderstandingService:
     def _find_scenario_node_id(self, feature: Dict[str, Any], scenario: Scenario) -> Optional[str]:
         if not self.graph:
             return None
+        for node_id in self._scenario_node_index().get(self._scenario_graph_key(feature["file_path"], scenario.line_number), []):
+            return node_id
+
         for node_id, node in self.graph.nodes.items():
             if node.type not in {NodeType.TEST_CASE, NodeType.SCENARIO, NodeType.ACTION}:
                 continue
@@ -812,6 +913,24 @@ class FeatureUnderstandingService:
             if scenario.name in node.name or node.name in scenario.name:
                 return node_id
         return None
+
+    def _scenario_node_index(self) -> Dict[str, List[str]]:
+        if hasattr(self, "_scenario_graph_index"):
+            return self._scenario_graph_index
+        index: Dict[str, List[str]] = defaultdict(list)
+        if self.graph:
+            for node_id, node in self.graph.nodes.items():
+                if node.type not in {NodeType.TEST_CASE, NodeType.SCENARIO, NodeType.ACTION}:
+                    continue
+                if node.metadata.file_path and node.metadata.line_number:
+                    key = self._scenario_graph_key(node.metadata.file_path, node.metadata.line_number)
+                    index[key].append(node_id)
+        self._scenario_graph_index = index
+        return index
+
+    def _scenario_graph_key(self, file_path: str, line_number: int) -> str:
+        normalized = str(file_path).replace("\\", "/").lower()
+        return f"{normalized}:{line_number}"
 
     def _normalize_step(self, step_text: str) -> str:
         normalized = re.sub(r"\s+", " ", step_text.strip())

@@ -24,6 +24,7 @@ class GraphCacheService:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.exporter = JsonExporter()
         self.fingerprint_service = FingerprintService()
+        self._last_fingerprints: dict[tuple[str, bool], str] = {}
 
     def load_if_fresh(
         self, project: Project, include_structural_nodes: bool
@@ -47,7 +48,7 @@ class GraphCacheService:
         if payload.get("cache_version") != self.CACHE_VERSION:
             return None
 
-        expected_fingerprint = self.fingerprint_service.compute_project_fingerprint(
+        expected_fingerprint = self._compute_project_fingerprint(
             project,
             include_structural_nodes,
         )
@@ -72,9 +73,7 @@ class GraphCacheService:
             payload = {
                 "cache_version": self.CACHE_VERSION,
                 "project_name": project.name,
-                "fingerprint": self.fingerprint_service.compute_project_fingerprint(
-                    project, include_structural_nodes
-                ),
+                "fingerprint": self._get_cached_or_compute_fingerprint(project, include_structural_nodes),
                 "graph": self.exporter.export(graph),
             }
             path = self.storage_dir / f"{project.name}.json"
@@ -93,3 +92,26 @@ class GraphCacheService:
         except Exception as exc:
             logger.error("Failed to save raw graph cache for '%s': %s", project_name, exc)
             return False
+
+    def _compute_project_fingerprint(
+        self,
+        project: Project,
+        include_structural_nodes: bool,
+    ) -> str:
+        fingerprint = self.fingerprint_service.compute_project_fingerprint(
+            project,
+            include_structural_nodes,
+        )
+        self._last_fingerprints[(project.name, include_structural_nodes)] = fingerprint
+        return fingerprint
+
+    def _get_cached_or_compute_fingerprint(
+        self,
+        project: Project,
+        include_structural_nodes: bool,
+    ) -> str:
+        key = (project.name, include_structural_nodes)
+        return self._last_fingerprints.get(key) or self._compute_project_fingerprint(
+            project,
+            include_structural_nodes,
+        )

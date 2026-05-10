@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from karate_graph_analyzer.models import Project
+from karate_graph_analyzer.utils.scan_filters import is_excluded_path
 
 
 class FingerprintService:
@@ -48,24 +49,15 @@ class FingerprintService:
         feature_files: list[str] = []
         for pattern in project.feature_file_patterns:
             full_pattern = str(Path(project.root_path) / pattern)
-            matches = glob.glob(full_pattern, recursive=True)
+            for match in glob.iglob(full_pattern, recursive=True):
+                if not is_excluded_path(match, project.parser_config):
+                    feature_files.append(match)
 
-            filtered_matches = []
-            exclude_dirs = {"target", "build", "node_modules", ".git"}
-            for match in matches:
-                path_parts = [part.lower() for part in Path(match).parts]
-                if not any(excluded in path_parts for excluded in exclude_dirs):
-                    filtered_matches.append(match)
-
-            feature_files.extend(filtered_matches)
-
-        js_pattern = str(Path(project.root_path) / "**" / "*.js")
-        js_files = glob.glob(js_pattern, recursive=True)
-        exclude_dirs = {"target", "build", "node_modules", ".git", ".karate_cache"}
-        for match in js_files:
-            path_parts = [part.lower() for part in Path(match).parts]
-            if not any(excluded in path_parts for excluded in exclude_dirs):
-                feature_files.append(match)
+        for pattern in getattr(project.parser_config, "javascript_file_patterns", ["**/*.js"]):
+            js_pattern = str(Path(project.root_path) / pattern)
+            for match in glob.iglob(js_pattern, recursive=True):
+                if not is_excluded_path(match, project.parser_config):
+                    feature_files.append(match)
 
         return sorted(set(feature_files))
 

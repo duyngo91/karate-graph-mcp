@@ -6,7 +6,7 @@ Provides MCP protocol interface for graph analyzer.
 
 import json
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -682,15 +682,10 @@ class KarateGraphAnalyzerTool:
                 parser_config=parser_config,
             )
 
-            # Create parser config
-            config = ParserConfig()
-            if parser_config:
-                config = ParserConfig(**parser_config)
-            else:
-                from karate_graph_analyzer.parser.config_parser import KarateConfigParser
-                config_parser = KarateConfigParser(root_path)
-                config = config_parser.auto_configure()
-                logger.info(f"Auto-detected configuration for project '{name}'")
+            # Create parser config. Auto-detected karate-config values are kept,
+            # and explicit overrides only replace fields provided by the caller.
+            config = self._build_parser_config(root_path, parser_config)
+            logger.info(f"Auto-detected configuration for project '{name}'")
 
             # Create project - Use broad pattern by default but exclude build artifacts
             patterns = feature_file_patterns or ["**/*.feature"]
@@ -725,6 +720,28 @@ class KarateGraphAnalyzerTool:
         except Exception as e:
             logger.error(f"Unexpected error registering project '{name}': {e}")
             return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def _build_parser_config(
+        self,
+        root_path: str,
+        parser_config: Optional[Dict[str, Any]] = None,
+    ) -> ParserConfig:
+        from karate_graph_analyzer.parser.config_parser import KarateConfigParser
+
+        config = KarateConfigParser(root_path).auto_configure()
+        if not parser_config:
+            return config
+
+        allowed_fields = {field.name for field in fields(ParserConfig)}
+        unknown_fields = sorted(set(parser_config) - allowed_fields)
+        if unknown_fields:
+            raise ValueError(
+                "Unknown parser_config field(s): " + ", ".join(unknown_fields)
+            )
+
+        for key, value in parser_config.items():
+            setattr(config, key, value)
+        return config
 
     def delete_project(self, name: str) -> Dict[str, Any]:
         """Delete a project from the registry.
@@ -1407,9 +1424,10 @@ class KarateGraphAnalyzerTool:
         project_name: str,
         query: str,
         include_methods: bool = True,
+        limit: int = 100,
     ) -> Dict[str, Any]:
         return self._with_search_tools(
-            lambda tools: tools.search_java_usage(project_name, query, include_methods)
+            lambda tools: tools.search_java_usage(project_name, query, include_methods, limit)
         )
 
     def search_js_usage(
@@ -1417,9 +1435,10 @@ class KarateGraphAnalyzerTool:
         project_name: str,
         query: str = "",
         include_functions: bool = True,
+        limit: int = 100,
     ) -> Dict[str, Any]:
         return self._with_search_tools(
-            lambda tools: tools.search_js_usage(project_name, query, include_functions)
+            lambda tools: tools.search_js_usage(project_name, query, include_functions, limit)
         )
 
     def search_error_pattern(
@@ -1617,6 +1636,10 @@ class KarateGraphAnalyzerTool:
             graph = self.graphs[request.project_name]
             analyzer = self.analyzers[request.project_name]
             matched_nodes = self._match_changed_nodes(graph, request.changed_paths)
+            total_matched_nodes = len(matched_nodes)
+            max_changed_nodes = max(request.limit * 10, 500)
+            if total_matched_nodes > max_changed_nodes:
+                matched_nodes = matched_nodes[:max_changed_nodes]
 
             impacted_map: Dict[str, Dict[str, Any]] = {}
             for changed in matched_nodes:
@@ -1663,6 +1686,8 @@ class KarateGraphAnalyzerTool:
                     }
                     for node in matched_nodes
                 ],
+                "matched_changed_nodes_truncated": total_matched_nodes > len(matched_nodes),
+                "matched_changed_nodes_total": total_matched_nodes,
                 "impacted_test_cases": impacted[: request.limit],
                 "count": min(len(impacted), request.limit),
                 "total_available": len(impacted),
@@ -2320,6 +2345,7 @@ class KarateGraphAnalyzerTool:
 
         graph = self.graphs[request.project_name]
         query = GraphQuery(graph)
+        query._build_usage_index()
         reusable_types = {
             NodeType.COMMON,
             NodeType.SCENARIO,
@@ -2333,16 +2359,28 @@ class KarateGraphAnalyzerTool:
             NodeType.JS_FUNCTION,
         }
 
-        results: List[Dict[str, Any]] = []
+        candidates: List[tuple[Any, int]] = []
         for node in graph.nodes.values():
             if node.type not in reusable_types:
                 continue
 
-            stats = query.get_usage_stats(node)
-            usage_count = stats.get("usage_count", 0)
+            usage_count = query.get_usage_count(node)
             if usage_count == 0:
                 continue
+            candidates.append((node, usage_count))
 
+        candidates.sort(
+            key=lambda item: (
+                item[1],
+                item[0].type.value in {"COMMON", "SCENARIO", "WORKFLOW", "PAGE", "ACTION"},
+                item[0].name,
+            ),
+            reverse=True,
+        )
+
+        results: List[Dict[str, Any]] = []
+        for node, usage_count in candidates[: request.limit]:
+            stats = query.get_usage_stats(node, test_case_limit=25)
             results.append(
                 {
                     "id": node.id,
@@ -2358,23 +2396,14 @@ class KarateGraphAnalyzerTool:
                 }
             )
 
-        results.sort(
-            key=lambda item: (
-                item["usage_count"],
-                item["type"] in {"COMMON", "SCENARIO", "WORKFLOW", "PAGE", "ACTION"},
-                item["name"],
-            ),
-            reverse=True,
-        )
-
         return {
             "success": True,
             "preset": "common-usage-map",
             "project_name": request.project_name,
             "limit": request.limit,
-            "results": results[: request.limit],
-            "count": min(len(results), request.limit),
-            "total_available": len(results),
+            "results": results,
+            "count": len(results),
+            "total_available": len(candidates),
         }
 
     def javascript_structure_map(self, project_name: str, limit: int = 100) -> Dict[str, Any]:
@@ -2388,18 +2417,20 @@ class KarateGraphAnalyzerTool:
 
         graph = self.graphs[request.project_name]
         query = GraphQuery(graph)
+        query._build_usage_index()
         results: List[Dict[str, Any]] = []
+        outgoing_edges: Dict[str, List[Any]] = {}
+        for edge in graph.edges.values():
+            outgoing_edges.setdefault(edge.from_node, []).append(edge)
 
-        for node in graph.nodes.values():
+        for node in query.nodes_by_type.get(NodeType.JAVASCRIPT, []):
             if node.type != NodeType.JAVASCRIPT:
                 continue
 
-            stats = query.get_usage_stats(node)
+            usage_count = query.get_usage_count(node)
             functions = []
             dependencies = []
-            for edge in graph.edges.values():
-                if edge.from_node != node.id:
-                    continue
+            for edge in outgoing_edges.get(node.id, []):
                 target = graph.nodes.get(edge.to_node)
                 if not target:
                     continue
@@ -2412,7 +2443,7 @@ class KarateGraphAnalyzerTool:
                 }
                 if target.type == NodeType.JS_FUNCTION:
                     item["function_kind"] = target.metadata.additional_data.get("function_kind")
-                    item["usage_count"] = query.get_usage_stats(target).get("usage_count", 0)
+                    item["usage_count"] = query.get_usage_count(target)
                     functions.append(item)
                 else:
                     item["dependency_type"] = edge.type.value
@@ -2426,8 +2457,8 @@ class KarateGraphAnalyzerTool:
                     "file_path": node.metadata.file_path,
                     "line_number": node.metadata.line_number,
                     "default_function_node_id": node.metadata.additional_data.get("default_function_node_id"),
-                    "usage_count": stats.get("usage_count", 0),
-                    "used_by_test_cases": stats.get("used_by_test_cases", []),
+                    "usage_count": usage_count,
+                    "used_by_test_cases": query.get_usage_stats(node, test_case_limit=25).get("used_by_test_cases", []),
                     "functions": sorted(functions, key=lambda item: (item.get("line_number") or 0, item["name"])),
                     "dependencies": sorted(dependencies, key=lambda item: (item["type"], item["name"])),
                 }
@@ -2454,15 +2485,16 @@ class KarateGraphAnalyzerTool:
         graph = self.graphs[request.project_name]
         comparable_types = {NodeType.COMMON, NodeType.SCENARIO, NodeType.WORKFLOW, NodeType.ACTION}
         groups: Dict[str, List[Dict[str, Any]]] = {}
+        outgoing: Dict[str, List[Any]] = {}
+        for edge in graph.edges.values():
+            outgoing.setdefault(edge.from_node, []).append(edge)
 
         for node in graph.nodes.values():
             if node.type not in comparable_types:
                 continue
 
             deps = []
-            for edge in graph.edges.values():
-                if edge.from_node != node.id:
-                    continue
+            for edge in outgoing.get(node.id, []):
                 target = graph.nodes.get(edge.to_node)
                 if not target:
                     continue

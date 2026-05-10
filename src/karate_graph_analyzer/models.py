@@ -293,7 +293,48 @@ class ParserConfig:
         ]
     )
     workflow_directories: List[str] = field(default_factory=lambda: ["workflow", "workflows"])
-    common_directories: List[str] = field(default_factory=lambda: ["common", "services"])
+    common_directories: List[str] = field(
+        default_factory=lambda: ["common", "services", "reuse", "reusable", "shared"]
+    )
+    test_case_directories: List[str] = field(default_factory=lambda: ["testcase", "testcases"])
+    test_case_path_patterns: List[str] = field(default_factory=list)
+    feature_root_directories: List[str] = field(default_factory=lambda: ["feature", "features"])
+    strict_test_case_directory_mode: bool = False
+    default_non_test_feature_type: str = "TEST_CASE"
+    scan_exclude_directories: List[str] = field(
+        default_factory=lambda: [
+            ".git",
+            ".gradle",
+            ".idea",
+            ".karate_cache",
+            ".mvn",
+            ".settings",
+            "allure-results",
+            "build",
+            "dist",
+            "node_modules",
+            "out",
+            "output",
+            "reports",
+            "target",
+        ]
+    )
+    javascript_file_patterns: List[str] = field(default_factory=lambda: ["**/*.js"])
+    scan_log_every: int = 1000
+    large_project_streaming_scan: bool = False
+    large_project_streaming_threshold: int = 20000
+    visualization_large_graph_threshold: int = 1500
+    visualization_physics_enabled: Optional[bool] = None
+    visualization_node_limit: int = 5000
+    visualization_edge_limit: int = 12000
+    visualization_progressive_enabled: bool = True
+    visualization_chunk_size: int = 1000
+    visualization_auto_load_chunks: int = 0
+    cycle_detection_enabled: bool = True
+    cycle_detection_node_limit: int = 20000
+    ai_context_similarity_pool_limit: int = 1000
+    ai_context_duplicate_location_limit: int = 25
+    ai_context_cache_feature_threshold: int = 5000
     page_object_directories: List[str] = field(default_factory=lambda: ["pages", "webPages"])
     locator_directories: List[str] = field(default_factory=lambda: ["locators", "resources/locators"])
     variable_patterns: Dict[str, str] = field(default_factory=dict)

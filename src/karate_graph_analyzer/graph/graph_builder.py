@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import glob
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Any
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Any, Set
 import networkx as nx
 
 from karate_graph_analyzer.models import (
@@ -37,6 +37,7 @@ from karate_graph_analyzer.graph.structural_builder import StructuralBuilder
 from karate_graph_analyzer.parser.extractors.call_read_extractor import CallReadExtractor
 from karate_graph_analyzer.parser.extractors.javascript_structure_extractor import JavaScriptStructureExtractor
 from karate_graph_analyzer.utils.path_resolver import PathResolver
+from karate_graph_analyzer.utils.scan_filters import is_excluded_path
 from karate_graph_analyzer.core.context import AnalysisContext
 
 if TYPE_CHECKING:
@@ -126,27 +127,17 @@ class GraphBuilder:
             self.structural_builder.build_structure(project)
         
         feature_files = self._get_feature_files(project)
-        ast_list: List[FeatureAST] = []
-        
-        # Pass 1: Parse and Filter ignored components
-        ignored_files = set()
-        for path in feature_files:
-            logger.info(f"PROCESSING FILE: {path}")
-            try:
-                ast = parser.parse_file(path)
-                if not ast.scenarios:
-                    logger.warning(f"File skipped (no scenarios found): {path}")
-                    ignored_files.add(PathResolver.normalize_path(path))
-                else:
-                    logger.info(f"Successfully parsed: {path} ({len(ast.scenarios)} scenarios)")
-                    ast_list.append(ast)
-            except Exception as e:
-                logger.error(f"Failed to parse {path}: {str(e)}")
-                ignored_files.add(PathResolver.normalize_path(path))
 
-        # Store ignored files
-        self._ignored_files = ignored_files
-        self.dependency_linker.ignored_files = ignored_files
+        if self._should_use_streaming_scan(project, len(feature_files)):
+            logger.info(
+                "Using streaming scan for project '%s' with %d feature files",
+                project.name,
+                len(feature_files),
+            )
+            return self._build_from_feature_files_streaming(project, parser, feature_files)
+
+        ast_list, ignored_files = self._parse_feature_files(parser, project, feature_files)
+        self._set_ignored_files(ignored_files)
 
         return self.build_from_asts(project, ast_list, clear_graph=False)
 
@@ -157,15 +148,7 @@ class GraphBuilder:
         # Pass 1: Extract API definitions from COMMON components
         common_api_map: Dict[Tuple[str, str], List] = {}
         for ast in ast_list:
-            norm_path = PathResolver.normalize_path(ast.file_path)
-            for scenario in ast.scenarios:
-                if self.path_classifier.classify_scenario_by_path(scenario.file_path, project.parser_config) == NodeType.COMMON:
-                    deps = parser.extract_dependencies_with_background(scenario, ast.background_steps)
-                    api_deps = [d for d in deps if d.type == DependencyType.API]
-                    for d in api_deps: d.parameters["file_path"] = scenario.file_path
-                    
-                    keys = [(norm_path, tag) for tag in scenario.tags] or [(norm_path, "")]
-                    for k in keys: common_api_map[k] = api_deps
+            self._collect_common_api_map(ast, parser, project, common_api_map)
 
         # Pass 2: Build reusable JavaScript structure before linking features.
         # This lets feature dependencies point at both the JS file and callable export.
@@ -175,6 +158,148 @@ class GraphBuilder:
             self._process_ast_nodes(ast, parser, project, common_api_map, node_map)
 
         return self._create_final_graph(project.name, project.root_path)
+
+    def _parse_feature_files(
+        self,
+        parser,
+        project: Project,
+        feature_files: List[str],
+    ) -> Tuple[List[FeatureAST], Set[str]]:
+        ast_list: List[FeatureAST] = []
+        ignored_files: Set[str] = set()
+        total = len(feature_files)
+        log_every = self._scan_log_every(project)
+
+        for index, path in enumerate(feature_files, start=1):
+            self._log_scan_progress("Parsing feature files", project.name, index, total, log_every)
+            logger.debug("Processing feature file: %s", path)
+            try:
+                ast = parser.parse_file(path)
+                if not ast.scenarios:
+                    logger.warning("File skipped (no scenarios found): %s", path)
+                    ignored_files.add(PathResolver.normalize_path(path))
+                else:
+                    logger.debug("Successfully parsed: %s (%d scenarios)", path, len(ast.scenarios))
+                    ast_list.append(ast)
+            except Exception as exc:
+                logger.error("Failed to parse %s: %s", path, exc)
+                ignored_files.add(PathResolver.normalize_path(path))
+
+        logger.info(
+            "Parsed %d/%d feature files for project '%s' (%d skipped)",
+            len(ast_list),
+            total,
+            project.name,
+            len(ignored_files),
+        )
+        return ast_list, ignored_files
+
+    def _build_from_feature_files_streaming(
+        self,
+        project: Project,
+        parser,
+        feature_files: List[str],
+    ) -> DependencyGraph:
+        ignored_files: Set[str] = set()
+        common_api_map: Dict[Tuple[str, str], List] = {}
+        total = len(feature_files)
+        log_every = self._scan_log_every(project)
+
+        for index, path in enumerate(feature_files, start=1):
+            self._log_scan_progress("Indexing reusable feature APIs", project.name, index, total, log_every)
+            if not self._is_common_candidate_path(path, project):
+                continue
+            try:
+                ast = parser.parse_file(path)
+                if not ast.scenarios:
+                    ignored_files.add(PathResolver.normalize_path(path))
+                    continue
+                self._collect_common_api_map(ast, parser, project, common_api_map)
+            except Exception as exc:
+                logger.error("Failed to parse reusable feature %s: %s", path, exc)
+                ignored_files.add(PathResolver.normalize_path(path))
+
+        self._set_ignored_files(ignored_files)
+        node_map: Dict[Tuple, str] = {}
+        self._process_javascript_files(project, node_map)
+
+        processed_count = 0
+        for index, path in enumerate(feature_files, start=1):
+            self._log_scan_progress("Building graph from feature files", project.name, index, total, log_every)
+            norm_path = PathResolver.normalize_path(path)
+            if norm_path in ignored_files:
+                continue
+            try:
+                ast = parser.parse_file(path)
+                if not ast.scenarios:
+                    ignored_files.add(norm_path)
+                    continue
+                self._process_ast_nodes(ast, parser, project, common_api_map, node_map)
+                processed_count += 1
+            except Exception as exc:
+                logger.error("Failed to process feature %s: %s", path, exc)
+                ignored_files.add(norm_path)
+
+        self._set_ignored_files(ignored_files)
+        logger.info(
+            "Streaming scan processed %d/%d feature files for project '%s' (%d skipped)",
+            processed_count,
+            total,
+            project.name,
+            len(ignored_files),
+        )
+        return self._create_final_graph(project.name, project.root_path)
+
+    def _collect_common_api_map(
+        self,
+        ast: FeatureAST,
+        parser,
+        project: Project,
+        common_api_map: Dict[Tuple[str, str], List],
+    ) -> None:
+        norm_path = PathResolver.normalize_path(ast.file_path)
+        for scenario in ast.scenarios:
+            if self.path_classifier.classify_scenario_by_path(scenario.file_path, project.parser_config) != NodeType.COMMON:
+                continue
+
+            deps = parser.extract_dependencies_with_background(scenario, ast.background_steps)
+            api_deps = [d for d in deps if d.type == DependencyType.API]
+            for dep in api_deps:
+                dep.parameters["file_path"] = scenario.file_path
+
+            keys = [(norm_path, tag) for tag in scenario.tags] or [(norm_path, "")]
+            for key in keys:
+                common_api_map[key] = api_deps
+
+    def _should_use_streaming_scan(self, project: Project, feature_count: int) -> bool:
+        config = project.parser_config
+        if getattr(config, "large_project_streaming_scan", False):
+            return True
+        threshold = getattr(config, "large_project_streaming_threshold", 0) or 0
+        return threshold > 0 and feature_count >= threshold
+
+    def _is_common_candidate_path(self, path: str, project: Project) -> bool:
+        return self.path_classifier.classify_scenario_by_path(path, project.parser_config) == NodeType.COMMON
+
+    def _set_ignored_files(self, ignored_files: Set[str]) -> None:
+        self._ignored_files = ignored_files
+        self.dependency_linker.ignored_files = ignored_files
+
+    def _scan_log_every(self, project: Project) -> int:
+        return max(1, int(getattr(project.parser_config, "scan_log_every", 1000) or 1000))
+
+    def _log_scan_progress(
+        self,
+        label: str,
+        project_name: str,
+        index: int,
+        total: int,
+        log_every: int,
+    ) -> None:
+        if total == 0:
+            return
+        if index == 1 or index == total or index % log_every == 0:
+            logger.info("%s for project '%s': %d/%d", label, project_name, index, total)
 
     def _process_ast_nodes(self, ast: FeatureAST, parser, project, common_map, node_map):
         for scenario in ast.scenarios:
@@ -333,15 +458,10 @@ class GraphBuilder:
                         self.nx_builder.add_dependency(node_id, dep_id, api_dep.type, line_number=dep.line_number)
 
     def _get_feature_files(self, project: Project) -> List[str]:
-        from pathlib import Path
         files = []
-        exclude_dirs = {"target", "build", "node_modules", ".git"}
-        for p in project.feature_file_patterns:
-            matches = glob.glob(os.path.join(project.root_path, p), recursive=True)
-            for m in matches:
-                path_parts = [p.lower() for p in Path(m).parts]
-                if not any(ex in path_parts for ex in exclude_dirs):
-                    files.append(m)
+        for pattern in project.feature_file_patterns:
+            for match in self._iter_project_matches(project, pattern):
+                files.append(match)
         return sorted(set(files))
 
     def _process_javascript_files(self, project: Project, node_map: Dict[Tuple, str]) -> None:
@@ -419,14 +539,18 @@ class GraphBuilder:
                         self._link_javascript_callable(script_id, dep_id, dep.line_number)
 
     def _get_javascript_files(self, project: Project) -> List[str]:
-        from pathlib import Path
         files = []
-        exclude_dirs = {"target", "build", "node_modules", ".git"}
-        for m in glob.glob(os.path.join(project.root_path, "**", "*.js"), recursive=True):
-            path_parts = [part.lower() for part in Path(m).parts]
-            if not any(ex in path_parts for ex in exclude_dirs):
-                files.append(m)
+        patterns = getattr(project.parser_config, "javascript_file_patterns", ["**/*.js"]) or []
+        for pattern in patterns:
+            for match in self._iter_project_matches(project, pattern):
+                files.append(match)
         return sorted(set(files))
+
+    def _iter_project_matches(self, project: Project, pattern: str):
+        full_pattern = os.path.join(project.root_path, pattern)
+        for match in glob.iglob(full_pattern, recursive=True):
+            if not is_excluded_path(match, project.parser_config):
+                yield match
 
     def _build_javascript_metadata(
         self,
@@ -540,7 +664,7 @@ class GraphBuilder:
         return FeatureFileParser(config=project.parser_config)
 
     def _create_final_graph(self, project_name: str, project_root: str = None) -> DependencyGraph:
-        cycles = self.nx_builder.detect_cycles()
+        cycles = self._detect_cycles_for_final_graph()
         nodes_dict = {}
         for nid, nd in self.nx_builder.graph.nodes(data=True):
             if "metadata" not in nd:
@@ -584,6 +708,24 @@ class GraphBuilder:
             config=self.config,
             include_structural_nodes=self.include_structural_nodes
         )
+
+    def _detect_cycles_for_final_graph(self) -> List[List[str]]:
+        if not getattr(self.config, "cycle_detection_enabled", True):
+            self.nx_builder.graph.graph["cycles"] = []
+            return []
+
+        node_limit = getattr(self.config, "cycle_detection_node_limit", 20000) or 0
+        node_count = self.nx_builder.graph.number_of_nodes()
+        if node_limit > 0 and node_count > node_limit:
+            logger.warning(
+                "Skipping full cycle detection for large graph (%d nodes > limit %d)",
+                node_count,
+                node_limit,
+            )
+            self.nx_builder.graph.graph["cycles"] = []
+            return []
+
+        return self.nx_builder.detect_cycles()
 
     def _enrich_locator_metadata(self, meta: NodeMetadata, project_root: str):
         try:

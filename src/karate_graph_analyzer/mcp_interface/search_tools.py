@@ -93,7 +93,7 @@ class SearchTools:
 
     def _find_api_nodes_by_pattern(self, query_api: GraphQuery, pattern: str) -> List[Node]:
         return [
-            node for node in query_api.graph.nodes.values()
+            node for node in query_api.nodes_by_type.get(NodeType.API, [])
             if node.type.value == "API" and self._api_matches_pattern(node, pattern)
         ]
     
@@ -310,7 +310,7 @@ class SearchTools:
             if not node:
                 return self._error_response("7003", f"Node '{node_id}' not found")
             
-            stats = query_api.get_usage_stats(node)
+            stats = query_api.get_usage_stats(node, test_case_limit=100)
             
             return {
                 "success": True,
@@ -395,6 +395,7 @@ class SearchTools:
         project_name: str,
         query: str,
         include_methods: bool = True,
+        limit: int = 100,
     ) -> Dict[str, Any]:
         """Search Java class/method usage and their calling test cases."""
         term = (query or "").strip().lower()
@@ -417,12 +418,18 @@ class SearchTools:
 
             nodes = [
                 node
-                for node in query_api.graph.nodes.values()
+                for node in query_api.nodes_by_type.get(NodeType.JAVA_CLASS, [])
+                + query_api.nodes_by_type.get(NodeType.JAVA_METHOD, [])
                 if node.type in target_types and _matches(node)
             ]
             results = [self._node_to_dict(node, query_api) for node in nodes]
             results.sort(key=lambda item: (item.get("usage_count", 0), item.get("name", "")), reverse=True)
-            return self._results_response(results)
+            return {
+                "success": True,
+                "results": results[:limit],
+                "count": min(len(results), limit),
+                "total_available": len(results),
+            }
 
         return self._run_project_query(project_name, "search_java_usage", query_fn)
 
@@ -431,6 +438,7 @@ class SearchTools:
         project_name: str,
         query: str = "",
         include_functions: bool = True,
+        limit: int = 100,
     ) -> Dict[str, Any]:
         """Search JavaScript file/function usage and their calling test cases."""
         term = (query or "").strip().lower()
@@ -453,12 +461,18 @@ class SearchTools:
 
             nodes = [
                 node
-                for node in query_api.graph.nodes.values()
+                for node in query_api.nodes_by_type.get(NodeType.JAVASCRIPT, [])
+                + query_api.nodes_by_type.get(NodeType.JS_FUNCTION, [])
                 if node.type in target_types and _matches(node)
             ]
             results = [self._node_to_dict(node, query_api) for node in nodes]
             results.sort(key=lambda item: (item.get("usage_count", 0), item.get("name", "")), reverse=True)
-            return self._results_response(results)
+            return {
+                "success": True,
+                "results": results[:limit],
+                "count": min(len(results), limit),
+                "total_available": len(results),
+            }
 
         return self._run_project_query(project_name, "search_js_usage", query_fn)
 
@@ -542,7 +556,7 @@ class SearchTools:
         Returns:
             Dictionary representation of node
         """
-        usage_count = query_api.get_usage_stats(node)["usage_count"]
+        usage_count = query_api.get_usage_count(node)
         
         # Determine test case ID (first Jira tag)
         test_case_id = None

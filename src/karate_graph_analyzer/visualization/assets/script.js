@@ -1223,11 +1223,177 @@ function jumpToNode(nodeId) {
     showDetails(nodeId);
 }
 
+// --- PROGRESSIVE GRAPH LOADING ---
+var progressiveState = {
+    manifest: null,
+    nextChunkIndex: 0,
+    loading: false,
+    loadAll: false,
+    autoLoaded: 0,
+    loadedNodes: new Set((graphNodes || []).map(node => node.id)),
+    loadedEdges: new Set((graphEdges || []).map(edge => edge.id || `${edge.from}->${edge.to}`))
+};
+
+function getProgressiveEdgeKey(edge) {
+    return edge.id || `${edge.from}->${edge.to}`;
+}
+
+function setupProgressiveReport() {
+    const manifest = window.KG_PROGRESSIVE_MANIFEST;
+    if (!manifest || !manifest.enabled || progressiveState.manifest) return;
+
+    progressiveState.manifest = manifest;
+    createProgressiveControl();
+    updateProgressiveControl();
+
+    const autoLoad = Math.min(manifest.auto_load_chunks || 0, manifest.chunks.length);
+    if (autoLoad > 0) {
+        progressiveState.loadAll = false;
+        loadNextGraphChunk();
+    }
+}
+
+function createProgressiveControl() {
+    if (document.getElementById('progressive-loader')) return;
+    const topHud = document.getElementById('top-hud');
+    if (!topHud) return;
+
+    const panel = document.createElement('div');
+    panel.id = 'progressive-loader';
+    panel.className = 'hud-card progressive-loader';
+    panel.innerHTML = `
+        <div class="progressive-header">
+            <div>
+                <div class="progressive-title">Progressive Graph</div>
+                <div id="progressive-counts" class="progressive-counts"></div>
+            </div>
+            <div class="progressive-actions">
+                <button id="progressive-load-next" onclick="loadNextGraphChunk()">Load more</button>
+                <button id="progressive-load-all" onclick="loadAllGraphChunks()">Load all</button>
+            </div>
+        </div>
+        <div class="progressive-bar"><div id="progressive-bar-fill"></div></div>
+        <div id="progressive-status" class="progressive-status"></div>
+    `;
+    topHud.appendChild(panel);
+}
+
+function updateProgressiveControl() {
+    const manifest = progressiveState.manifest;
+    if (!manifest) return;
+
+    const loadedNodeCount = progressiveState.loadedNodes.size;
+    const loadedEdgeCount = progressiveState.loadedEdges.size;
+    const totalNodes = manifest.total_nodes || loadedNodeCount;
+    const totalEdges = manifest.total_edges || loadedEdgeCount;
+    const chunkTotal = manifest.chunks.length;
+    const chunkCurrent = Math.min(progressiveState.nextChunkIndex, chunkTotal);
+    const progress = totalNodes ? Math.min(100, Math.round((loadedNodeCount / totalNodes) * 100)) : 100;
+
+    const counts = document.getElementById('progressive-counts');
+    const fill = document.getElementById('progressive-bar-fill');
+    const status = document.getElementById('progressive-status');
+    const nextButton = document.getElementById('progressive-load-next');
+    const allButton = document.getElementById('progressive-load-all');
+
+    if (counts) {
+        counts.textContent = `${loadedNodeCount.toLocaleString()} / ${totalNodes.toLocaleString()} nodes, ${loadedEdgeCount.toLocaleString()} / ${totalEdges.toLocaleString()} edges`;
+    }
+    if (fill) fill.style.width = `${progress}%`;
+    if (status) {
+        const state = progressiveState.loading ? 'Loading chunk...' : `Chunks ${chunkCurrent} / ${chunkTotal}`;
+        status.textContent = `${state}. Full graph data remains searchable through MCP tools.`;
+    }
+    if (nextButton) nextButton.disabled = progressiveState.loading || progressiveState.nextChunkIndex >= chunkTotal;
+    if (allButton) allButton.disabled = progressiveState.loading || progressiveState.nextChunkIndex >= chunkTotal;
+}
+
+function loadNextGraphChunk() {
+    const manifest = progressiveState.manifest;
+    if (!manifest || progressiveState.loading) return;
+    if (progressiveState.nextChunkIndex >= manifest.chunks.length) {
+        progressiveState.loadAll = false;
+        updateProgressiveControl();
+        return;
+    }
+
+    const chunk = manifest.chunks[progressiveState.nextChunkIndex];
+    progressiveState.loading = true;
+    updateProgressiveControl();
+
+    const script = document.createElement('script');
+    script.src = chunk.path;
+    script.async = true;
+    script.onerror = function() {
+        progressiveState.loading = false;
+        progressiveState.loadAll = false;
+        const status = document.getElementById('progressive-status');
+        if (status) status.textContent = `Failed to load ${chunk.path}`;
+        updateProgressiveControl();
+    };
+    document.body.appendChild(script);
+}
+
+function loadAllGraphChunks() {
+    progressiveState.loadAll = true;
+    loadNextGraphChunk();
+}
+
+window.__KG_LOAD_CHUNK__ = function(chunk) {
+    const manifest = progressiveState.manifest;
+    if (!manifest || !chunk) return;
+
+    const newNodes = [];
+    (chunk.nodes || []).forEach(node => {
+        if (!progressiveState.loadedNodes.has(node.id)) {
+            progressiveState.loadedNodes.add(node.id);
+            newNodes.push(node);
+        }
+    });
+    if (newNodes.length) nodes.add(newNodes);
+
+    const newEdges = [];
+    (chunk.edges || []).forEach(edge => {
+        const key = getProgressiveEdgeKey(edge);
+        if (!progressiveState.loadedEdges.has(key)) {
+            progressiveState.loadedEdges.add(key);
+            newEdges.push(edge);
+        }
+    });
+    if (newEdges.length) edges.add(newEdges);
+
+    Object.assign(nodeMetadata, chunk.metadata || {});
+
+    const chunkPosition = manifest.chunks.findIndex(item => item.index === chunk.index);
+    if (chunkPosition >= progressiveState.nextChunkIndex) {
+        progressiveState.nextChunkIndex = chunkPosition + 1;
+    }
+    progressiveState.loading = false;
+    progressiveState.autoLoaded += 1;
+
+    renderDashboard();
+    updateProgressiveControl();
+
+    const autoLimit = manifest.auto_load_chunks || 0;
+    const shouldAutoContinue = progressiveState.loadAll || progressiveState.autoLoaded < autoLimit;
+    if (shouldAutoContinue && progressiveState.nextChunkIndex < manifest.chunks.length) {
+        setTimeout(loadNextGraphChunk, 50);
+    } else {
+        progressiveState.loadAll = false;
+    }
+};
+
+window.addEventListener('kg-progressive-manifest-ready', setupProgressiveReport);
+if (window.KG_PROGRESSIVE_MANIFEST) {
+    setTimeout(setupProgressiveReport, 0);
+}
+
 // Initialization
 window.onload = function() {
     renderDashboard();
     switchTab('hotspots'); // Default tab
     initEvents();
+    setupProgressiveReport();
     
     // Ctrl+K to search
     document.addEventListener('keydown', e => {

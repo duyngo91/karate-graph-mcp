@@ -209,6 +209,7 @@ def search_java_usage(
     project_name: str,
     query: str,
     include_methods: bool = True,
+    limit: int = 100,
 ) -> Dict[str, Any]:
     """
     Search Java class/method usage and the test cases that call them.
@@ -217,14 +218,16 @@ def search_java_usage(
         project_name: Name of the analyzed project.
         query: Java class or method keyword/pattern.
         include_methods: Include JAVA_METHOD nodes in results.
+        limit: Maximum number of results to return.
     """
-    return analyzer_tool.search_java_usage(project_name, query, include_methods)
+    return analyzer_tool.search_java_usage(project_name, query, include_methods, limit)
 
 @mcp.tool()
 def search_js_usage(
     project_name: str,
     query: str = "",
     include_functions: bool = True,
+    limit: int = 100,
 ) -> Dict[str, Any]:
     """
     Search JavaScript file/function usage and the test cases that call them.
@@ -233,8 +236,9 @@ def search_js_usage(
         project_name: Name of the analyzed project.
         query: JavaScript file/function keyword or path.
         include_functions: Include JS_FUNCTION nodes in results.
+        limit: Maximum number of results to return.
     """
-    return analyzer_tool.search_js_usage(project_name, query, include_functions)
+    return analyzer_tool.search_js_usage(project_name, query, include_functions, limit)
 
 @mcp.tool()
 def search_error_pattern(

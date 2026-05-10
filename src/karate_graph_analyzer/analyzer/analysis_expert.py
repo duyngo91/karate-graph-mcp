@@ -103,12 +103,21 @@ class AnalysisExpert:
             List of (Node, complexity_score) tuples
         """
         complexity_scores = []
-        
+        outgoing: Dict[str, List[str]] = {}
+        for source, target in self.nx_graph.edges():
+            outgoing.setdefault(source, []).append(target)
+
         for node_id, node in self.graph.nodes.items():
             if node.type == NodeType.TEST_CASE:
-                # Complexity = number of descendants (transitive dependencies)
-                descendants = nx.descendants(self.nx_graph, node_id)
-                complexity_scores.append((node, len(descendants)))
+                seen: Set[str] = set()
+                stack = list(outgoing.get(node_id, []))
+                while stack:
+                    dep_id = stack.pop()
+                    if dep_id in seen:
+                        continue
+                    seen.add(dep_id)
+                    stack.extend(outgoing.get(dep_id, []))
+                complexity_scores.append((node, len(seen)))
         
         # Sort by complexity descending
         complexity_scores.sort(key=lambda x: x[1], reverse=True)
@@ -120,8 +129,9 @@ class AnalysisExpert:
         duplicates = self.find_redundant_apis()
         top_complex = self.analyze_complexity()
         
-        # Check for cycles
-        cycles = list(nx.simple_cycles(self.nx_graph))
+        # Full cycle enumeration is expensive on very large graphs. The build step
+        # stores detected cycles when enabled, so health can reuse that snapshot.
+        cycles = self.graph.cycles or []
         
         return {
             "orphan_count": len(orphans),

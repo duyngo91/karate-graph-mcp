@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 from karate_graph_analyzer.models import NodeType, DependencyType, NodeMetadata, Project, ComponentCategory, FlowType
 from karate_graph_analyzer.graph.core.nx_builder import NetworkXBuilder
 from karate_graph_analyzer.utils.path_resolver import PathResolver
+from karate_graph_analyzer.utils.scan_filters import is_excluded_path
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +37,16 @@ class StructuralBuilder:
         folder_nodes[root_path] = root_id
 
         # 2. Walk the directory tree
-        exclude_dirs = {".git", "__pycache__", "target", "build", ".karate_cache", "node_modules"}
+        exclude_dirs = {"__pycache__"}
         
         for root, dirs, files in os.walk(root_path):
             # Skip excluded directories
-            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+            dirs[:] = [
+                d
+                for d in dirs
+                if d.lower() not in exclude_dirs
+                and not is_excluded_path(os.path.join(root, d), project.parser_config)
+            ]
             
             # Normalize root for lookup
             current_root = os.path.abspath(root)

@@ -1,4 +1,5 @@
 import re
+from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Optional, Any, List
 from karate_graph_analyzer.models import NodeType, Scenario, ComponentCategory, FlowType
 
@@ -20,41 +21,96 @@ class PathClassifier:
         cfg = config or (self.context.config if self.context else None)
         normalized = file_path.replace('\\', '/').lower()
 
-        # 1. Check for page object directories (UI Flow) - HIGHEST PRIORITY
+        # 1. Check explicit test-case conventions first.
+        # Large projects often keep reusable features beside tests, so a known
+        # test-case path is the strongest signal.
+        if cfg and self._matches_test_case_path(normalized, cfg):
+            return NodeType.TEST_CASE
+
+        # 2. Check for page object directories (UI Flow)
         page_dirs = ['pages', 'webpages', 'ui']
         if cfg and cfg.page_object_directories:
             page_dirs = [d.lower() for d in cfg.page_object_directories]
         for d in page_dirs:
-            if f'/{d}/' in normalized:
+            if self._path_has_directory(normalized, d):
                 return NodeType.PAGE
 
-        # 2. Check for database directories (DB Flow)
+        # 3. Check for database directories (DB Flow)
         db_dirs = ['db', 'database', 'sql']
-        if any(f'/{d}/' in normalized for d in db_dirs):
+        if any(self._path_has_directory(normalized, d) for d in db_dirs):
             return NodeType.DATABASE
 
-        # 3. Check for common/API directories (API Flow / Library)
+        # 4. Check for common/API directories (API Flow / Library)
         common_dirs = ['common', 'services', 'api', 'endpoints']
         if cfg and hasattr(cfg, 'common_directories'):
             common_dirs = [d.lower() for d in cfg.common_directories]
         for d in common_dirs:
-            if f'/{d}/' in normalized:
+            if self._path_has_directory(normalized, d):
                 return NodeType.COMMON
 
-        # 4. Check for workflow directories (Test Flow)
+        # 5. Check for workflow directories (Test Flow)
         workflow_dirs = ['workflows', 'workflow', 'business-flows']
         if cfg and cfg.workflow_directories:
             workflow_dirs = [d.lower() for d in cfg.workflow_directories]
         for d in workflow_dirs:
-            if f'/{d}/' in normalized:
+            if self._path_has_directory(normalized, d):
                 return NodeType.WORKFLOW
                 
-        # 5. Check for data directories (Data Flow)
+        # 6. Check for data directories (Data Flow)
         data_dirs = ['data', 'payloads', 'json', 'csv']
-        if any(f'/{d}/' in normalized for d in data_dirs):
+        if any(self._path_has_directory(normalized, d) for d in data_dirs):
             return NodeType.DATA
 
+        if cfg and getattr(cfg, "strict_test_case_directory_mode", False):
+            if self._under_feature_root(normalized, cfg):
+                return self._node_type_from_config(
+                    getattr(cfg, "default_non_test_feature_type", "COMMON")
+                )
+
         # Default: TEST_CASE
+        return NodeType.TEST_CASE
+
+    def _matches_test_case_path(self, normalized_path: str, cfg: Any) -> bool:
+        """Return True when a path follows configured test-case conventions."""
+        for pattern in getattr(cfg, "test_case_path_patterns", []) or []:
+            if fnmatch(normalized_path, pattern.replace("\\", "/").lower()):
+                return True
+
+        if not self._under_feature_root(normalized_path, cfg):
+            return False
+
+        markers = getattr(cfg, "test_case_directories", ["testcase", "testcases"]) or []
+        normalized_markers = {self._normalize_segment(marker) for marker in markers}
+        if not normalized_markers:
+            return False
+
+        segments = normalized_path.split("/")
+        for segment in segments:
+            compact = self._normalize_segment(segment)
+            if any(marker and marker in compact for marker in normalized_markers):
+                return True
+        return False
+
+    def _under_feature_root(self, normalized_path: str, cfg: Any) -> bool:
+        roots = getattr(cfg, "feature_root_directories", ["feature", "features"]) or []
+        return any(self._path_has_directory(normalized_path, root.lower()) for root in roots)
+
+    def _path_has_directory(self, normalized_path: str, directory: str) -> bool:
+        directory = directory.replace("\\", "/").strip("/").lower()
+        if not directory:
+            return False
+        if "/" in directory:
+            return f"/{directory}/" in f"/{normalized_path}/"
+        return directory in normalized_path.split("/")
+
+    def _normalize_segment(self, value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+    def _node_type_from_config(self, value: str) -> NodeType:
+        normalized = (value or "TEST_CASE").upper()
+        for node_type in NodeType:
+            if node_type.name == normalized or node_type.value == normalized:
+                return node_type
         return NodeType.TEST_CASE
 
     def resolve_flow(self, node_type: Any) -> FlowType:
