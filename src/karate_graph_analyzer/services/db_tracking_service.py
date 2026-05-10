@@ -15,6 +15,9 @@ from karate_graph_analyzer.utils.db_dialect import DbDialectDetector
 class DbTrackingService:
     """Build AI-ready DB indexes and traces from graph + feature files."""
 
+    DEFAULT_VISIBLE_LINK_STATUSES = ("linked", "orphan")
+    DEMO_MARKERS = ("example", "examples", "demo", "sample", "fixture")
+
     ASSERTION_PATTERN = re.compile(r"\b(status|match|assert)\b", re.IGNORECASE)
     DEF_PATTERN = re.compile(r"\bdef\s+([A-Za-z_][\w]*)\s*=\s*(.+)$")
     SET_PATTERN = re.compile(r"\bset\s+([A-Za-z_][\w.]*)\s*=\s*(.+)$")
@@ -46,30 +49,38 @@ class DbTrackingService:
         query: Optional[str] = None,
         limit: int = 100,
         include_components: bool = True,
+        link_status: Optional[str] = None,
     ) -> Dict[str, Any]:
         entries = self._db_nodes_from_graph(include_components=include_components)
         if query:
             terms = self._terms(query)
             entries = [item for item in entries if self._entry_matches(item, terms)]
+        entries = self._filter_by_link_status(entries, link_status)
 
         return {
             "queries": entries[:limit],
             "count": min(len(entries), limit),
             "total_available": len(entries),
+            "link_status_summary": self._link_status_summary(entries),
+            "default_visible_link_statuses": list(self.DEFAULT_VISIBLE_LINK_STATUSES),
         }
 
     def search_db_usage(
         self,
         query: str,
         limit: int = 100,
+        link_status: Optional[str] = None,
     ) -> Dict[str, Any]:
         terms = self._terms(query)
         entries = [item for item in self._db_nodes_from_graph(include_components=True) if self._entry_matches(item, terms)]
+        entries = self._filter_by_link_status(entries, link_status)
         entries.sort(key=lambda item: (item.get("usage_count", 0), item.get("risk_score", 0.0)), reverse=True)
         return {
             "results": entries[:limit],
             "count": min(len(entries), limit),
             "total_available": len(entries),
+            "link_status_summary": self._link_status_summary(entries),
+            "default_visible_link_statuses": list(self.DEFAULT_VISIBLE_LINK_STATUSES),
         }
 
     def db_data_flow_trace(
@@ -195,10 +206,15 @@ class DbTrackingService:
 
             stats = query_api.get_usage_stats(node)
             dialect_info = self._dialect_context(node)
+            kind = self._db_node_kind(node, dialect_info)
+            link_status, link_status_reason = self._db_link_status(node, kind, stats)
             matched_nodes.append(
                 {
                     "id": node.id,
                     "name": node.name,
+                    "kind": kind,
+                    "link_status": link_status,
+                    "link_status_reason": link_status_reason,
                     "file_path": node.metadata.file_path,
                     "line_number": node.metadata.line_number,
                     "operation": node.metadata.additional_data.get("operation"),
@@ -294,14 +310,17 @@ class DbTrackingService:
         dialect_info = self._dialect_context(node)
         dialect = dialect_info.get("dialect")
         entity_name = dialect_info.get("entity_name")
-        kind = "query" if any([operation, table, database, host, entity_name]) or dialect != "unknown" else "component"
+        kind = self._db_node_kind(node, dialect_info)
         store_type = self._store_type(data, node.name, dialect_info)
         risk = self._risk_level(operation, node.name)
         stats = query_api.get_usage_stats(node)
+        link_status, link_status_reason = self._db_link_status(node, kind, stats)
 
         return {
             "id": node.id,
             "kind": kind,
+            "link_status": link_status,
+            "link_status_reason": link_status_reason,
             "name": node.name,
             "operation": operation,
             "table": table,
@@ -325,6 +344,111 @@ class DbTrackingService:
             "used_by_test_cases": stats.get("used_by_test_cases", []),
             "direct_dependencies": stats.get("direct_dependencies", []),
         }
+
+    def _db_node_kind(self, node: Any, dialect_info: Dict[str, Any]) -> str:
+        data = node.metadata.additional_data or {}
+        dialect = dialect_info.get("dialect") or "unknown"
+        entity_name = dialect_info.get("entity_name")
+        if any(
+            [
+                data.get("operation"),
+                data.get("table"),
+                data.get("database"),
+                data.get("host"),
+                entity_name,
+            ]
+        ) or dialect != "unknown":
+            return "query"
+        return "component"
+
+    def _db_link_status(
+        self,
+        node: Any,
+        kind: str,
+        stats: Dict[str, Any],
+    ) -> tuple[str, str]:
+        if stats.get("used_by_test_cases"):
+            return "linked", "DB entry is reachable from at least one terminal test case."
+        if kind == "component":
+            return "component", "DB feature/helper component; keep it for structure and reuse context."
+        if self._is_demo_db_node(node):
+            return "demo", "DB entry comes from an example/demo flow and is not counted as execution impact."
+        return "orphan", "DB query has no upstream terminal test case; inspect call/read linkage or test coverage."
+
+    def _is_demo_db_node(self, node: Any) -> bool:
+        text = " ".join(self._node_context_terms(node)).lower()
+        return any(marker in text for marker in self.DEMO_MARKERS)
+
+    def _node_context_terms(self, node: Any, max_depth: int = 2) -> List[str]:
+        terms = [
+            node.name,
+            str(node.metadata.file_path or ""),
+            " ".join(node.tags or []),
+            " ".join(node.metadata.jira_tags or []),
+        ]
+        data = node.metadata.additional_data or {}
+        terms.extend(
+            [
+                str(data.get("scenario_name", "")),
+                " ".join(data.get("scenario_tags", []) or []),
+                str(data.get("feature", "")),
+            ]
+        )
+        if not self.graph:
+            return terms
+
+        seen = {node.id}
+        frontier = [node.id]
+        for _ in range(max_depth):
+            next_frontier = []
+            for edge in self.graph.edges.values():
+                if edge.to_node not in frontier or edge.from_node in seen:
+                    continue
+                seen.add(edge.from_node)
+                parent = self.graph.nodes.get(edge.from_node)
+                if not parent:
+                    continue
+                terms.append(parent.name)
+                terms.append(str(parent.metadata.file_path or ""))
+                terms.extend(parent.tags or [])
+                terms.extend(parent.metadata.jira_tags or [])
+                parent_data = parent.metadata.additional_data or {}
+                terms.append(str(parent_data.get("scenario_name", "")))
+                terms.extend(parent_data.get("scenario_tags", []) or [])
+                terms.append(str(parent_data.get("workflow_path", "")))
+                next_frontier.append(edge.from_node)
+            frontier = next_frontier
+            if not frontier:
+                break
+        return terms
+
+    def _filter_by_link_status(
+        self,
+        entries: List[Dict[str, Any]],
+        link_status: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        statuses = self._normalize_link_status_filter(link_status)
+        if not statuses:
+            return entries
+        return [entry for entry in entries if entry.get("link_status") in statuses]
+
+    def _normalize_link_status_filter(self, link_status: Optional[str]) -> Set[str]:
+        if not link_status:
+            return set()
+        if link_status.lower() in {"default", "impact"}:
+            return set(self.DEFAULT_VISIBLE_LINK_STATUSES)
+        return {
+            status.strip().lower()
+            for status in link_status.split(",")
+            if status.strip()
+        }
+
+    def _link_status_summary(self, entries: List[Dict[str, Any]]) -> Dict[str, int]:
+        summary = {status: 0 for status in ["linked", "orphan", "component", "demo"]}
+        for entry in entries:
+            status = entry.get("link_status") or "unknown"
+            summary[status] = summary.get(status, 0) + 1
+        return summary
 
     def _dialect_context(self, node: Any) -> Dict[str, Any]:
         data = node.metadata.additional_data or {}

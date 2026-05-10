@@ -326,6 +326,10 @@ class DbQueryIndexRequest(BaseModel):
         default=True,
         description="Include DB components (feature files/executors) besides raw queries",
     )
+    link_status: Optional[str] = Field(
+        default=None,
+        description="Optional comma-separated filter: linked, orphan, component, demo, or default",
+    )
 
 
 class DbSearchUsageRequest(BaseModel):
@@ -334,6 +338,10 @@ class DbSearchUsageRequest(BaseModel):
     project_name: str = Field(..., min_length=1, description="Name of the project")
     query: str = Field(..., min_length=1, description="DB keyword, table, operation, host, or file path")
     limit: int = Field(default=100, ge=1, le=500, description="Max results returned")
+    link_status: Optional[str] = Field(
+        default=None,
+        description="Optional comma-separated filter: linked, orphan, component, demo, or default",
+    )
 
 
 class DbScenarioTraceRequest(FeatureScenarioSelectorRequest):
@@ -2007,6 +2015,7 @@ class KarateGraphAnalyzerTool:
         query: Optional[str] = None,
         limit: int = 100,
         include_components: bool = True,
+        link_status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build/search DB query and DB component index."""
         try:
@@ -2015,6 +2024,7 @@ class KarateGraphAnalyzerTool:
                 query=query,
                 limit=limit,
                 include_components=include_components,
+                link_status=link_status,
             )
             service, error = self._db_tracking_service(request.project_name)
             if error:
@@ -2028,6 +2038,7 @@ class KarateGraphAnalyzerTool:
                     request.query,
                     request.limit,
                     request.include_components,
+                    request.link_status,
                 ),
             }
         except Exception as e:
@@ -2039,6 +2050,7 @@ class KarateGraphAnalyzerTool:
         project_name: str,
         query: str,
         limit: int = 100,
+        link_status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Search DB usage by table/query/operation/host/path keywords."""
         try:
@@ -2046,6 +2058,7 @@ class KarateGraphAnalyzerTool:
                 project_name=project_name,
                 query=query,
                 limit=limit,
+                link_status=link_status,
             )
             service, error = self._db_tracking_service(request.project_name)
             if error:
@@ -2055,7 +2068,7 @@ class KarateGraphAnalyzerTool:
                 "preset": "search-db-usage",
                 "project_name": request.project_name,
                 "query": request.query,
-                **service.search_db_usage(request.query, request.limit),
+                **service.search_db_usage(request.query, request.limit, request.link_status),
             }
         except Exception as e:
             logger.error(f"Failed to search DB usage: {e}", exc_info=True)

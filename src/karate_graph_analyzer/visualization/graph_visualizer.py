@@ -100,6 +100,8 @@ class GraphVisualizer:
     }
 
     FIXED_SIZE_NODE_KEYS = {"DATABASE", "DB_QUERY"}
+    DEFAULT_VISIBLE_DB_LINK_STATUSES = ("linked", "orphan")
+    DB_DEMO_MARKERS = ("example", "examples", "demo", "sample", "fixture")
 
     def __init__(self, graph: DependencyGraph, mode: VisualizationMode = VisualizationMode.DEFAULT):
         """Initialize visualizer with dependency graph.
@@ -240,6 +242,8 @@ class GraphVisualizer:
 
         details_copy = node.metadata.additional_data.copy()
         details_copy.pop("display_data", None)
+        if node.type == NodeType.DATABASE:
+            details_copy.update(self._db_link_context(node))
 
         display_data = {
             "id": node.id,
@@ -279,6 +283,102 @@ class GraphVisualizer:
             "display_name": display_name,
             "test_case_id": test_case_id,
         }
+
+    def _db_link_context(self, node: Any) -> Dict[str, Any]:
+        kind = self._db_node_kind(node)
+        usage = self._usage_stats_for_node(node)
+        used_by = usage.get("used_by_test_cases", [])
+        if used_by:
+            status = "linked"
+            reason = "Reachable from at least one terminal test case."
+        elif kind == "component":
+            status = "component"
+            reason = "DB feature/helper component kept for structure and reuse context."
+        elif self._is_demo_db_node(node):
+            status = "demo"
+            reason = "Example/demo DB flow, not counted as execution impact."
+        else:
+            status = "orphan"
+            reason = "Query has no upstream terminal test case."
+
+        return {
+            "db_kind": kind,
+            "link_status": status,
+            "link_status_reason": reason,
+            "usage_count": usage.get("usage_count", 0),
+            "default_visible_link_statuses": list(self.DEFAULT_VISIBLE_DB_LINK_STATUSES),
+        }
+
+    def _db_node_kind(self, node: Any) -> str:
+        data = node.metadata.additional_data or {}
+        if any(
+            [
+                data.get("operation"),
+                data.get("table"),
+                data.get("database"),
+                data.get("host"),
+                data.get("entity_name"),
+                data.get("dialect") and data.get("dialect") != "unknown",
+            ]
+        ):
+            return "query"
+        return "component"
+
+    def _usage_stats_for_node(self, node: Any) -> Dict[str, Any]:
+        if not hasattr(self, "_graph_query"):
+            from karate_graph_analyzer.graph.graph_query import GraphQuery
+
+            self._graph_query = GraphQuery(self.graph)
+        return self._graph_query.get_usage_stats(node)
+
+    def _is_demo_db_node(self, node: Any) -> bool:
+        text = " ".join(self._node_context_terms(node)).lower()
+        return any(marker in text for marker in self.DB_DEMO_MARKERS)
+
+    def _node_context_terms(self, node: Any, max_depth: int = 2) -> List[str]:
+        terms = [
+            node.name,
+            str(node.metadata.file_path or ""),
+            " ".join(node.tags or []),
+            " ".join(node.metadata.jira_tags or []),
+        ]
+        data = node.metadata.additional_data or {}
+        terms.extend(
+            [
+                str(data.get("scenario_name", "")),
+                " ".join(data.get("scenario_tags", []) or []),
+                str(data.get("feature", "")),
+            ]
+        )
+
+        seen = {node.id}
+        frontier = [node.id]
+        for _ in range(max_depth):
+            next_frontier = []
+            for edge in self.graph.edges.values():
+                if edge.to_node not in frontier or edge.from_node in seen:
+                    continue
+                seen.add(edge.from_node)
+                parent = self.graph.nodes.get(edge.from_node)
+                if not parent:
+                    continue
+                parent_data = parent.metadata.additional_data or {}
+                terms.extend(
+                    [
+                        parent.name,
+                        str(parent.metadata.file_path or ""),
+                        " ".join(parent.tags or []),
+                        " ".join(parent.metadata.jira_tags or []),
+                        str(parent_data.get("scenario_name", "")),
+                        " ".join(parent_data.get("scenario_tags", []) or []),
+                        str(parent_data.get("workflow_path", "")),
+                    ]
+                )
+                next_frontier.append(edge.from_node)
+            frontier = next_frontier
+            if not frontier:
+                break
+        return terms
 
     def _get_primary_test_case_id(self, node: Any) -> Optional[str]:
         if not node.metadata.jira_tags:

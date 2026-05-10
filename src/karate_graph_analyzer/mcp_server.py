@@ -562,6 +562,7 @@ def db_query_index(
     query: Optional[str] = None,
     limit: int = 100,
     include_components: bool = True,
+    link_status: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Build/search DB query and DB component index.
@@ -571,14 +572,16 @@ def db_query_index(
         query: Optional DB keyword filter.
         limit: Maximum items to return.
         include_components: Include DB feature/executor components besides raw SQL nodes.
+        link_status: Optional comma-separated filter: linked, orphan, component, demo, or default.
     """
-    return analyzer_tool.db_query_index(project_name, query, limit, include_components)
+    return analyzer_tool.db_query_index(project_name, query, limit, include_components, link_status)
 
 @mcp.tool()
 def search_db_usage(
     project_name: str,
     query: str,
     limit: int = 100,
+    link_status: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Search DB usage by table/query/operation/host/path keywords.
@@ -587,8 +590,9 @@ def search_db_usage(
         project_name: Name of the registered project.
         query: DB keyword, table name, operation, host, or path.
         limit: Maximum results to return.
+        link_status: Optional comma-separated filter: linked, orphan, component, demo, or default.
     """
-    return analyzer_tool.search_db_usage(project_name, query, limit)
+    return analyzer_tool.search_db_usage(project_name, query, limit, link_status)
 
 @mcp.tool()
 def db_data_flow_trace(
