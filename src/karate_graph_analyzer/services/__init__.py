@@ -12,6 +12,7 @@ from karate_graph_analyzer.services.query_service import QueryService
 from karate_graph_analyzer.services.reusable_function_search_service import ReusableFunctionSearchService
 from karate_graph_analyzer.services.report_service import ReportService
 from karate_graph_analyzer.services.runtime_graph_store import RuntimeGraphStore
+from karate_graph_analyzer.services.scan_data_store import ScanDataStore
 
 __all__ = [
     "ProjectService",
@@ -26,4 +27,5 @@ __all__ = [
     "ReusableFunctionSearchService",
     "ReportService",
     "RuntimeGraphStore",
+    "ScanDataStore",
 ]

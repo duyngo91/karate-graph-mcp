@@ -5,6 +5,8 @@ Provides LRU caching for parsed ASTs and file change detection.
 """
 
 import os
+import pickle
+import sqlite3
 from collections import OrderedDict
 from typing import Optional
 
@@ -19,7 +21,7 @@ class CacheManager:
     Detects file changes through timestamp comparison.
     """
 
-    def __init__(self, max_size: int = 100) -> None:
+    def __init__(self, max_size: int = 100, db_path: Optional[str] = None) -> None:
         """Initialize cache with maximum size.
 
         Args:
@@ -29,6 +31,20 @@ class CacheManager:
         # OrderedDict maintains insertion order for LRU implementation
         # Key: file_path, Value: (modification_time, FeatureAST)
         self._cache: OrderedDict[str, tuple[float, FeatureAST]] = OrderedDict()
+        self._db_path = db_path
+        self._conn: Optional[sqlite3.Connection] = None
+        if db_path:
+            self._conn = sqlite3.connect(db_path)
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ast_cache (
+                    file_path TEXT PRIMARY KEY,
+                    mtime REAL NOT NULL,
+                    ast_blob BLOB NOT NULL
+                )
+                """
+            )
+            self._conn.commit()
 
     def get(self, file_path: str) -> Optional[FeatureAST]:
         """Get cached AST if file hasn't changed.
@@ -59,7 +75,11 @@ class CacheManager:
         
         # Check if file is in cache
         if file_path not in self._cache:
-            return None
+            disk_ast = self._get_from_disk(file_path, current_mtime)
+            if disk_ast is None:
+                return None
+            self._put_in_memory(file_path, current_mtime, disk_ast)
+            return disk_ast
         
         cached_mtime, cached_ast = self._cache[file_path]
         
@@ -67,6 +87,7 @@ class CacheManager:
         if current_mtime != cached_mtime:
             # File has changed, invalidate cache entry
             del self._cache[file_path]
+            self._delete_from_disk(file_path)
             return None
         
         # Cache hit - move to end (most recently used)
@@ -90,17 +111,8 @@ class CacheManager:
             # Can't get modification time, don't cache
             return
         
-        # If file already in cache, remove it (will be re-added at end)
-        if file_path in self._cache:
-            del self._cache[file_path]
-        
-        # If cache is at max size, evict least recently used (first item)
-        if len(self._cache) >= self.max_size:
-            # Remove first item (least recently used)
-            self._cache.popitem(last=False)
-        
-        # Add new entry at end (most recently used)
-        self._cache[file_path] = (mtime, ast)
+        self._put_in_memory(file_path, mtime, ast)
+        self._put_to_disk(file_path, mtime, ast)
 
     def invalidate(self, file_path: str) -> None:
         """Invalidate cache entry for a file.
@@ -110,10 +122,14 @@ class CacheManager:
         """
         if file_path in self._cache:
             del self._cache[file_path]
+        self._delete_from_disk(file_path)
 
     def clear(self) -> None:
         """Clear entire cache."""
         self._cache.clear()
+        if self._conn is not None:
+            self._conn.execute("DELETE FROM ast_cache")
+            self._conn.commit()
     
     def size(self) -> int:
         """Get current cache size.
@@ -133,3 +149,55 @@ class CacheManager:
             True if file is in cache, False otherwise
         """
         return file_path in self._cache
+
+    def _put_in_memory(self, file_path: str, mtime: float, ast: FeatureAST) -> None:
+        if file_path in self._cache:
+            del self._cache[file_path]
+        if len(self._cache) >= self.max_size:
+            self._cache.popitem(last=False)
+        self._cache[file_path] = (mtime, ast)
+
+    def _get_from_disk(self, file_path: str, current_mtime: float) -> Optional[FeatureAST]:
+        if self._conn is None:
+            return None
+        row = self._conn.execute(
+            "SELECT mtime, ast_blob FROM ast_cache WHERE file_path = ?",
+            (file_path,),
+        ).fetchone()
+        if row is None:
+            return None
+        cached_mtime, blob = row
+        if float(cached_mtime) != float(current_mtime):
+            self._delete_from_disk(file_path)
+            return None
+        try:
+            return pickle.loads(blob)
+        except Exception:
+            self._delete_from_disk(file_path)
+            return None
+
+    def _put_to_disk(self, file_path: str, mtime: float, ast: FeatureAST) -> None:
+        if self._conn is None:
+            return
+        try:
+            blob = pickle.dumps(ast, protocol=pickle.HIGHEST_PROTOCOL)
+            self._conn.execute(
+                """
+                INSERT INTO ast_cache(file_path, mtime, ast_blob)
+                VALUES(?, ?, ?)
+                ON CONFLICT(file_path) DO UPDATE SET
+                    mtime = excluded.mtime,
+                    ast_blob = excluded.ast_blob
+                """,
+                (file_path, mtime, blob),
+            )
+            self._conn.commit()
+        except Exception:
+            # Best-effort persistent cache only.
+            return
+
+    def _delete_from_disk(self, file_path: str) -> None:
+        if self._conn is None:
+            return
+        self._conn.execute("DELETE FROM ast_cache WHERE file_path = ?", (file_path,))
+        self._conn.commit()

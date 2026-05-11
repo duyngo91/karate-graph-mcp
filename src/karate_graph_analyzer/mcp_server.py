@@ -908,6 +908,16 @@ def compare_projects(
     """
     return analyzer_tool.compare_projects(base_project_name, new_project_name, output_path)
 
+@mcp.tool()
+def get_scan_output(project_name: str) -> Dict[str, Any]:
+    """
+    Get latest persistent scan output data for a project.
+
+    Args:
+        project_name: Name of the analyzed project.
+    """
+    return analyzer_tool.get_scan_output(project_name)
+
 
 def main() -> int:
     """Run Karate Graph Analyzer as a FastMCP stdio server."""

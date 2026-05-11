@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import glob
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Any, Set
 import networkx as nx
 
@@ -168,6 +169,8 @@ class GraphBuilder:
         ast_list: List[FeatureAST] = []
         ignored_files: Set[str] = set()
         total = len(feature_files)
+        if self._should_use_parallel_scan(project, total):
+            return self._parse_feature_files_parallel(project, feature_files)
         log_every = self._scan_log_every(project)
 
         for index, path in enumerate(feature_files, start=1):
@@ -193,6 +196,67 @@ class GraphBuilder:
             len(ignored_files),
         )
         return ast_list, ignored_files
+
+    def _parse_feature_files_parallel(
+        self,
+        project: Project,
+        feature_files: List[str],
+    ) -> Tuple[List[FeatureAST], Set[str]]:
+        ast_list: List[FeatureAST] = []
+        ignored_files: Set[str] = set()
+        total = len(feature_files)
+        max_workers = self._scan_parallel_workers(project)
+        log_every = self._scan_log_every(project)
+
+        logger.info(
+            "Using parallel scan for project '%s' with %d workers (%d files)",
+            project.name,
+            max_workers,
+            total,
+        )
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._parse_file_with_fresh_parser, project, path): path
+                for path in feature_files
+            }
+            for future in as_completed(futures):
+                path = futures[future]
+                completed += 1
+                self._log_scan_progress(
+                    "Parsing feature files (parallel)",
+                    project.name,
+                    completed,
+                    total,
+                    log_every,
+                )
+                try:
+                    ast = future.result()
+                except Exception as exc:
+                    logger.error("Failed to parse %s: %s", path, exc)
+                    ignored_files.add(PathResolver.normalize_path(path))
+                    continue
+
+                if not ast.scenarios:
+                    ignored_files.add(PathResolver.normalize_path(path))
+                    continue
+                ast_list.append(ast)
+
+        logger.info(
+            "Parallel parsed %d/%d feature files for project '%s' (%d skipped)",
+            len(ast_list),
+            total,
+            project.name,
+            len(ignored_files),
+        )
+        return ast_list, ignored_files
+
+    def _parse_file_with_fresh_parser(self, project: Project, file_path: str) -> FeatureAST:
+        from karate_graph_analyzer.parser.feature_parser import FeatureFileParser
+
+        parser = FeatureFileParser(config=project.parser_config)
+        return parser.parse_file(file_path)
 
     def _build_from_feature_files_streaming(
         self,
@@ -287,6 +351,20 @@ class GraphBuilder:
 
     def _scan_log_every(self, project: Project) -> int:
         return max(1, int(getattr(project.parser_config, "scan_log_every", 1000) or 1000))
+
+    def _should_use_parallel_scan(self, project: Project, feature_count: int) -> bool:
+        config = project.parser_config
+        if not getattr(config, "scan_parallel_enabled", False):
+            return False
+        threshold = max(1, int(getattr(config, "scan_parallel_threshold", 2000) or 2000))
+        return feature_count >= threshold
+
+    def _scan_parallel_workers(self, project: Project) -> int:
+        configured = int(getattr(project.parser_config, "scan_parallel_workers", 0) or 0)
+        if configured > 0:
+            return configured
+        cpu_count = os.cpu_count() or 4
+        return max(2, min(16, cpu_count))
 
     def _log_scan_progress(
         self,

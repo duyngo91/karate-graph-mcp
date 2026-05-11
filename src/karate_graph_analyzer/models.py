@@ -323,6 +323,11 @@ class ParserConfig:
     scan_log_every: int = 1000
     large_project_streaming_scan: bool = False
     large_project_streaming_threshold: int = 20000
+    scan_parallel_enabled: bool = False
+    scan_parallel_workers: int = 0
+    scan_parallel_threshold: int = 2000
+    incremental_scan_enabled: bool = True
+    scan_store_enabled: bool = True
     visualization_large_graph_threshold: int = 1500
     visualization_physics_enabled: Optional[bool] = None
     visualization_node_limit: int = 5000

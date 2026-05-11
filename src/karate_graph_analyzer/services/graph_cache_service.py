@@ -65,6 +65,29 @@ class GraphCacheService:
         except Exception:
             return None
 
+    def load_any(self, project: Project) -> Optional[DependencyGraph]:
+        """Load cached graph without freshness validation (for incremental fallback)."""
+        path = self.storage_dir / f"{project.name}.json"
+        if not path.exists():
+            return None
+        try:
+            raw = path.read_text(encoding="utf-8")
+            payload = json.loads(raw)
+        except Exception:
+            return None
+
+        if isinstance(payload, dict) and "graph" in payload:
+            graph_data = payload.get("graph")
+        else:
+            graph_data = payload
+
+        if not isinstance(graph_data, str):
+            return None
+        try:
+            return self.exporter.import_graph(graph_data, project.name)
+        except Exception:
+            return None
+
     def save_project_graph(
         self, project: Project, graph: DependencyGraph, include_structural_nodes: bool
     ) -> bool:

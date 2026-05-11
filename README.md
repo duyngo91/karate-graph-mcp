@@ -178,6 +178,11 @@ register_project(
     ],
     "javascript_file_patterns": ["**/*.js"],
     "large_project_streaming_scan": true,
+    "scan_parallel_enabled": true,
+    "scan_parallel_workers": 8,
+    "scan_parallel_threshold": 2000,
+    "incremental_scan_enabled": true,
+    "scan_store_enabled": true,
     "scan_log_every": 2000,
     "visualization_large_graph_threshold": 1500,
     "visualization_physics_enabled": null,
@@ -224,6 +229,9 @@ Performance tips:
 - AI feature/DB context tools stream large feature sets instead of caching every parsed AST after `ai_context_cache_feature_threshold`.
 - `scenario_similarity_map` uses `ai_context_similarity_pool_limit` to avoid O(N²) comparisons across the whole repository.
 - Duplicate step/flow tools count all matches but only keep `ai_context_duplicate_location_limit` example locations per group.
+- Turn on `scan_parallel_enabled=true` for faster parsing on large repos; tune workers with `scan_parallel_workers`.
+- Keep `incremental_scan_enabled=true` to re-parse only changed files and skip unchanged files when scanning again.
+- Use `get_scan_output(project_name)` after analyze to inspect `changed_files`, `unchanged_files`, `deleted_files`, node/edge counts, and cache usage.
 
 ### 3. Scan / Analyze Project
 

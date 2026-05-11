@@ -31,6 +31,7 @@ from karate_graph_analyzer.services.reusable_function_search_service import (
     ReusableFunctionSearchService,
 )
 from karate_graph_analyzer.services.runtime_graph_store import RuntimeGraphStore
+from karate_graph_analyzer.services.scan_data_store import ScanDataStore
 from karate_graph_analyzer.models import (
     DependencyGraph,
     ImpactResult,
@@ -380,7 +381,6 @@ class KarateGraphAnalyzerTool:
             storage_dir: Optional directory for graph persistence
         """
         self.registry = ProjectRegistry(storage_path=storage_path)
-        self.cache_manager = CacheManager()
         self.runtime_store = RuntimeGraphStore()
         # Backward-compatible aliases used by existing tests/integrations.
         self.graphs = self.runtime_store.graphs  # project_name -> graph
@@ -397,8 +397,15 @@ class KarateGraphAnalyzerTool:
         logger.info(f"KarateGraphAnalyzerTool initialized in CWD: {os.getcwd()}")
         logger.info(f"Using storage directory: {self.storage_dir.absolute()}")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+        ast_cache_path = self.storage_dir / "ast_cache.sqlite"
+        self.cache_manager = CacheManager(db_path=str(ast_cache_path))
         self.graph_cache = GraphCacheService(self.storage_dir)
-        self.lifecycle_service = ProjectLifecycleService(self.registry, self.graph_cache)
+        self.scan_store = ScanDataStore(self.storage_dir)
+        self.lifecycle_service = ProjectLifecycleService(
+            self.registry,
+            self.graph_cache,
+            self.cache_manager,
+        )
         self.query_service = QueryService()
         self.report_service = ReportService()
         self.failure_context_service = FailureContextService()
@@ -845,6 +852,17 @@ class KarateGraphAnalyzerTool:
         try:
             # Validate input
             request = AnalyzeProjectRequest(project_name=project_name, include_structural_nodes=include_structural_nodes)
+            project = self.registry.get(request.project_name)
+            if project is None:
+                return self._error_response(
+                    3003,
+                    "PROJECT_MANAGEMENT",
+                    f"Project '{project_name}' not found in registry",
+                )
+
+            tracked_files = self.graph_cache.fingerprint_service.collect_project_files(project)
+            run_id = self.scan_store.start_run(project.name, len(tracked_files))
+            change_stats = self.scan_store.compare_with_manifest(project.name, tracked_files)
 
             try:
                 _, graph, was_cached = self.lifecycle_service.analyze(
@@ -857,8 +875,19 @@ class KarateGraphAnalyzerTool:
                     "PROJECT_MANAGEMENT",
                     f"Project '{project_name}' not found in registry",
                 )
+            finally:
+                self.scan_store.update_manifest(project.name, tracked_files)
 
             self._store_runtime_graph(project_name, graph)
+            self.scan_store.finish_run(
+                run_id,
+                changed_files=change_stats["changed_files"],
+                unchanged_files=change_stats["unchanged_files"],
+                deleted_files=change_stats["deleted_files"],
+                nodes=len(graph.nodes),
+                edges=len(graph.edges),
+                used_cached_graph=was_cached,
+            )
 
             status_msg = "(Persistent State Loaded)" if was_cached else "(Freshly Analyzed)"
             logger.info(
@@ -871,11 +900,44 @@ class KarateGraphAnalyzerTool:
                 "project_name": project_name,
                 "message": f"Analysis completed for {project_name} {status_msg}",
                 "statistics": self._build_graph_statistics(graph),
+                "scan_data": {
+                    "total_files": change_stats["total_files"],
+                    "changed_files": change_stats["changed_files"],
+                    "unchanged_files": change_stats["unchanged_files"],
+                    "deleted_files": change_stats["deleted_files"],
+                },
                 "cycles": graph.cycles,
             }
 
         except Exception as e:
             logger.error(f"Failed to analyze project '{project_name}': {e}")
+            return self._error_response(6003, "INTERNAL_ERROR", str(e))
+
+    def get_scan_output(self, project_name: str) -> Dict[str, Any]:
+        """Return latest scan output data from persistent scan store."""
+        try:
+            project = self.registry.get(project_name)
+            if not project:
+                return self._error_response(
+                    3003,
+                    "PROJECT_MANAGEMENT",
+                    f"Project '{project_name}' not found in registry",
+                )
+            latest = self.scan_store.latest_run(project_name)
+            if not latest:
+                return {
+                    "success": True,
+                    "project_name": project_name,
+                    "message": "No scan output available yet",
+                    "scan_output": {},
+                }
+            return {
+                "success": True,
+                "project_name": project_name,
+                "scan_output": latest,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get scan output for project '{project_name}': {e}")
             return self._error_response(6003, "INTERNAL_ERROR", str(e))
 
     def bulk_analyze(self) -> Dict[str, Any]:
